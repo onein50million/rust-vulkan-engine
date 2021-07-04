@@ -1,89 +1,213 @@
-use winit::event_loop::{EventLoop, ControlFlow};
-use winit::window::{WindowBuilder, Window};
-use winit::event::{Event, WindowEvent};
-use ash::{vk, Instance, Device, Entry};
-use ash::version::{EntryV1_0, InstanceV1_0, DeviceV1_0};
-use std::ffi::{CString, CStr};
-use ash::vk::{PhysicalDevice, Framebuffer, SwapchainKHR, ShaderModule, SurfaceFormatKHR, SurfaceKHR, Pipeline, PipelineLayout, RenderPass, ImageView, CommandBuffer, CommandPool};
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Swapchain};
+use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0};
+use ash::vk::PhysicalDevice;
+use ash::{vk, Device, Entry, Instance};
+use cgmath::Vector3;
 use std::env;
+use std::ffi::{CStr, CString};
+use winit::event::{Event, WindowEvent};
+use winit::event_loop::{ControlFlow, EventLoop};
+use winit::window::{Window, WindowBuilder};
+use winit::window::CursorIcon::VerticalText;
 
-struct VulkanData{
-    instance: Instance,
-    entry: Entry,
-    device: Device,
-    physical_device: PhysicalDevice,
-    main_queue: vk::Queue,
-    main_queue_index: u32,
-    surface_loader: Surface,
-    surface: vk::SurfaceKHR,
-    surface_format: vk::SurfaceFormatKHR,
-    swapchain_loader: Swapchain,
-    swapchain: vk::SwapchainKHR,
-    swapchain_image_views: Vec<vk::ImageView>,
-    vert_shader_module: vk::ShaderModule,
-    frag_shader_module: vk::ShaderModule,
-    pipeline_layout: vk::PipelineLayout,
-    render_pass: vk::RenderPass,
-    graphics_pipeline: vk::Pipeline,
-    swapchain_framebuffers: Vec<vk::Framebuffer>,
-    command_pool: vk::CommandPool,
-    command_buffers: Vec<vk::CommandBuffer>,
-    image_available_semaphore: vk::Semaphore,
-    render_finished_semaphore: vk::Semaphore,
-    in_flight_fence: vk::Fence,
+//TODO: see what happens if you take this off
+#[repr(C)]
+struct Vertex {
+    position: Vector3<f32>,
+    color: Vector3<f32>,
 }
 
+const vertices: [Vertex; 3] = [
+    Vertex {
+        position: Vector3 {
+            x: -0.5,
+            y: 0.0,
+            z: 0.0,
+        },
+        color: Vector3 {
+            x: 1.0,
+            y: 0.0,
+            z: 0.0,
+        },
+    },
+    Vertex {
+        position: Vector3 {
+            x: 0.5,
+            y: 0.0,
+            z: 0.0,
+        },
+        color: Vector3 {
+            x: 0.0,
+            y: 1.0,
+            z: 0.0,
+        },
+    },
+    Vertex {
+        position: Vector3 {
+            x: 0.0,
+            y: 0.5,
+            z: 0.0,
+        },
+        color: Vector3 {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        },
+    },
+];
 
+impl Vertex{
+    fn get_binding_description() -> vk::VertexInputBindingDescription{
+        return unsafe{vk::VertexInputBindingDescription::builder().binding(0).stride(std::mem::size_of::<Vertex>() as u32).input_rate(vk::VertexInputRate::VERTEX).build() };
+    }
+    fn get_attribute_description() -> Vec<vk::VertexInputAttributeDescription>{
+        let attribute_descriptions = vec![
+            vk::VertexInputAttributeDescription::builder().binding(0).location(0).format(vk::Format::R32G32B32_SFLOAT).offset(0),
+            vk::VertexInputAttributeDescription::builder().binding(0).location(1).format(vk::Format::R32G32B32_SFLOAT).offset(12), //might be off, could be fun to see what happens when it's off
+        ];
 
-impl VulkanData{
-    fn new(window: &Window) -> Self{
+        return attribute_descriptions.into_iter().map(|attribute_description| attribute_description.build()).collect();
+    }
+}
 
-        let validation_layer_names = [CString::new("VK_LAYER_KHRONOS_validation").expect("CString conversion failed")];
-        let validation_layer_names_raw= validation_layer_names.iter().map(|c_string|c_string.as_ptr()).collect::<Vec<_>>();
+struct VulkanData {
+    instance: Option<Instance>,
+    entry: Option<Entry>,
+    device: Option<Device>,
+    physical_device: Option<PhysicalDevice>,
+    main_queue: Option<vk::Queue>,
+    main_queue_index: Option<u32>,
+    surface_loader: Option<Surface>,
+    surface: Option<vk::SurfaceKHR>,
+    surface_format: Option<vk::SurfaceFormatKHR>,
+    swapchain_loader: Option<Swapchain>,
+    swapchain: Option<vk::SwapchainKHR>,
+    swapchain_image_views: Option<Vec<vk::ImageView>>,
+    vert_shader_module: Option<vk::ShaderModule>,
+    frag_shader_module: Option<vk::ShaderModule>,
+    pipeline_layout: Option<vk::PipelineLayout>,
+    render_pass: Option<vk::RenderPass>,
+    graphics_pipeline: Option<vk::Pipeline>,
+    swapchain_framebuffers: Option<Vec<vk::Framebuffer>>,
+    command_pool: Option<vk::CommandPool>,
+    command_buffers: Option<Vec<vk::CommandBuffer>>,
+    image_available_semaphore: Option<vk::Semaphore>,
+    render_finished_semaphore: Option<vk::Semaphore>,
+    in_flight_fence: Option<vk::Fence>,
+    allocator: Option<vk_mem::Allocator>,
+    staging_buffer: Option<vk::Buffer>,
+    vertex_buffer: Option<vk::Buffer>,
+
+}
+
+impl VulkanData {
+    fn new() -> Self {
+        return VulkanData {
+            instance: None,
+            entry: None,
+            device: None,
+            physical_device: None,
+            main_queue: None,
+            main_queue_index: None,
+            surface_loader: None,
+            surface: None,
+            surface_format: None,
+            swapchain_loader: None,
+            swapchain: None,
+            swapchain_image_views: None,
+            vert_shader_module: None,
+            frag_shader_module: None,
+            pipeline_layout: None,
+            render_pass: None,
+            graphics_pipeline: None,
+            swapchain_framebuffers: None,
+            command_pool: None,
+            command_buffers: None,
+            image_available_semaphore: None,
+            render_finished_semaphore: None,
+            in_flight_fence: None,
+            allocator: None,
+            staging_buffer: None,
+            vertex_buffer: None
+        };
+    }
+    fn init_vulkan(&mut self, window: &Window) {
+        let validation_layer_names =
+            [CString::new("VK_LAYER_KHRONOS_validation").expect("CString conversion failed")];
+        let validation_layer_names_raw = validation_layer_names
+            .iter()
+            .map(|c_string| c_string.as_ptr())
+            .collect::<Vec<_>>();
         // validation_layers.remove(0);
         // println!("{:}", validation_layers[0]);
 
-        let entry = unsafe { ash::EntryCustom::new()}.unwrap();
+        self.entry = Some(unsafe { ash::EntryCustom::new() }.unwrap());
 
         let app_info = vk::ApplicationInfo::builder();
         let mut surface_extensions = ash_window::enumerate_required_extensions(window).unwrap();
         surface_extensions.push(DebugUtils::name());
 
-        let raw_extensions = surface_extensions.iter().map(|extension| extension.to_owned().as_ptr()).collect::<Vec<_>>();
+        let raw_extensions = surface_extensions
+            .iter()
+            .map(|extension| extension.to_owned().as_ptr())
+            .collect::<Vec<_>>();
 
         let create_info = vk::InstanceCreateInfo::builder()
             .enabled_extension_names(&raw_extensions)
             .application_info(&app_info)
             .enabled_layer_names(&validation_layer_names_raw);
-        let instance = unsafe { entry.create_instance(&create_info, None) }.expect("Failed to create instance") ;
+        self.instance = Some(
+            unsafe {
+                self.entry
+                    .as_ref()
+                    .unwrap()
+                    .create_instance(&create_info, None)
+            }
+            .expect("Failed to create instance"),
+        );
 
-        let physical_devices = unsafe {instance.enumerate_physical_devices()}.unwrap();
-        let mut physical_device: PhysicalDevice = Default::default();
+        let physical_devices =
+            unsafe { self.instance.as_ref().unwrap().enumerate_physical_devices() }.unwrap();
+        self.physical_device = None;
 
-
-
-        if physical_devices.len() == 1{
-            physical_device = physical_devices[0];
-        }else{
-            physical_devices.iter().find(|device|{
-
+        if physical_devices.len() == 1 {
+            self.physical_device = Some(physical_devices[0]);
+        } else {
+            physical_devices.into_iter().find(|device| {
                 //TODO: implement multiple gpu finding
 
-                let properties = unsafe {instance.get_physical_device_properties(**device)};
-                let device_name_cstring = unsafe {CStr::from_ptr(properties.device_name.as_ptr())}.to_owned();
+                let properties = unsafe {
+                    self.instance
+                        .as_ref()
+                        .unwrap()
+                        .get_physical_device_properties(*device)
+                };
+                let device_name_cstring =
+                    unsafe { CStr::from_ptr(properties.device_name.as_ptr()) }.to_owned();
                 let device_name = device_name_cstring.to_str().unwrap();
 
-                println!("Device Name: {}\nDriver: {}", device_name, &properties.driver_version);
+                println!(
+                    "Device Name: {}\nDriver: {}",
+                    device_name, &properties.driver_version
+                );
                 return true;
             });
         }
-        let main_queue_index: u32 = unsafe { instance.get_physical_device_queue_family_properties(physical_device) }.iter()
-            .position(|queue| queue.queue_flags
-                .contains(vk::QueueFlags::GRAPHICS)).unwrap() as u32;
-
-        let queue_create_info = vk::DeviceQueueCreateInfo::builder().queue_family_index(main_queue_index).queue_priorities(&[1.0f32]);
+        self.main_queue_index = Some(
+            unsafe {
+                self.instance
+                    .as_ref()
+                    .unwrap()
+                    .get_physical_device_queue_family_properties(self.physical_device.unwrap())
+            }
+            .iter()
+            .position(|queue| queue.queue_flags.contains(vk::QueueFlags::GRAPHICS))
+            .unwrap() as u32,
+        );
+        let queue_create_info = vk::DeviceQueueCreateInfo::builder()
+            .queue_family_index(self.main_queue_index.unwrap())
+            .queue_priorities(&[1.0f32]);
         let queue_create_infos = &[queue_create_info.build()];
 
         let device_extension_names_raw = vec![Swapchain::name().as_ptr()];
@@ -91,153 +215,214 @@ impl VulkanData{
             .queue_create_infos(queue_create_infos)
             .enabled_layer_names(&validation_layer_names_raw)
             .enabled_extension_names(&device_extension_names_raw);
-        let device = unsafe {instance.create_device(physical_device,&device_create_info,None)}.unwrap();
+        self.device = Some(
+            unsafe {
+                self.instance.as_ref().unwrap().create_device(
+                    self.physical_device.unwrap(),
+                    &device_create_info,
+                    None,
+                )
+            }
+            .unwrap(),
+        );
 
-        let main_queue = unsafe {device.get_device_queue(main_queue_index,0)};
+        self.main_queue = Some(unsafe {
+            self.device
+                .as_ref()
+                .unwrap()
+                .get_device_queue(self.main_queue_index.unwrap(), 0)
+        });
 
-        let surface = unsafe {ash_window::create_surface(&entry,&instance,window,None)}.unwrap();
-        let surface_loader = Surface::new(&entry,&instance);
+        self.surface = Some(
+            unsafe {
+                ash_window::create_surface(
+                    self.entry.as_ref().unwrap(),
+                    self.instance.as_ref().unwrap(),
+                    window,
+                    None,
+                )
+            }
+            .unwrap(),
+        );
+        self.surface_loader = Some(Surface::new(
+            self.entry.as_ref().unwrap(),
+            self.instance.as_ref().unwrap(),
+        ));
 
-        let (surface_format,
-            swapchain_loader,
-            swapchain,
-            swapchain_image_views,
-            vert_shader_module,
-            frag_shader_module,
-            pipeline_layout,
-            render_pass,
-            graphics_pipeline,
-            swapchain_framebuffers,
-            command_pool,
-            command_buffers) = VulkanData::recreate_swaphain(&device, &instance, &surface, &surface_loader, &physical_device, main_queue_index);
+        self.recreate_swaphain();
 
-        let _surface_support = unsafe {surface_loader.get_physical_device_surface_support(physical_device, main_queue_index, surface)};
-
-        let semaphore_create_info = vk::SemaphoreCreateInfo::builder();
-        let image_available_semaphore = unsafe{device.create_semaphore(&semaphore_create_info,None)}.unwrap();
-        let render_finished_semaphore = unsafe{device.create_semaphore(&semaphore_create_info,None)}.unwrap();
-        let fence_create_info = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
-        let in_flight_fence = unsafe{ device.create_fence(&fence_create_info, None)}.unwrap();
-
-        return VulkanData{
-            instance,
-            entry,
-            device,
-            physical_device,
-            main_queue,
-            main_queue_index,
-            surface_loader,
-            surface,
-            surface_format,
-            swapchain_loader,
-            swapchain,
-            swapchain_image_views,
-            vert_shader_module,
-            frag_shader_module,
-            pipeline_layout,
-            render_pass,
-            graphics_pipeline,
-            swapchain_framebuffers,
-            command_pool,
-            command_buffers,
-            image_available_semaphore,
-            render_finished_semaphore,
-            in_flight_fence,
-        }
-    }
-
-    fn draw_frame(&mut self){
-
-        let fences = [self.in_flight_fence];
-        unsafe { self.device.wait_for_fences(&fences,true,u64::MAX)}.unwrap();
-        unsafe {self.device.reset_fences(&fences)}.unwrap();
-
-        let mut image_index: u32 = 0;
-
-        match unsafe {self.swapchain_loader.acquire_next_image(self.swapchain,u64::MAX, self.image_available_semaphore, vk::Fence::null())}{
-            Ok((index,_)) => {image_index = index}
-            Err(e) => {if e == vk::Result::ERROR_OUT_OF_DATE_KHR || e == vk::Result::SUBOPTIMAL_KHR{
-                unsafe {self.device.device_wait_idle()}.unwrap();
-                self.cleanup_swapchain();
-                let (surface_format, swapchain_loader, swapchain, image_views, vert_shader, frag_shader, pipeline_layout,render_pass,  graphics_pipeline, framebuffers, command_pool, command_buffers ) = VulkanData::recreate_swaphain(&self.device, &self.instance, &self.surface, &self.surface_loader, &self.physical_device, self.main_queue_index);
-                self.surface_format = surface_format;
-                self.swapchain_loader = swapchain_loader;
-                self.swapchain = swapchain;
-                self.swapchain_image_views = image_views;
-                self.vert_shader_module = vert_shader;
-                self.frag_shader_module = frag_shader;
-                self.pipeline_layout = pipeline_layout;
-                self.render_pass = render_pass;
-                self.graphics_pipeline = graphics_pipeline;
-                self.swapchain_framebuffers = framebuffers;
-                self.command_pool = command_pool;
-                self.command_buffers = command_buffers;                return;
-            }else{
-                panic!("acquire_next_image error");
-            }}
+        let _surface_support = unsafe {
+            self.surface_loader
+                .as_ref()
+                .unwrap()
+                .get_physical_device_surface_support(
+                    self.physical_device.unwrap(),
+                    self.main_queue_index.unwrap(),
+                    self.surface.unwrap(),
+                )
         };
 
+        let semaphore_create_info = vk::SemaphoreCreateInfo::builder();
+        self.image_available_semaphore = Some(
+            unsafe {
+                self.device
+                    .as_ref()
+                    .unwrap()
+                    .create_semaphore(&semaphore_create_info, None)
+            }
+            .unwrap(),
+        );
+        self.render_finished_semaphore = Some(
+            unsafe {
+                self.device
+                    .as_ref()
+                    .unwrap()
+                    .create_semaphore(&semaphore_create_info, None)
+            }
+            .unwrap(),
+        );
+        let fence_create_info =
+            vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
+        self.in_flight_fence = Some(
+            unsafe {
+                self.device
+                    .as_ref()
+                    .unwrap()
+                    .create_fence(&fence_create_info, None)
+            }
+            .unwrap(),
+        );
 
-        let wait_semaphores = [self.image_available_semaphore];
-        let signal_semaphores = [self.render_finished_semaphore];
+        let allocator_create_info = vk_mem::AllocatorCreateInfo{ physical_device: self.physical_device.unwrap(),
+            device:self.device.unwrap(),
+            instance: self.instance.unwrap(),
+            ..Default::default()};
+        self.allocator = Some(vk_mem::Allocator::new(&allocator_create_info).unwrap());
+        let allocation_create_info = vk_mem::AllocationCreateInfo{usage: vk_mem::MemoryUsage::GpuOnly,..Default::default()};
+        let (vertex_buffer, vertex_buffer_allocation, _) =
+            allocator.create_buffer(
+                vk::BufferCreateInfo::builder().size(16*1024).usage(vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST).build(), &allocation_create_info
+            ).unwrap();
+        let (staging_buffer, staging_buffer_allocation, _) =
+            allocator.create_buffer(
+                vk::BufferCreateInfo::builder().size(16*1024).usage(vk::BufferUsageFlags:: | vk::BufferUsageFlags::TRANSFER_SRC).build(), &allocation_create_info
+            ).unwrap();
+    }
+
+    fn draw_frame(&mut self) {
+        let fences = [self.in_flight_fence.unwrap()];
+        unsafe {
+            self.device
+                .as_ref()
+                .unwrap()
+                .wait_for_fences(&fences, true, u64::MAX)
+        }
+        .unwrap();
+        unsafe { self.device.as_ref().unwrap().reset_fences(&fences) }.unwrap();
+
+        let image_index: u32;
+
+        match unsafe {
+            self.swapchain_loader.as_ref().unwrap().acquire_next_image(
+                self.swapchain.unwrap(),
+                u64::MAX,
+                self.image_available_semaphore.unwrap(),
+                vk::Fence::null(),
+            )
+        } {
+            Ok((index, _)) => image_index = index,
+            Err(e) => {
+                if e == vk::Result::ERROR_OUT_OF_DATE_KHR || e == vk::Result::SUBOPTIMAL_KHR {
+                    unsafe { self.device.as_ref().unwrap().device_wait_idle() }.unwrap();
+                    self.cleanup_swapchain();
+                    self.recreate_swaphain();
+                    return;
+                } else {
+                    panic!("acquire_next_image error");
+                }
+            }
+        };
+
+        let wait_semaphores = [self.image_available_semaphore.unwrap()];
+        let signal_semaphores = [self.render_finished_semaphore.unwrap()];
         let wait_stages = vec![vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
-        let command_buffers = [self.command_buffers[image_index as usize]];
-        let submits = [
-            vk::SubmitInfo::builder().command_buffers(&command_buffers)
-                .wait_semaphores(&wait_semaphores)
-                .signal_semaphores(&signal_semaphores)
-                .wait_dst_stage_mask(&wait_stages)
-                .build()
-        ];
+        let command_buffers = [self.command_buffers.as_ref().unwrap()[image_index as usize]];
+        let submits = [vk::SubmitInfo::builder()
+            .command_buffers(&command_buffers)
+            .wait_semaphores(&wait_semaphores)
+            .signal_semaphores(&signal_semaphores)
+            .wait_dst_stage_mask(&wait_stages)
+            .build()];
 
-        unsafe{self.device.queue_submit(self.main_queue,&submits, self.in_flight_fence)}.unwrap();
+        unsafe {
+            self.device.as_ref().unwrap().queue_submit(
+                self.main_queue.unwrap(),
+                &submits,
+                self.in_flight_fence.unwrap(),
+            )
+        }
+        .unwrap();
 
-        let swapchains = [self.swapchain];
-        let image_indices  = [image_index];
+        let swapchains = [self.swapchain.unwrap()];
+        let image_indices = [image_index];
         let present_info = vk::PresentInfoKHR::builder()
             .swapchains(&swapchains)
             .image_indices(&image_indices)
             .wait_semaphores(&signal_semaphores);
 
-        match unsafe {self.swapchain_loader.queue_present(self.main_queue, &present_info)}{
+        match unsafe {
+            self.swapchain_loader
+                .as_ref()
+                .unwrap()
+                .queue_present(self.main_queue.unwrap(), &present_info)
+        } {
             Ok(_) => {}
-            Err(e) => {if e == vk::Result::ERROR_OUT_OF_DATE_KHR || e == vk::Result::SUBOPTIMAL_KHR{
-                unsafe {self.device.device_wait_idle()}.unwrap();
-                self.cleanup_swapchain();
-                let (surface_format, swapchain_loader, swapchain, image_views, vert_shader, frag_shader, pipeline_layout,render_pass,  graphics_pipeline, framebuffers, command_pool, command_buffers ) = VulkanData::recreate_swaphain(&self.device, &self.instance, &self.surface, &self.surface_loader, &self.physical_device, self.main_queue_index);
-                self.surface_format = surface_format;
-                self.swapchain_loader = swapchain_loader;
-                self.swapchain = swapchain;
-                self.swapchain_image_views = image_views;
-                self.vert_shader_module = vert_shader;
-                self.frag_shader_module = frag_shader;
-                self.pipeline_layout = pipeline_layout;
-                self.render_pass = render_pass;
-                self.graphics_pipeline = graphics_pipeline;
-                self.swapchain_framebuffers = framebuffers;
-                self.command_pool = command_pool;
-                self.command_buffers = command_buffers;
-
-            }}
+            Err(e) => {
+                if e == vk::Result::ERROR_OUT_OF_DATE_KHR || e == vk::Result::SUBOPTIMAL_KHR {
+                    unsafe { self.device.as_ref().unwrap().device_wait_idle() }.unwrap();
+                    self.cleanup_swapchain();
+                    self.recreate_swaphain();
+                }
+            }
         }
-
-
-
-
     }
 
-    fn recreate_swaphain(device: &Device, instance: &Instance, surface: &SurfaceKHR, surface_loader: &Surface, physical_device: &PhysicalDevice, main_queue_index: u32) -> (SurfaceFormatKHR, Swapchain, SwapchainKHR, Vec<ImageView>, ShaderModule, ShaderModule, PipelineLayout, RenderPass, Pipeline, Vec<Framebuffer>, CommandPool, Vec<CommandBuffer>) {
-        let surface_capabilities = unsafe {surface_loader.get_physical_device_surface_capabilities(*physical_device,*surface)}.unwrap();
-        let surface_formats = unsafe { surface_loader.get_physical_device_surface_formats(*physical_device,*surface)}.unwrap();
-        let surface_format = *surface_formats.iter().find(|format| {
-            return format.format == vk::Format::B8G8R8A8_SRGB && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR;
-        }).unwrap();
+    fn recreate_swaphain(&mut self) {
+        let surface_capabilities = unsafe {
+            self.surface_loader
+                .as_ref()
+                .unwrap()
+                .get_physical_device_surface_capabilities(
+                    self.physical_device.unwrap(),
+                    self.surface.unwrap(),
+                )
+        }
+        .unwrap();
+        let surface_formats = unsafe {
+            self.surface_loader
+                .as_ref()
+                .unwrap()
+                .get_physical_device_surface_formats(
+                    self.physical_device.unwrap(),
+                    self.surface.unwrap(),
+                )
+        }
+        .unwrap();
+        self.surface_format = Some(
+            *surface_formats
+                .iter()
+                .find(|format| {
+                    return format.format == vk::Format::B8G8R8A8_SRGB
+                        && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR;
+                })
+                .unwrap(),
+        );
 
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::builder()
-            .surface(*surface)
+            .surface(self.surface.unwrap())
             .min_image_count(surface_capabilities.min_image_count)
-            .image_color_space(surface_format.color_space)
-            .image_format(surface_format.format)
+            .image_color_space(self.surface_format.unwrap().color_space)
+            .image_format(self.surface_format.unwrap().format)
             .image_extent(surface_capabilities.current_extent)
             .image_array_layers(1)
             .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
@@ -247,71 +432,118 @@ impl VulkanData{
             .present_mode(vk::PresentModeKHR::IMMEDIATE)
             .clipped(true);
 
-        let swapchain_loader = Swapchain::new(instance, device);
-        let swapchain = unsafe {swapchain_loader.create_swapchain(&swapchain_create_info, None)}.unwrap();
+        self.swapchain_loader = Some(Swapchain::new(
+            self.instance.as_ref().unwrap(),
+            self.device.as_ref().unwrap(),
+        ));
+        self.swapchain = Some(
+            unsafe {
+                self.swapchain_loader
+                    .as_ref()
+                    .unwrap()
+                    .create_swapchain(&swapchain_create_info, None)
+            }
+            .unwrap(),
+        );
 
-        let swapchain_images = unsafe {swapchain_loader.get_swapchain_images(swapchain)}.unwrap();
+        let swapchain_images = unsafe {
+            self.swapchain_loader
+                .as_ref()
+                .unwrap()
+                .get_swapchain_images(self.swapchain.unwrap())
+        }
+        .unwrap();
 
-        let swapchain_image_views: Vec<vk::ImageView> = swapchain_images.iter().map(|image|{
-            let image_view_create_info = vk::ImageViewCreateInfo::builder()
-                .format(swapchain_create_info.image_format)
-                .components(vk::ComponentMapping{
-                    r: vk::ComponentSwizzle::R,
-                    g: vk::ComponentSwizzle::G,
-                    b: vk::ComponentSwizzle::B,
-                    a: vk::ComponentSwizzle::A,
+        self.swapchain_image_views = Some(
+            swapchain_images
+                .iter()
+                .map(|image| {
+                    let image_view_create_info = vk::ImageViewCreateInfo::builder()
+                        .format(swapchain_create_info.image_format)
+                        .components(vk::ComponentMapping {
+                            r: vk::ComponentSwizzle::R,
+                            g: vk::ComponentSwizzle::G,
+                            b: vk::ComponentSwizzle::B,
+                            a: vk::ComponentSwizzle::A,
+                        })
+                        .subresource_range(vk::ImageSubresourceRange {
+                            aspect_mask: vk::ImageAspectFlags::COLOR,
+                            base_mip_level: 0,
+                            level_count: 1,
+                            base_array_layer: 0,
+                            layer_count: 1,
+                        })
+                        .image(*image)
+                        .view_type(vk::ImageViewType::TYPE_2D);
+                    return unsafe {
+                        self.device
+                            .as_ref()
+                            .unwrap()
+                            .create_image_view(&image_view_create_info, None)
+                    }
+                    .unwrap();
                 })
-                .subresource_range(vk::ImageSubresourceRange{
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                })
-                .image(*image)
-                .view_type(vk::ImageViewType::TYPE_2D);
-            return unsafe{device.create_image_view(&image_view_create_info, None)}.unwrap();
-        }).collect::<Vec<_>>();
+                .collect::<Vec<_>>(),
+        );
 
         let mut vert_shader_file = std::fs::File::open("vert.spv").unwrap();
         let mut frag_shader_file = std::fs::File::open("frag.spv").unwrap();
         let vert_shader_code = ash::util::read_spv(&mut vert_shader_file).unwrap();
         let frag_shader_code = ash::util::read_spv(&mut frag_shader_file).unwrap();
 
-        let vert_shader_module = VulkanData::create_shader_module(&device, vert_shader_code);
-        let frag_shader_module = VulkanData::create_shader_module(&device, frag_shader_code);
+        self.vert_shader_module = Some(VulkanData::create_shader_module(
+            &self.device.as_ref().unwrap(),
+            vert_shader_code,
+        ));
+        self.frag_shader_module = Some(VulkanData::create_shader_module(
+            &self.device.as_ref().unwrap(),
+            frag_shader_code,
+        ));
 
         let vert_entry_string = CString::new("main").unwrap();
         let frag_entry_string = CString::new("main").unwrap();
 
         let vert_shader_stage_create_info = vk::PipelineShaderStageCreateInfo::builder()
             .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert_shader_module)
+            .module(self.vert_shader_module.unwrap())
             .name(vert_entry_string.as_c_str());
         let frag_shader_stage_create_info = vk::PipelineShaderStageCreateInfo::builder()
             .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag_shader_module)
+            .module(self.frag_shader_module.unwrap())
             .name(frag_entry_string.as_c_str());
-        let shader_stages = vec![vert_shader_stage_create_info.build(),frag_shader_stage_create_info.build()];
+        let shader_stages = vec![
+            vert_shader_stage_create_info.build(),
+            frag_shader_stage_create_info.build(),
+        ];
+
+        let binding_descriptions = [Vertex::get_binding_description()];
+        let attribute_descriptions = Vertex::get_attribute_description();
+
         let vertex_input_create_info = vk::PipelineVertexInputStateCreateInfo::builder()
-            .vertex_binding_descriptions(&[])
-            .vertex_attribute_descriptions(&[]);
+            .vertex_binding_descriptions(&binding_descriptions)
+            .vertex_attribute_descriptions(&attribute_descriptions);
 
         let input_assembly_create_info = vk::PipelineInputAssemblyStateCreateInfo::builder()
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
             .primitive_restart_enable(false);
 
         let viewport = vk::Viewport::builder()
-            .x(0.0f32).y(0.0f32)
+            .x(0.0f32)
+            .y(0.0f32)
             .width(swapchain_create_info.image_extent.width as f32)
             .height(swapchain_create_info.image_extent.height as f32)
-            .min_depth(0.0f32).max_depth(1.0f32);
+            .min_depth(0.0f32)
+            .max_depth(1.0f32);
 
-        let scissor = vk::Rect2D::builder().offset(vk::Offset2D{ x: 0, y: 0 }).extent(swapchain_create_info.image_extent);
+        let scissor = vk::Rect2D::builder()
+            .offset(vk::Offset2D { x: 0, y: 0 })
+            .extent(swapchain_create_info.image_extent);
 
         let viewports = [viewport.build()];
         let scissors = [scissor.build()];
-        let viewport_state_create_info = vk::PipelineViewportStateCreateInfo::builder().viewports(&viewports).scissors(&scissors);
+        let viewport_state_create_info = vk::PipelineViewportStateCreateInfo::builder()
+            .viewports(&viewports)
+            .scissors(&scissors);
 
         let rasterizer = vk::PipelineRasterizationStateCreateInfo::builder()
             .depth_clamp_enable(false)
@@ -338,7 +570,15 @@ impl VulkanData{
 
         let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo::builder();
 
-        let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_create_info, None)}.unwrap();
+        self.pipeline_layout = Some(
+            unsafe {
+                self.device
+                    .as_ref()
+                    .unwrap()
+                    .create_pipeline_layout(&pipeline_layout_create_info, None)
+            }
+            .unwrap(),
+        );
 
         let color_attachement = vk::AttachmentDescription::builder()
             .format(swapchain_create_info.image_format)
@@ -350,7 +590,9 @@ impl VulkanData{
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
 
-        let color_attachement_reference = vk::AttachmentReference::builder().attachment(0).layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+        let color_attachement_reference = vk::AttachmentReference::builder()
+            .attachment(0)
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
         let color_attachement_references = [color_attachement_reference.build()];
         let subpass = vk::SubpassDescription::builder()
             .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
@@ -359,21 +601,29 @@ impl VulkanData{
         let color_attachements = [color_attachement.build()];
         let subpasses = [subpass.build()];
 
-
         let dependencies = [vk::SubpassDependency::builder()
             .src_subpass(vk::SUBPASS_EXTERNAL)
             .dst_subpass(0)
             .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
             .src_access_mask(vk::AccessFlags::empty())
             .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE).build()];
+            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+            .build()];
 
         let render_pass_info = vk::RenderPassCreateInfo::builder()
             .attachments(&color_attachements)
             .subpasses(&subpasses)
             .dependencies(&dependencies);
 
-        let render_pass = unsafe {device.create_render_pass(&render_pass_info, None)}.unwrap();
+        self.render_pass = Some(
+            unsafe {
+                self.device
+                    .as_ref()
+                    .unwrap()
+                    .create_render_pass(&render_pass_info, None)
+            }
+            .unwrap(),
+        );
 
         let pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
             .stages(&shader_stages)
@@ -383,114 +633,255 @@ impl VulkanData{
             .rasterization_state(&rasterizer)
             .multisample_state(&multisampling)
             .color_blend_state(&color_blending)
-            .layout(pipeline_layout)
-            .render_pass(render_pass)
+            .layout(self.pipeline_layout.unwrap())
+            .render_pass(self.render_pass.unwrap())
             .subpass(0);
 
-        let graphics_pipeline = unsafe{device.create_graphics_pipelines(vk::PipelineCache::null(),&[pipeline_info.build()], None)}.unwrap()[0];
+        self.graphics_pipeline = Some(
+            unsafe {
+                self.device.as_ref().unwrap().create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    &[pipeline_info.build()],
+                    None,
+                )
+            }
+            .unwrap()[0],
+        );
 
-        let swapchain_framebuffers:Vec<Framebuffer> = swapchain_image_views.iter().map(|image_view|{
-            let attachements = vec![*image_view];
-            let framebuffer_create_info = vk::FramebufferCreateInfo::builder()
-                .render_pass(render_pass)
-                .attachments(&attachements)
-                .width(swapchain_create_info.image_extent.width)
-                .height(swapchain_create_info.image_extent.height)
-                .layers(1);
-            return unsafe {device.create_framebuffer(&framebuffer_create_info, None)}.unwrap();
-        }).collect();
+        self.swapchain_framebuffers = Some(
+            self.swapchain_image_views
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|image_view| {
+                    let attachements = vec![*image_view];
+                    let framebuffer_create_info = vk::FramebufferCreateInfo::builder()
+                        .render_pass(self.render_pass.unwrap())
+                        .attachments(&attachements)
+                        .width(swapchain_create_info.image_extent.width)
+                        .height(swapchain_create_info.image_extent.height)
+                        .layers(1);
+                    return unsafe {
+                        self.device
+                            .as_ref()
+                            .unwrap()
+                            .create_framebuffer(&framebuffer_create_info, None)
+                    }
+                    .unwrap();
+                })
+                .collect(),
+        );
 
-        let command_pool_create_info = vk::CommandPoolCreateInfo::builder()
-            .queue_family_index(main_queue_index);
-        let command_pool = unsafe {device.create_command_pool(&command_pool_create_info, None)}.unwrap();
+        let command_pool_create_info =
+            vk::CommandPoolCreateInfo::builder().queue_family_index(self.main_queue_index.unwrap());
+        self.command_pool = Some(
+            unsafe {
+                self.device
+                    .as_ref()
+                    .unwrap()
+                    .create_command_pool(&command_pool_create_info, None)
+            }
+            .unwrap(),
+        );
 
         let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::builder()
-            .command_pool(command_pool)
+            .command_pool(self.command_pool.unwrap())
             .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(swapchain_framebuffers.len() as u32);
+            .command_buffer_count(self.swapchain_framebuffers.as_ref().unwrap().len() as u32);
 
-        let command_buffers = unsafe {device.allocate_command_buffers(&command_buffer_allocate_info)}.unwrap();
+        self.command_buffers = Some(
+            unsafe {
+                self.device
+                    .as_ref()
+                    .unwrap()
+                    .allocate_command_buffers(&command_buffer_allocate_info)
+            }
+            .unwrap(),
+        );
 
-        command_buffers.iter().enumerate().for_each(|(i, command_buffer)|{
-            let command_buffer_begin_info = vk::CommandBufferBeginInfo::builder();
-            unsafe{device.begin_command_buffer(*command_buffer, &command_buffer_begin_info)}.unwrap();
+        self.command_buffers
+            .as_ref()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .for_each(|(i, command_buffer)| {
+                let command_buffer_begin_info = vk::CommandBufferBeginInfo::builder();
+                unsafe {
+                    self.device
+                        .as_ref()
+                        .unwrap()
+                        .begin_command_buffer(*command_buffer, &command_buffer_begin_info)
+                }
+                .unwrap();
 
-            let clear_colors = vec![vk::ClearValue{color:vk::ClearColorValue{float32: [0.0, 0.0, 0.0, 0.0]}}];
+                let clear_colors = vec![vk::ClearValue {
+                    color: vk::ClearColorValue {
+                        float32: [0.0, 0.0, 0.0, 0.0],
+                    },
+                }];
 
-            unsafe{device.cmd_begin_render_pass(*command_buffer, &vk::RenderPassBeginInfo::builder() //not sure how I feel about stacking all this together
-                .render_pass(render_pass)
-                .framebuffer(swapchain_framebuffers[i])
-                .render_area(vk::Rect2D{offset: vk::Offset2D{ x: 0, y: 0 }, extent: swapchain_create_info.image_extent})
-                .clear_values(&clear_colors), vk::SubpassContents::INLINE)};
+                unsafe {
+                    self.device.as_ref().unwrap().cmd_begin_render_pass(
+                        *command_buffer,
+                        &vk::RenderPassBeginInfo::builder() //not sure how I feel about stacking all this together
+                            .render_pass(self.render_pass.unwrap())
+                            .framebuffer(self.swapchain_framebuffers.as_ref().unwrap()[i])
+                            .render_area(vk::Rect2D {
+                                offset: vk::Offset2D { x: 0, y: 0 },
+                                extent: swapchain_create_info.image_extent,
+                            })
+                            .clear_values(&clear_colors),
+                        vk::SubpassContents::INLINE,
+                    )
+                };
 
-            unsafe{ device.cmd_bind_pipeline(*command_buffer, vk::PipelineBindPoint::GRAPHICS, graphics_pipeline) };
-            unsafe{ device.cmd_draw(*command_buffer, 3, 1, 0, 0)};
-            unsafe{ device.cmd_end_render_pass(*command_buffer)};
-            unsafe{ device.end_command_buffer(*command_buffer)}.unwrap();
-
-        });
-        return (surface_format,
-                swapchain_loader,
-                swapchain,
-                swapchain_image_views,
-                vert_shader_module,
-                frag_shader_module,
-                pipeline_layout,
-                render_pass,
-                graphics_pipeline,
-                swapchain_framebuffers,
-                command_pool,
-                command_buffers)
+                unsafe {
+                    self.device.as_ref().unwrap().cmd_bind_pipeline(
+                        *command_buffer,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.graphics_pipeline.unwrap(),
+                    )
+                };
+                unsafe {
+                    self.device
+                        .as_ref()
+                        .unwrap()
+                        .cmd_draw(*command_buffer, 3, 1, 0, 0)
+                };
+                unsafe {
+                    self.device
+                        .as_ref()
+                        .unwrap()
+                        .cmd_end_render_pass(*command_buffer)
+                };
+                unsafe {
+                    self.device
+                        .as_ref()
+                        .unwrap()
+                        .end_command_buffer(*command_buffer)
+                }
+                .unwrap();
+            });
     }
 
-
-    fn create_shader_module(device: &Device, spv_code: Vec<u32>) -> vk::ShaderModule{
+    fn create_shader_module(device: &Device, spv_code: Vec<u32>) -> vk::ShaderModule {
         let shader_module_create_info = vk::ShaderModuleCreateInfo::builder().code(&spv_code);
-        unsafe {device.create_shader_module(&shader_module_create_info, None)}.unwrap()
+        unsafe { device.create_shader_module(&shader_module_create_info, None) }.unwrap()
     }
 
     fn cleanup_swapchain(&mut self) {
-
-                self.swapchain_framebuffers.iter().for_each(|framebuffer| unsafe{self.device.destroy_framebuffer(*framebuffer, None)});
-        unsafe {self.device.destroy_pipeline(self.graphics_pipeline,None)};
-        unsafe {self.device.destroy_pipeline_layout(self.pipeline_layout,None)};
-        unsafe {self.device.destroy_render_pass(self.render_pass, None)};
-        unsafe {self.device.destroy_command_pool(self.command_pool, None)};
-        self.swapchain_image_views.iter().for_each(|image_view| unsafe {self.device.destroy_image_view(*image_view, None)});
-        unsafe {self.swapchain_loader.destroy_swapchain(self.swapchain, None)};
-
+        self.swapchain_framebuffers
+            .as_ref()
+            .unwrap()
+            .into_iter()
+            .for_each(|framebuffer| unsafe {
+                self.device
+                    .as_ref()
+                    .unwrap()
+                    .destroy_framebuffer(*framebuffer, None)
+            });
+        unsafe {
+            self.device
+                .as_ref()
+                .unwrap()
+                .destroy_pipeline(self.graphics_pipeline.unwrap(), None)
+        };
+        unsafe {
+            self.device
+                .as_ref()
+                .unwrap()
+                .destroy_pipeline_layout(self.pipeline_layout.unwrap(), None)
+        };
+        unsafe {
+            self.device
+                .as_ref()
+                .unwrap()
+                .destroy_render_pass(self.render_pass.unwrap(), None)
+        };
+        unsafe {
+            self.device
+                .as_ref()
+                .unwrap()
+                .destroy_command_pool(self.command_pool.unwrap(), None)
+        };
+        self.swapchain_image_views
+            .as_ref()
+            .unwrap()
+            .iter()
+            .for_each(|image_view| unsafe {
+                self.device
+                    .as_ref()
+                    .unwrap()
+                    .destroy_image_view(*image_view, None)
+            });
+        unsafe {
+            self.swapchain_loader
+                .as_ref()
+                .unwrap()
+                .destroy_swapchain(self.swapchain.unwrap(), None)
+        };
     }
 
-    fn cleanup(&mut self){
+    fn cleanup(&mut self) {
         VulkanData::cleanup_swapchain(self);
 
         unsafe {
-            self.device.destroy_semaphore(self.render_finished_semaphore, None);
-            self.device.destroy_semaphore(self.image_available_semaphore, None);
-            self.device.destroy_fence(self.in_flight_fence, None);
+            self.device
+                .as_ref()
+                .unwrap()
+                .destroy_semaphore(self.render_finished_semaphore.unwrap(), None);
+            self.device
+                .as_ref()
+                .unwrap()
+                .destroy_semaphore(self.image_available_semaphore.unwrap(), None);
+            self.device
+                .as_ref()
+                .unwrap()
+                .destroy_fence(self.in_flight_fence.unwrap(), None);
         }
-        unsafe {self.device.destroy_shader_module(self.vert_shader_module,None)};
-        unsafe {self.device.destroy_shader_module(self.frag_shader_module, None)};
-        unsafe {self.surface_loader.destroy_surface(self.surface,None)};
-        unsafe {self.device.destroy_device(None)};
-        unsafe {self.instance.destroy_instance(None)};
+        unsafe {
+            self.device
+                .as_ref()
+                .unwrap()
+                .destroy_shader_module(self.vert_shader_module.unwrap(), None)
+        };
+        unsafe {
+            self.device
+                .as_ref()
+                .unwrap()
+                .destroy_shader_module(self.frag_shader_module.unwrap(), None)
+        };
+        unsafe {
+            self.surface_loader
+                .as_ref()
+                .unwrap()
+                .destroy_surface(self.surface.unwrap(), None)
+        };
+        unsafe { self.device.as_ref().unwrap().destroy_device(None) };
+        unsafe { self.instance.as_ref().unwrap().destroy_instance(None) };
     }
 }
 
-fn main(){
+fn main() {
     let path = env::current_dir().unwrap();
     println!("The current directory is {}", path.display());
 
     let event_loop = EventLoop::new();
-    let window = WindowBuilder::new().build(&event_loop).expect("Failed to build window");
-    let mut vulkan_data = VulkanData::new(&window);
+    let window = WindowBuilder::new()
+        .build(&event_loop)
+        .expect("Failed to build window");
+    let mut vulkan_data = VulkanData::new();
+    vulkan_data.init_vulkan(&window);
 
-    event_loop.run(move |event, _, control_flow|{
+    event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
 
         match event {
-            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-                unsafe{ vulkan_data.device.device_wait_idle()}.unwrap();
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                ..
+            } => {
+                unsafe { vulkan_data.device.as_ref().unwrap().device_wait_idle() }.unwrap();
                 *control_flow = ControlFlow::Exit;
                 vulkan_data.cleanup();
             }
@@ -498,7 +889,7 @@ fn main(){
                 //app update code
                 window.request_redraw();
                 vulkan_data.draw_frame();
-            },
+            }
             _ => {}
         }
     })
