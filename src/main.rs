@@ -1,23 +1,25 @@
 use winit::event_loop::{EventLoop, ControlFlow};
 use winit::window::{WindowBuilder, Window};
 use winit::event::{Event, WindowEvent};
-use ash::{vk, Instance, Device};
+use ash::{vk, Instance, Device, Entry};
 use ash::version::{EntryV1_0, InstanceV1_0, DeviceV1_0};
 use std::ffi::{CString, CStr};
-use ash::vk::{PhysicalDevice, Framebuffer};
+use ash::vk::{PhysicalDevice, Framebuffer, SwapchainKHR, ShaderModule, SurfaceFormatKHR, SurfaceKHR, Pipeline, PipelineLayout, RenderPass, ImageView, CommandBuffer, CommandPool};
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Swapchain};
 use std::env;
 
 struct VulkanData{
-    instance: Option<Instance>,
-    device: Option<Device>,
+    instance: Instance,
+    entry: Entry,
+    device: Device,
+    physical_device: PhysicalDevice,
     main_queue: vk::Queue,
-    surface_loader: Option<Surface>,
+    main_queue_index: u32,
+    surface_loader: Surface,
     surface: vk::SurfaceKHR,
-    surface_capabilities: vk::SurfaceCapabilitiesKHR,
     surface_format: vk::SurfaceFormatKHR,
-    swapchain_loader: Option<Swapchain>,
+    swapchain_loader: Swapchain,
     swapchain: vk::SwapchainKHR,
     swapchain_image_views: Vec<vk::ImageView>,
     vert_shader_module: vk::ShaderModule,
@@ -38,30 +40,6 @@ struct VulkanData{
 impl VulkanData{
     fn new(window: &Window) -> Self{
 
-        let mut vulkan_data: VulkanData = VulkanData{
-            instance: None,
-            device: None,
-            main_queue: Default::default(),
-            surface_capabilities: Default::default(),
-            surface_format: Default::default(),
-            surface_loader: None,
-            surface: Default::default(),
-            swapchain_loader: None,
-            swapchain: Default::default(),
-            swapchain_image_views: vec![],
-            vert_shader_module: Default::default(),
-            frag_shader_module: Default::default(),
-            pipeline_layout: Default::default(),
-            render_pass: Default::default(),
-            graphics_pipeline: Default::default(),
-            swapchain_framebuffers: vec![],
-            command_pool: Default::default(),
-            command_buffers: vec![],
-            image_available_semaphore: Default::default(),
-            render_finished_semaphore: Default::default(),
-            in_flight_fence: Default::default(),
-        };
-
         let validation_layer_names = [CString::new("VK_LAYER_KHRONOS_validation").expect("CString conversion failed")];
         let validation_layer_names_raw= validation_layer_names.iter().map(|c_string|c_string.as_ptr()).collect::<Vec<_>>();
         // validation_layers.remove(0);
@@ -79,9 +57,7 @@ impl VulkanData{
             .enabled_extension_names(&raw_extensions)
             .application_info(&app_info)
             .enabled_layer_names(&validation_layer_names_raw);
-        vulkan_data.instance = Some(unsafe { entry.create_instance(&create_info, None) }.expect("Failed to create instance"));
-
-        let instance = vulkan_data.instance.as_ref().unwrap();
+        let instance = unsafe { entry.create_instance(&create_info, None) }.expect("Failed to create instance") ;
 
         let physical_devices = unsafe {instance.enumerate_physical_devices()}.unwrap();
         let mut physical_device: PhysicalDevice = Default::default();
@@ -115,48 +91,92 @@ impl VulkanData{
             .queue_create_infos(queue_create_infos)
             .enabled_layer_names(&validation_layer_names_raw)
             .enabled_extension_names(&device_extension_names_raw);
-        vulkan_data.device = Some(unsafe {instance.create_device(physical_device,&device_create_info,None)}.unwrap());
-        let device = vulkan_data.device.as_ref().unwrap();
+        let device = unsafe {instance.create_device(physical_device,&device_create_info,None)}.unwrap();
 
-        vulkan_data.main_queue = unsafe {device.get_device_queue(main_queue_index,0)};
+        let main_queue = unsafe {device.get_device_queue(main_queue_index,0)};
 
-        vulkan_data.surface_loader = Some( Surface::new(&entry,instance));
-        let surface_loader = vulkan_data.surface_loader.as_ref().unwrap();
-        vulkan_data.surface = unsafe {ash_window::create_surface(&entry,instance,window,None)}.unwrap();
-        let surface = &vulkan_data.surface;
-        vulkan_data.surface_capabilities = unsafe {surface_loader.get_physical_device_surface_capabilities(physical_device,*surface)}.unwrap();
-        let surface_formats = unsafe { surface_loader.get_physical_device_surface_formats(physical_device,*surface)}.unwrap();
-        let surface_format = surface_formats.iter().find(|format| {
-            return format.format == vk::Format::B8G8R8A8_SRGB && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR;
-        }).unwrap();
+        let surface = unsafe {ash_window::create_surface(&entry,&instance,window,None)}.unwrap();
+        let surface_loader = Surface::new(&entry,&instance);
 
-        let _surface_support = unsafe {surface_loader.get_physical_device_surface_support(physical_device, main_queue_index, *surface)};
+        let (surface_format,
+            swapchain_loader,
+            swapchain,
+            swapchain_image_views,
+            vert_shader_module,
+            frag_shader_module,
+            pipeline_layout,
+            render_pass,
+            graphics_pipeline,
+            swapchain_framebuffers,
+            command_pool,
+            command_buffers) = VulkanData::recreate_swaphain(&device, &instance, &surface, &surface_loader, &physical_device, main_queue_index);
 
-        let command_pool_create_info = vk::CommandPoolCreateInfo::builder()
-            .queue_family_index(main_queue_index);
-        vulkan_data.command_pool = unsafe {device.create_command_pool(&command_pool_create_info, None)}.unwrap();
+        let _surface_support = unsafe {surface_loader.get_physical_device_surface_support(physical_device, main_queue_index, surface)};
 
-        VulkanData::recreate_swaphain(vulkan_data);
         let semaphore_create_info = vk::SemaphoreCreateInfo::builder();
-        vulkan_data.image_available_semaphore = unsafe{device.create_semaphore(&semaphore_create_info,None)}.unwrap();
-        vulkan_data.render_finished_semaphore = unsafe{device.create_semaphore(&semaphore_create_info,None)}.unwrap();
+        let image_available_semaphore = unsafe{device.create_semaphore(&semaphore_create_info,None)}.unwrap();
+        let render_finished_semaphore = unsafe{device.create_semaphore(&semaphore_create_info,None)}.unwrap();
         let fence_create_info = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
-        vulkan_data.in_flight_fence = unsafe{ device.create_fence(&fence_create_info, None)}.unwrap();
+        let in_flight_fence = unsafe{ device.create_fence(&fence_create_info, None)}.unwrap();
 
-        return vulkan_data;
-
+        return VulkanData{
+            instance,
+            entry,
+            device,
+            physical_device,
+            main_queue,
+            main_queue_index,
+            surface_loader,
+            surface,
+            surface_format,
+            swapchain_loader,
+            swapchain,
+            swapchain_image_views,
+            vert_shader_module,
+            frag_shader_module,
+            pipeline_layout,
+            render_pass,
+            graphics_pipeline,
+            swapchain_framebuffers,
+            command_pool,
+            command_buffers,
+            image_available_semaphore,
+            render_finished_semaphore,
+            in_flight_fence,
+        }
     }
 
-    fn draw_frame(&self){
-        let device = self.device.as_ref().unwrap();
-
+    fn draw_frame(&mut self){
 
         let fences = [self.in_flight_fence];
-        unsafe { device.wait_for_fences(&fences,true,u64::MAX)}.unwrap();
-        unsafe {device.reset_fences(&fences)}.unwrap();
+        unsafe { self.device.wait_for_fences(&fences,true,u64::MAX)}.unwrap();
+        unsafe {self.device.reset_fences(&fences)}.unwrap();
 
-        let (image_index,is_swapchain_suboptimal) =
-            unsafe {self.swapchain_loader.as_ref().unwrap().acquire_next_image(self.swapchain,u64::MAX, self.image_available_semaphore, vk::Fence::null())}.unwrap();
+        let mut image_index: u32 = 0;
+
+        match unsafe {self.swapchain_loader.acquire_next_image(self.swapchain,u64::MAX, self.image_available_semaphore, vk::Fence::null())}{
+            Ok((index,_)) => {image_index = index}
+            Err(e) => {if e == vk::Result::ERROR_OUT_OF_DATE_KHR || e == vk::Result::SUBOPTIMAL_KHR{
+                unsafe {self.device.device_wait_idle()}.unwrap();
+                self.cleanup_swapchain();
+                let (surface_format, swapchain_loader, swapchain, image_views, vert_shader, frag_shader, pipeline_layout,render_pass,  graphics_pipeline, framebuffers, command_pool, command_buffers ) = VulkanData::recreate_swaphain(&self.device, &self.instance, &self.surface, &self.surface_loader, &self.physical_device, self.main_queue_index);
+                self.surface_format = surface_format;
+                self.swapchain_loader = swapchain_loader;
+                self.swapchain = swapchain;
+                self.swapchain_image_views = image_views;
+                self.vert_shader_module = vert_shader;
+                self.frag_shader_module = frag_shader;
+                self.pipeline_layout = pipeline_layout;
+                self.render_pass = render_pass;
+                self.graphics_pipeline = graphics_pipeline;
+                self.swapchain_framebuffers = framebuffers;
+                self.command_pool = command_pool;
+                self.command_buffers = command_buffers;                return;
+            }else{
+                panic!("acquire_next_image error");
+            }}
+        };
+
 
         let wait_semaphores = [self.image_available_semaphore];
         let signal_semaphores = [self.render_finished_semaphore];
@@ -170,7 +190,7 @@ impl VulkanData{
                 .build()
         ];
 
-        unsafe{device.queue_submit(self.main_queue,&submits, self.in_flight_fence)}.unwrap();
+        unsafe{self.device.queue_submit(self.main_queue,&submits, self.in_flight_fence)}.unwrap();
 
         let swapchains = [self.swapchain];
         let image_indices  = [image_index];
@@ -179,35 +199,60 @@ impl VulkanData{
             .image_indices(&image_indices)
             .wait_semaphores(&signal_semaphores);
 
-        unsafe {self.swapchain_loader.as_ref().unwrap().queue_present(self.main_queue, &present_info)}.unwrap();
+        match unsafe {self.swapchain_loader.queue_present(self.main_queue, &present_info)}{
+            Ok(_) => {}
+            Err(e) => {if e == vk::Result::ERROR_OUT_OF_DATE_KHR || e == vk::Result::SUBOPTIMAL_KHR{
+                unsafe {self.device.device_wait_idle()}.unwrap();
+                self.cleanup_swapchain();
+                let (surface_format, swapchain_loader, swapchain, image_views, vert_shader, frag_shader, pipeline_layout,render_pass,  graphics_pipeline, framebuffers, command_pool, command_buffers ) = VulkanData::recreate_swaphain(&self.device, &self.instance, &self.surface, &self.surface_loader, &self.physical_device, self.main_queue_index);
+                self.surface_format = surface_format;
+                self.swapchain_loader = swapchain_loader;
+                self.swapchain = swapchain;
+                self.swapchain_image_views = image_views;
+                self.vert_shader_module = vert_shader;
+                self.frag_shader_module = frag_shader;
+                self.pipeline_layout = pipeline_layout;
+                self.render_pass = render_pass;
+                self.graphics_pipeline = graphics_pipeline;
+                self.swapchain_framebuffers = framebuffers;
+                self.command_pool = command_pool;
+                self.command_buffers = command_buffers;
+
+            }}
+        }
+
+
+
+
     }
 
-    fn recreate_swaphain(vulkan_data: VulkanData){
-        let device = vulkan_data.device.as_ref().unwrap();
-
-        unsafe {device.device_wait_idle()}.unwrap();
-        vulkan_data.cleanup_swapchain();
-
+    fn recreate_swaphain(device: &Device, instance: &Instance, surface: &SurfaceKHR, surface_loader: &Surface, physical_device: &PhysicalDevice, main_queue_index: u32) -> (SurfaceFormatKHR, Swapchain, SwapchainKHR, Vec<ImageView>, ShaderModule, ShaderModule, PipelineLayout, RenderPass, Pipeline, Vec<Framebuffer>, CommandPool, Vec<CommandBuffer>) {
+        let surface_capabilities = unsafe {surface_loader.get_physical_device_surface_capabilities(*physical_device,*surface)}.unwrap();
+        let surface_formats = unsafe { surface_loader.get_physical_device_surface_formats(*physical_device,*surface)}.unwrap();
+        let surface_format = *surface_formats.iter().find(|format| {
+            return format.format == vk::Format::B8G8R8A8_SRGB && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR;
+        }).unwrap();
 
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::builder()
-            .surface(vulkan_data.surface)
-            .min_image_count(vulkan_data.surface_capabilities.min_image_count)
-            .image_color_space(vulkan_data.surface_format.color_space)
-            .image_format(vulkan_data.surface_format.format)
-            .image_extent(vulkan_data.surface_capabilities.current_extent)
+            .surface(*surface)
+            .min_image_count(surface_capabilities.min_image_count)
+            .image_color_space(surface_format.color_space)
+            .image_format(surface_format.format)
+            .image_extent(surface_capabilities.current_extent)
             .image_array_layers(1)
             .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .pre_transform(vulkan_data.surface_capabilities.current_transform)
+            .pre_transform(surface_capabilities.current_transform)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
             .present_mode(vk::PresentModeKHR::IMMEDIATE)
             .clipped(true);
-        let swapchain_loader = Swapchain::new(vulkan_data.instance.as_ref().unwrap(), vulkan_data.device.as_ref().unwrap());
+
+        let swapchain_loader = Swapchain::new(instance, device);
         let swapchain = unsafe {swapchain_loader.create_swapchain(&swapchain_create_info, None)}.unwrap();
 
         let swapchain_images = unsafe {swapchain_loader.get_swapchain_images(swapchain)}.unwrap();
 
-        let swapchain_image_views = swapchain_images.iter().map(|image|{
+        let swapchain_image_views: Vec<vk::ImageView> = swapchain_images.iter().map(|image|{
             let image_view_create_info = vk::ImageViewCreateInfo::builder()
                 .format(swapchain_create_info.image_format)
                 .components(vk::ComponentMapping{
@@ -355,9 +400,12 @@ impl VulkanData{
             return unsafe {device.create_framebuffer(&framebuffer_create_info, None)}.unwrap();
         }).collect();
 
+        let command_pool_create_info = vk::CommandPoolCreateInfo::builder()
+            .queue_family_index(main_queue_index);
+        let command_pool = unsafe {device.create_command_pool(&command_pool_create_info, None)}.unwrap();
 
         let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::builder()
-            .command_pool(vulkan_data.command_pool)
+            .command_pool(command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_buffer_count(swapchain_framebuffers.len() as u32);
 
@@ -380,50 +428,52 @@ impl VulkanData{
             unsafe{ device.cmd_end_render_pass(*command_buffer)};
             unsafe{ device.end_command_buffer(*command_buffer)}.unwrap();
 
-
         });
-
-        vulkan_data.swapchain_loader = Some(swapchain_loader);
-        vulkan_data.swapchain = swapchain;
-        vulkan_data.swapchain_image_views = swapchain_image_views;
-        vulkan_data.vert_shader_module = vert_shader_module;
-        vulkan_data.frag_shader_module = frag_shader_module;
-        vulkan_data.pipeline_layout = pipeline_layout;
-        vulkan_data.render_pass = render_pass;
-        vulkan_data.graphics_pipeline = graphics_pipeline;
-        vulkan_data.swapchain_framebuffers = swapchain_framebuffers;
-        vulkan_data.command_buffers = command_buffers;
+        return (surface_format,
+                swapchain_loader,
+                swapchain,
+                swapchain_image_views,
+                vert_shader_module,
+                frag_shader_module,
+                pipeline_layout,
+                render_pass,
+                graphics_pipeline,
+                swapchain_framebuffers,
+                command_pool,
+                command_buffers)
     }
+
 
     fn create_shader_module(device: &Device, spv_code: Vec<u32>) -> vk::ShaderModule{
         let shader_module_create_info = vk::ShaderModuleCreateInfo::builder().code(&spv_code);
         unsafe {device.create_shader_module(&shader_module_create_info, None)}.unwrap()
     }
 
-    fn cleanup_swapchain(&self){
-        self.swapchain_framebuffers.iter().for_each(|framebuffer| unsafe{self.device.as_ref().unwrap().destroy_framebuffer(*framebuffer, None)});
-        unsafe {self.device.as_ref().unwrap().destroy_pipeline(self.graphics_pipeline,None)};
-        unsafe {self.device.as_ref().unwrap().destroy_pipeline_layout(self.pipeline_layout,None)};
-        unsafe {self.device.as_ref().unwrap().destroy_render_pass(self.render_pass, None)};
-        unsafe {self.device.as_ref().unwrap().destroy_command_pool(self.command_pool, None)};
-        self.swapchain_image_views.iter().for_each(|image_view| unsafe {self.device.as_ref().unwrap().destroy_image_view(*image_view, None)});
-        unsafe {self.swapchain_loader.as_ref().unwrap().destroy_swapchain(self.swapchain, None)};
+    fn cleanup_swapchain(&mut self) {
+
+                self.swapchain_framebuffers.iter().for_each(|framebuffer| unsafe{self.device.destroy_framebuffer(*framebuffer, None)});
+        unsafe {self.device.destroy_pipeline(self.graphics_pipeline,None)};
+        unsafe {self.device.destroy_pipeline_layout(self.pipeline_layout,None)};
+        unsafe {self.device.destroy_render_pass(self.render_pass, None)};
+        unsafe {self.device.destroy_command_pool(self.command_pool, None)};
+        self.swapchain_image_views.iter().for_each(|image_view| unsafe {self.device.destroy_image_view(*image_view, None)});
+        unsafe {self.swapchain_loader.destroy_swapchain(self.swapchain, None)};
 
     }
 
-    fn cleanup(&self){
-        self.cleanup_swapchain();
+    fn cleanup(&mut self){
+        VulkanData::cleanup_swapchain(self);
 
         unsafe {
-            self.device.as_ref().unwrap().destroy_semaphore(self.render_finished_semaphore, None);
-            self.device.as_ref().unwrap().destroy_semaphore(self.image_available_semaphore, None);
-            self.device.as_ref().unwrap().destroy_fence(self.in_flight_fence, None);
+            self.device.destroy_semaphore(self.render_finished_semaphore, None);
+            self.device.destroy_semaphore(self.image_available_semaphore, None);
+            self.device.destroy_fence(self.in_flight_fence, None);
         }
-        unsafe {self.device.as_ref().unwrap().destroy_shader_module(self.vert_shader_module,None)};
-        unsafe {self.device.as_ref().unwrap().destroy_shader_module(self.frag_shader_module, None)};
-        unsafe {self.surface_loader.as_ref().unwrap().destroy_surface(self.surface,None)};
-        unsafe {self.device.as_ref().unwrap().destroy_device(None)};
-        unsafe {self.instance.as_ref().unwrap().destroy_instance(None)};
+        unsafe {self.device.destroy_shader_module(self.vert_shader_module,None)};
+        unsafe {self.device.destroy_shader_module(self.frag_shader_module, None)};
+        unsafe {self.surface_loader.destroy_surface(self.surface,None)};
+        unsafe {self.device.destroy_device(None)};
+        unsafe {self.instance.destroy_instance(None)};
     }
 }
 
@@ -433,14 +483,14 @@ fn main(){
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).expect("Failed to build window");
-    let vulkan_data = VulkanData::new(&window);
+    let mut vulkan_data = VulkanData::new(&window);
 
     event_loop.run(move |event, _, control_flow|{
         *control_flow = ControlFlow::Poll;
 
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-                unsafe{ vulkan_data.device.as_ref().unwrap().device_wait_idle()}.unwrap();
+                unsafe{ vulkan_data.device.device_wait_idle()}.unwrap();
                 *control_flow = ControlFlow::Exit;
                 vulkan_data.cleanup();
             }
