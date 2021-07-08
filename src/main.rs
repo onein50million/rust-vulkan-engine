@@ -24,7 +24,7 @@ const MSAA_SAMPLES: vk::SampleCountFlags = vk::SampleCountFlags::TYPE_1;
 struct Vertex {
     position: Vector3<f32>,
     color: Vector3<f32>,
-    texture_coordinae: Vector2<f32>,
+    texture_coordinate: Vector2<f32>,
 }
 
 #[repr(C)]
@@ -152,8 +152,8 @@ struct VulkanData {
     depth_image: Option<vk::Image>,
     depth_image_memory: Option<vk::DeviceMemory>,
     depth_image_view: Option<vk::ImageView>,
-    vertices: [Vertex; 8],
-    indices: Vec<u16>,
+    vertices: Vec<Vertex>,
+    indices: Vec<u32>,
     descriptor_pool: Option<vk::DescriptorPool>,
     descriptor_set_layout: Option<vk::DescriptorSetLayout>,
     descriptor_sets: Option<Vec<vk::DescriptorSet>>,
@@ -167,7 +167,7 @@ struct VulkanData {
 
 impl VulkanData {
     fn new() -> Self {
-        let vertices: [Vertex; 8] = [
+        let vertices = vec![
             Vertex {
                 position: Vector3 {
                     x: -0.5,
@@ -179,7 +179,7 @@ impl VulkanData {
                     y: 0.0,
                     z: 0.0,
                 },
-                texture_coordinae: Vector2 { x: 1.0, y: 0.0 }
+                texture_coordinate: Vector2 { x: 1.0, y: 0.0 }
             },
             Vertex {
                 position: Vector3 {
@@ -192,7 +192,7 @@ impl VulkanData {
                     y: 1.0,
                     z: 0.0,
                 },
-                texture_coordinae: Vector2 { x: 0.0, y: 0.0 }
+                texture_coordinate: Vector2 { x: 0.0, y: 0.0 }
             },
             Vertex {
                 position: Vector3 {
@@ -205,7 +205,7 @@ impl VulkanData {
                     y: 0.0,
                     z: 1.0,
                 },
-                texture_coordinae: Vector2 { x: 0.0, y: 1.0 }
+                texture_coordinate: Vector2 { x: 0.0, y: 1.0 }
             },
             Vertex {
                 position: Vector3 {
@@ -218,7 +218,7 @@ impl VulkanData {
                     y: 0.0,
                     z: 0.0,
                 },
-                texture_coordinae: Vector2 { x: 1.0, y: 1.0 }
+                texture_coordinate: Vector2 { x: 1.0, y: 1.0 }
             },
             //second square
             Vertex {
@@ -232,7 +232,7 @@ impl VulkanData {
                     y: 0.0,
                     z: 0.0,
                 },
-                texture_coordinae: Vector2 { x: 1.0, y: 0.0 }
+                texture_coordinate: Vector2 { x: 1.0, y: 0.0 }
             },
             Vertex {
                 position: Vector3 {
@@ -245,7 +245,7 @@ impl VulkanData {
                     y: 1.0,
                     z: 0.0,
                 },
-                texture_coordinae: Vector2 { x: 0.0, y: 0.0 }
+                texture_coordinate: Vector2 { x: 0.0, y: 0.0 }
             },
             Vertex {
                 position: Vector3 {
@@ -258,7 +258,7 @@ impl VulkanData {
                     y: 0.0,
                     z: 1.0,
                 },
-                texture_coordinae: Vector2 { x: 0.0, y: 1.0 }
+                texture_coordinate: Vector2 { x: 0.0, y: 1.0 }
             },
             Vertex {
                 position: Vector3 {
@@ -271,7 +271,7 @@ impl VulkanData {
                     y: 0.0,
                     z: 0.0,
                 },
-                texture_coordinae: Vector2 { x: 1.0, y: 1.0 }
+                texture_coordinate: Vector2 { x: 1.0, y: 1.0 }
             },
         ];
 
@@ -368,6 +368,10 @@ impl VulkanData {
         self.entry.as_ref().unwrap().enumerate_instance_extension_properties().unwrap().into_iter().for_each(|extension_property| {
             println!("Supported Extension: {:}", String::from_utf8_lossy( &unsafe{std::mem::transmute::<[i8; 256], [u8;256]>(extension_property.extension_name)}));
         });
+
+        self.load_model();
+
+        println!("Verts: {:}", self.vertices.len());
 
         let app_info = vk::ApplicationInfo::builder();
         let mut surface_extensions = ash_window::enumerate_required_extensions(window).unwrap();
@@ -544,6 +548,29 @@ impl VulkanData {
         );
     }
 
+    fn load_model(&mut self){
+        let (document,buffers, images) = gltf::import("adamHead/adamHead.gltf").unwrap();
+
+        let data = &buffers[0];
+
+        let mut i = 0;
+        const vertex_size: usize = std::mem::size_of::<Vertex>();
+        while (i + vertex_size) < data.len(){
+            let mut raw_data = [0u8; vertex_size];
+            let mut j = 0;
+            while j < vertex_size{
+                raw_data[j] = data[i+j];
+                j+= 1;
+            }
+            let new_vertex = unsafe{std::mem::transmute::<[u8; vertex_size], Vertex>(raw_data)};
+
+            self.vertices.push(new_vertex);
+
+            i+= vertex_size;
+        }
+
+    }
+
     fn create_depth_resources(&mut self){
 
         let depth_format = self.find_depth_format();
@@ -648,7 +675,7 @@ impl VulkanData {
     }
 
     fn create_index_buffer(&mut self) {
-        let buffer_size: vk::DeviceSize = std::mem::size_of_val(&self.indices) as u64;
+        let buffer_size: vk::DeviceSize = (std::mem::size_of::<Vertex>() * self.indices.len()) as u64;
         let (staging_buffer, staging_buffer_memory) = self.create_buffer(
             buffer_size,
             vk::BufferUsageFlags::TRANSFER_SRC,
@@ -702,7 +729,7 @@ impl VulkanData {
     }
 
     fn create_vertex_buffer(&mut self) {
-        let buffer_size: vk::DeviceSize = std::mem::size_of_val(&self.vertices) as u64;
+        let buffer_size: vk::DeviceSize = (std::mem::size_of::<Vertex>() * self.vertices.len()) as u64;
         let (staging_buffer, staging_buffer_memory) = self.create_buffer(
             buffer_size,
             vk::BufferUsageFlags::TRANSFER_SRC,
@@ -1550,7 +1577,7 @@ impl VulkanData {
                         *command_buffer,
                         self.index_buffer.unwrap(),
                         0 as vk::DeviceSize,
-                        vk::IndexType::UINT16,
+                        vk::IndexType::UINT32,
                     )
                 };
 
@@ -1584,7 +1611,7 @@ impl VulkanData {
                 unsafe {
                     self.device.as_ref().unwrap().cmd_draw_indexed(
                         *command_buffer,
-                        self.indices.len() as u32,
+                        self.vertices.len() as u32,
                         1,
                         0,
                         0,
