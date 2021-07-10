@@ -1,22 +1,26 @@
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Swapchain};
 use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0};
-use ash::vk::PhysicalDevice;
 use ash::{vk, Device, Entry, Instance};
-use cgmath::{Matrix4, Point3, SquareMatrix, Vector2, Vector3, Deg, Transform, InnerSpace, Quaternion, Euler, Angle, Zero, One, Matrix3};
+use cgmath::{Matrix4, Point3, SquareMatrix, Vector2, Vector3, Deg, Transform, InnerSpace, Zero, Matrix3};
 use std::env;
 use std::ffi::{c_void, CStr, CString};
-use std::ops::{Mul, Add};
 use winit::event::{DeviceEvent, Event, VirtualKeyCode, WindowEvent, ElementState};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::{Window, WindowBuilder};
-use image::{GenericImageView, Rgb, Rgba};
-use image::buffer::Pixels;
-use std::any::Any;
+use image::GenericImageView;
+use std::any::{Any, TypeId};
 
 const FRAMERATE_TARGET: f64 = 280.0;
-const MSAA_SAMPLES: vk::SampleCountFlags = vk::SampleCountFlags::TYPE_1;
 
+
+//TODO:
+/*
+    --Should allocate less memory blocks
+    --Reorganize stuff into arrays
+    --Maybe make a game object
+
+ */
 
 //TODO: see what happens if you take this off
 #[derive(Copy, Clone)]
@@ -35,40 +39,101 @@ struct UniformBufferObject {
 }
 
 struct Player {
+    movement: Vector3<f64>,
     position: Vector3<f64>,
+    velocity: Vector3<f64>,
     yaw: f64,
     pitch: f64,
-    move_speed: f64,
+    stamina: f64,
+    move_accel: f64,
+    touching_ground: bool,
+    sprinting: bool,
+}
+
+impl Default for Player{
+    fn default() -> Self {
+        Player{
+            movement: Vector3::new(0.0,0.0,0.0),
+            position: Vector3::new(2.0, -10.0, 1.0),
+            velocity: Vector3::new(0.0,0.0,0.0),
+            yaw: 0.0, pitch: 0.0,
+            move_accel: Self::BASE_ACCEL,stamina: 1.0,
+            touching_ground: true, sprinting: false,
+
+        }
+
+    }
 }
 
 impl Player{
+
+    const HEIGHT: f64 = 1.7;
+    const FALL_ACCELERATION: f64 = 9.8;
+    const JUMP_SPEED: f64 = 5.0;
+    const STAMINA_REGEN: f64 = 0.1;
+    const BASE_ACCEL: f64 = 50.0;
+    const SPRINT_MULTIPLIER: f64 = 2.0;
+
     fn get_view_matrix(&self) -> Matrix4<f32>{
         let matrix = Matrix4::<f32>::from_translation(Vector3::new(self.position.x as f32, self.position.y as f32, self.position.z as f32))
                 * Matrix4::<f32>::from_angle_y(Deg(-self.yaw as f32))
                 * Matrix4::<f32>::from_angle_x(Deg(self.pitch as f32));
 
-        // println!("matrix: {:?}", matrix);
-
-        // let vector_distance  = self.pitch.to_radians().cos();
-
-        // return Matrix4::look_to_rh(
-        //     Point3::new(self.position.x as f32, self.position.y as f32, self.position.z as f32,),
-        //     Vector3::new((vector_distance * self.yaw.to_radians().sin()) as f32,(vector_distance * self.yaw.to_radians().cos()) as f32, self.pitch.to_radians().sin() as f32),
-        //     Vector3::new(0.0,0.0,1.0));
-
         return matrix.inverse_transform().unwrap();
     }
 
-    fn process_inputs(&mut self, inputs: &Inputs, delta_time: f64){
-        let movement = (Matrix3::from_angle_y(Deg(-self.yaw))) * Vector3::new(
-            inputs.right - inputs.left,
-            inputs.down - inputs.up,
-            inputs.backward - inputs.forward,
-            );
-        self.position += movement*self.move_speed * delta_time;
-        // println!("position: {:?}", self.position)
-    }
+    fn process(&mut self, delta_time: f64){
+        self.stamina += Player::STAMINA_REGEN * delta_time;
+        if self.touching_ground{
+            self.velocity.x += self.movement.x*delta_time;
+            self.velocity.z += self.movement.z*delta_time;
+        }
 
+        self.position += self.velocity * delta_time;
+
+        if -self.position.y > Player::HEIGHT{
+            self.velocity.y += Player::FALL_ACCELERATION*delta_time;
+        }else{
+            self.touching_ground = true;
+            self.position.y = -Player::HEIGHT;
+            self.velocity.x *= 0.9;
+            self.velocity.z *= 0.9;
+            self.velocity.y = 0.0;
+
+        }
+        if self.stamina < 0.01{
+            self.sprinting = false;
+        }
+        if self.sprinting{
+            self.move_accel = Self::SPRINT_MULTIPLIER * Self::BASE_ACCEL;
+        }else{
+            self.move_accel = Self::BASE_ACCEL;
+        }
+        if self.sprinting && self.movement.magnitude() > 0.0{
+            self.stamina -= Self::STAMINA_REGEN * 2.0 * delta_time;
+        } else{
+            self.stamina += Self::STAMINA_REGEN * delta_time;
+        }
+        self.stamina = self.stamina.min(1.0);
+    }
+    fn process_inputs(&mut self, inputs: &Inputs, delta_time:f64){
+        self.movement = (Matrix3::from_angle_y(Deg(-self.yaw))) * Vector3::new(
+            inputs.right - inputs.left,
+            0.0,
+            inputs.backward - inputs.forward,
+        ) * self.move_accel;
+
+        if inputs.up > 0.5 && self.touching_ground {
+            self.touching_ground = false;
+            self.velocity.y = -Player::JUMP_SPEED;
+        }
+        if self.stamina > 0.25 && inputs.sprint > 0.5{
+            self.sprinting = true;
+        }
+        if inputs.sprint < 0.5{
+            self.sprinting = false;
+        }
+    }
 }
 
 
@@ -113,14 +178,85 @@ struct Inputs{
     left: f64,
     right: f64,
     up: f64,
-    down: f64
+    down: f64,
+    sprint: f64,
+}
+impl Inputs{
+    fn new() -> Self{
+        return Inputs{
+            forward: 0.0,
+            backward: 0.0,
+            left: 0.0,
+            right: 0.0,
+            up: 0.0,
+            down: 0.0,
+            sprint: 0.0
+        }
+    }
+}
+
+struct Cubemap{
+    width: u32,
+    height: u32,
+    memory: vk::DeviceMemory,
+    positive_x: vk::ImageView,
+    negative_x: vk::ImageView,
+    positive_y: vk::ImageView,
+    negative_y: vk::ImageView,
+    positive_z: vk::ImageView,
+    negative_z: vk::ImageView,
+}
+
+struct MemoryObject<T:Bindable>{
+    data: T,
+    to_be_allocated: bool,
+    
+}
+
+
+struct MemoryChunk{
+    memory_objects: Vec<MemoryObject<Box<>>>,
+    size: usize,
+    device_memory: Option<vk::DeviceMemory>,
+    vulkan_data: VulkanData,
+}
+impl MemoryChunk {
+    fn new(vulkan_data: VulkanData) -> Self{
+        return Self{
+            memory_objects: vec![],
+            size: 0,
+            device_memory: None,
+            vulkan_data,
+        }
+    }
+
+    fn create(&mut self, initial_size: vk::DeviceSize, memory_properties: vk::MemoryPropertyFlags){
+        let allocate_info = vk::MemoryAllocateInfo::builder()
+            .allocation_size(initial_size)
+            .memory_type_index(self.vulkan_data.find_memory_type(u32::MAX, memory_properties));
+
+        self.device_memory = Some(unsafe{self.vulkan_data.device.as_ref().unwrap().allocate_memory(&allocate_info,None)}.unwrap());
+    }
+    fn add_object(&mut self, object: MemoryObject<T>, is_image: bool){
+        match TypeId::of::<T>(){
+            vk::Image::type_id() => {
+                unsafe{self.vulkan_data.device.as_ref().unwrap().bind_image_memory(object.data)};
+            }
+            vk::Buffer::type_id() =>{
+
+            }
+            _ => panic!("Not vk::Buffer or vk::Image")
+        }
+        self.memory_objects.push(object);
+    }
 }
 
 struct VulkanData {
     instance: Option<Instance>,
     entry: Option<Entry>,
     device: Option<Device>,
-    physical_device: Option<PhysicalDevice>,
+    physical_device: Option<vk::PhysicalDevice>,
+    main_memory: Option<MemoryChunk>,
     main_queue: Option<vk::Queue>,
     main_queue_index: Option<u32>,
     surface_loader: Option<Surface>,
@@ -146,14 +282,20 @@ struct VulkanData {
     index_buffer: Option<vk::Buffer>,
     index_buffer_memory: Option<vk::DeviceMemory>,
     texture_image: Option<vk::Image>,
+    mip_levels: u32,
     texture_image_memory: Option<vk::DeviceMemory>,
     texture_image_view: Option<vk::ImageView>,
     texture_sampler: Option<vk::Sampler>,
     depth_image: Option<vk::Image>,
     depth_image_memory: Option<vk::DeviceMemory>,
     depth_image_view: Option<vk::ImageView>,
+    color_image: Option<vk::Image>,
+    color_image_memory: Option<vk::DeviceMemory>,
+    color_image_view: Option<vk::ImageView>,
+    cubemap: Option<Cubemap>,
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
+    msaa_samples: vk::SampleCountFlags,
     descriptor_pool: Option<vk::DescriptorPool>,
     descriptor_set_layout: Option<vk::DescriptorSetLayout>,
     descriptor_sets: Option<Vec<vk::DescriptorSet>>,
@@ -167,116 +309,9 @@ struct VulkanData {
 
 impl VulkanData {
     fn new() -> Self {
-        let vertices = vec![
-            Vertex {
-                position: Vector3 {
-                    x: -0.5,
-                    y: -0.5,
-                    z: 0.0,
-                },
-                color: Vector3 {
-                    x: 1.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-                texture_coordinate: Vector2 { x: 1.0, y: 0.0 }
-            },
-            Vertex {
-                position: Vector3 {
-                    x: 0.5,
-                    y: -0.5,
-                    z: 0.0,
-                },
-                color: Vector3 {
-                    x: 0.0,
-                    y: 1.0,
-                    z: 0.0,
-                },
-                texture_coordinate: Vector2 { x: 0.0, y: 0.0 }
-            },
-            Vertex {
-                position: Vector3 {
-                    x: 0.5,
-                    y: 0.5,
-                    z: 0.0,
-                },
-                color: Vector3 {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 1.0,
-                },
-                texture_coordinate: Vector2 { x: 0.0, y: 1.0 }
-            },
-            Vertex {
-                position: Vector3 {
-                    x: -0.5,
-                    y: 0.5,
-                    z: 0.0,
-                },
-                color: Vector3 {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-                texture_coordinate: Vector2 { x: 1.0, y: 1.0 }
-            },
-            //second square
-            Vertex {
-                position: Vector3 {
-                    x: -0.5,
-                    y: -0.5,
-                    z: 0.5,
-                },
-                color: Vector3 {
-                    x: 1.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-                texture_coordinate: Vector2 { x: 1.0, y: 0.0 }
-            },
-            Vertex {
-                position: Vector3 {
-                    x: 0.5,
-                    y: -0.5,
-                    z: 0.5,
-                },
-                color: Vector3 {
-                    x: 0.0,
-                    y: 1.0,
-                    z: 0.0,
-                },
-                texture_coordinate: Vector2 { x: 0.0, y: 0.0 }
-            },
-            Vertex {
-                position: Vector3 {
-                    x: 0.5,
-                    y: 0.5,
-                    z: 0.5,
-                },
-                color: Vector3 {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 1.0,
-                },
-                texture_coordinate: Vector2 { x: 0.0, y: 1.0 }
-            },
-            Vertex {
-                position: Vector3 {
-                    x: -0.5,
-                    y: 0.5,
-                    z: 0.5,
-                },
-                color: Vector3 {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-                texture_coordinate: Vector2 { x: 1.0, y: 1.0 }
-            },
-        ];
 
         let uniform_buffer_object = UniformBufferObject {
-            model: Matrix4::identity(),
+            model: Matrix4::identity() * Matrix4::from_angle_x(Deg(90.0)),
             view: Matrix4::look_at_rh(
                 Point3 {
                     x: 3.0,
@@ -302,6 +337,7 @@ impl VulkanData {
             entry: None,
             device: None,
             physical_device: None,
+            main_memory: None,
             main_queue: None,
             main_queue_index: None,
             surface_loader: None,
@@ -327,30 +363,29 @@ impl VulkanData {
             index_buffer: None,
             index_buffer_memory: None,
             texture_image: None,
+            mip_levels: 1,
             texture_image_memory: None,
             texture_image_view: None,
             texture_sampler: None,
             depth_image: None,
             depth_image_memory: None,
             depth_image_view: None,
-            vertices,
-            indices: vec![0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4],
+            color_image: None,
+            color_image_memory: None,
+            color_image_view: None,
+            msaa_samples: vk::SampleCountFlags::TYPE_1,
+            vertices: vec![],
+            indices: vec![],
             descriptor_pool: None,
             descriptor_set_layout: None,
             descriptor_sets: None,
             uniform_buffer_object,
             last_frame_instant: std::time::Instant::now(),
             mouse_buffer: Vector2::new(0.0, 0.0),
-            inputs: Inputs {
-                forward: 0.0,
-                backward: 0.0,
-                left: 0.0,
-                right: 0.0,
-                up: 0.0,
-                down: 0.0
-            },
-            player: Player{position: Vector3::new(2.0, 0.0, 1.0), yaw: 0.0, pitch: 0.0, move_speed: 5.0 },
-            focused: true
+            inputs: Inputs::new(),
+            player: Default::default(),
+            focused: true,
+            cubemap: None
         };
     }
     fn init_vulkan(&mut self, window: &Window) {
@@ -429,6 +464,10 @@ impl VulkanData {
                 return true;
             });
         }
+
+        self.msaa_samples = self.get_max_usable_sample_count();
+        println!("Samples: {:?}", self.msaa_samples);
+
         self.main_queue_index = Some(
             unsafe {
                 self.instance
@@ -497,6 +536,7 @@ impl VulkanData {
         self.create_texture_sampler();
         self.create_texture_image();
         self.create_texture_image_view();
+        self.create_cubemap_resources();
 
         self.create_descriptor_set_layout();
 
@@ -504,9 +544,12 @@ impl VulkanData {
         self.create_vertex_buffer();
         self.create_index_buffer();
 
-        self.create_depth_resources();
 
         self.recreate_swaphain();
+
+
+        self.create_color_resources();
+        self.create_depth_resources();
 
         self.create_descriptor_pool();
         self.create_descriptor_sets();
@@ -548,26 +591,53 @@ impl VulkanData {
         );
     }
 
+    fn get_max_usable_sample_count(&self) -> vk::SampleCountFlags {
+        let physical_device_properties = unsafe{ self.instance.as_ref().unwrap().get_physical_device_properties(self.physical_device.unwrap())};
+        let counts = physical_device_properties.limits.framebuffer_color_sample_counts & physical_device_properties.limits.framebuffer_depth_sample_counts;
+
+        if counts.contains(vk::SampleCountFlags::TYPE_64){return vk::SampleCountFlags::TYPE_64}
+        else if counts.contains(vk::SampleCountFlags::TYPE_32){return vk::SampleCountFlags::TYPE_32}
+        else if counts.contains(vk::SampleCountFlags::TYPE_16){return vk::SampleCountFlags::TYPE_16}
+        else if counts.contains(vk::SampleCountFlags::TYPE_8){return vk::SampleCountFlags::TYPE_8}
+        else if counts.contains(vk::SampleCountFlags::TYPE_4){return vk::SampleCountFlags::TYPE_4}
+        else if counts.contains(vk::SampleCountFlags::TYPE_2){return vk::SampleCountFlags::TYPE_2}
+        else if counts.contains(vk::SampleCountFlags::TYPE_1){return vk::SampleCountFlags::TYPE_1}
+        else {panic!("No samples found???")}
+    }
+
     fn load_model(&mut self){
-        let (document,buffers, images) = gltf::import("adamHead/adamHead.gltf").unwrap();
 
-        let data = &buffers[0];
+        let (models, _) = tobj::load_obj("viking_room.obj", &tobj::LoadOptions{
+            single_index: true,
+            triangulate: true,
+            ignore_points: false,
+            ignore_lines: false
+        }).unwrap();
+        // let materials = material_result.unwrap();
 
-        let mut i = 0;
-        const vertex_size: usize = std::mem::size_of::<Vertex>();
-        while (i + vertex_size) < data.len(){
-            let mut raw_data = [0u8; vertex_size];
-            let mut j = 0;
-            while j < vertex_size{
-                raw_data[j] = data[i+j];
-                j+= 1;
+        for model in models{
+            for index in model.mesh.indices{
+                self.indices.push(index);
+                self.vertices.push(Vertex{
+                    position: Vector3 {
+                        x: model.mesh.positions[(index*3 + 0) as usize],
+                        y: model.mesh.positions[(index*3 + 1) as usize],
+                        z: model.mesh.positions[(index*3 + 2) as usize]
+                    },
+                    color: Vector3 {
+                        x: 1.0,
+                        y: 1.0,
+                        z: 1.0
+                    },
+                    texture_coordinate: Vector2 {
+                        x: model.mesh.texcoords[(index*2 + 0) as usize],
+                        y: 1.0 - model.mesh.texcoords[(index*2 + 1) as usize]
+                    }
+                });
             }
-            let new_vertex = unsafe{std::mem::transmute::<[u8; vertex_size], Vertex>(raw_data)};
 
-            self.vertices.push(new_vertex);
-
-            i+= vertex_size;
         }
+        println!("test");
 
     }
 
@@ -575,9 +645,11 @@ impl VulkanData {
 
         let depth_format = self.find_depth_format();
 
-        let (depth_image, depth_image_memory) = self.create_image(
+        let (depth_image, depth_image_memory) = self.create_image_with_memory(
             self.surface_capabilities.unwrap().current_extent.width,
             self.surface_capabilities.unwrap().current_extent.height,
+            1,
+            self.msaa_samples,
             depth_format,
             vk::ImageTiling::OPTIMAL,
             vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
@@ -586,7 +658,7 @@ impl VulkanData {
 
         self.depth_image = Some(depth_image);
         self.depth_image_memory = Some(depth_image_memory);
-        self.depth_image_view = Some(self.create_image_view(depth_image,vk::Format::D32_SFLOAT, vk::ImageAspectFlags::DEPTH));
+        self.depth_image_view = Some(self.create_image_view(depth_image, vk::Format::D32_SFLOAT, vk::ImageAspectFlags::DEPTH, 1));
 
 
     }
@@ -675,7 +747,7 @@ impl VulkanData {
     }
 
     fn create_index_buffer(&mut self) {
-        let buffer_size: vk::DeviceSize = (std::mem::size_of::<Vertex>() * self.indices.len()) as u64;
+        let buffer_size: vk::DeviceSize = (std::mem::size_of::<u32>() * self.indices.len()) as u64;
         let (staging_buffer, staging_buffer_memory) = self.create_buffer(
             buffer_size,
             vk::BufferUsageFlags::TRANSFER_SRC,
@@ -957,7 +1029,6 @@ impl VulkanData {
 
         self.get_surface_capabilities();
 
-        self.create_depth_resources();
 
         let surface_formats = unsafe {
             self.surface_loader
@@ -982,6 +1053,10 @@ impl VulkanData {
                 })
                 .unwrap_or(&default_surface_format),
         );
+
+        self.create_color_resources();
+        self.create_depth_resources();
+
 
         surface_formats
             .into_iter()
@@ -1032,7 +1107,7 @@ impl VulkanData {
             swapchain_images
                 .into_iter()
                 .map(|image| {
-                    return self.create_image_view(image, swapchain_create_info.image_format, vk::ImageAspectFlags::COLOR)
+                    return self.create_image_view(image, swapchain_create_info.image_format, vk::ImageAspectFlags::COLOR, 1)
                 })
                 .collect::<Vec<_>>(),
         );
@@ -1107,7 +1182,7 @@ impl VulkanData {
 
         let multisampling = vk::PipelineMultisampleStateCreateInfo::builder()
             .sample_shading_enable(false)
-            .rasterization_samples(MSAA_SAMPLES);
+            .rasterization_samples(self.msaa_samples);
 
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState::builder()
             .color_write_mask(vk::ColorComponentFlags::all())
@@ -1142,13 +1217,13 @@ impl VulkanData {
 
         let color_attachment = vk::AttachmentDescription::builder()
             .format(swapchain_create_info.image_format)
-            .samples(MSAA_SAMPLES)
+            .samples(self.msaa_samples)
             .load_op(vk::AttachmentLoadOp::CLEAR)
             .store_op(vk::AttachmentStoreOp::STORE)
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
-            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
+            .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
 
         let color_attachment_reference = vk::AttachmentReference::builder()
             .attachment(0)
@@ -1157,7 +1232,7 @@ impl VulkanData {
 
         let depth_attchement = vk::AttachmentDescription::builder()
             .format(self.find_depth_format())
-            .samples(vk::SampleCountFlags::TYPE_1)
+            .samples(self.msaa_samples)
             .load_op(vk::AttachmentLoadOp::CLEAR)
             .store_op(vk::AttachmentStoreOp::DONT_CARE)
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
@@ -1168,10 +1243,27 @@ impl VulkanData {
             .attachment(1)
             .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
+        let color_attachment_resolve = vk::AttachmentDescription::builder()
+            .format(self.surface_format.unwrap().format)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
+
+        let color_attachment_resolve_reference = vk::AttachmentReference::builder()
+            .attachment(2)
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+
+        let color_attachment_resolve_references = [color_attachment_resolve_reference.build()];
+
         let subpass = vk::SubpassDescription::builder()
             .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
             .color_attachments(&color_attachment_references)
-            .depth_stencil_attachment(&depth_attachment_reference);
+            .depth_stencil_attachment(&depth_attachment_reference)
+            .resolve_attachments(&color_attachment_resolve_references);
 
         let dependencies = [vk::SubpassDependency::builder()
             .src_subpass(vk::SUBPASS_EXTERNAL)
@@ -1182,7 +1274,7 @@ impl VulkanData {
             .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE)
             .build()];
 
-        let attachments = [color_attachment.build(), depth_attchement.build()];
+        let attachments = [color_attachment.build(), depth_attchement.build(), color_attachment_resolve.build()];
 
         let subpasses = [subpass.build()];
 
@@ -1241,7 +1333,7 @@ impl VulkanData {
                 .unwrap()
                 .iter()
                 .map(|image_view| {
-                    let attachments = vec![*image_view, self.depth_image_view.unwrap()];
+                    let attachments = vec![self.color_image_view.unwrap(),self.depth_image_view.unwrap(), *image_view, ];
                     let framebuffer_create_info = vk::FramebufferCreateInfo::builder()
                         .render_pass(self.render_pass.unwrap())
                         .attachments(&attachments)
@@ -1261,7 +1353,91 @@ impl VulkanData {
     }
 
     fn create_color_resources(&mut self){
-        // self.surface_capabilities.unwrap().current_extent
+        let color_format = self.surface_format.unwrap().format;
+        let (color_image, color_image_memory) = self.create_image_with_memory(
+            self.surface_capabilities.unwrap().current_extent.width,
+            self.surface_capabilities.unwrap().current_extent.height,
+            1,
+            self.msaa_samples,
+            color_format,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::TRANSIENT_ATTACHMENT | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL
+        );
+        self.color_image = Some(color_image);
+        self.color_image_memory = Some(color_image_memory);
+        self.color_image_view = Some(self.create_image_view(color_image,color_format,vk::ImageAspectFlags::COLOR,1));
+    }
+
+    fn create_cubemap_resources(&mut self){
+        // let dynamic_images = vec![image::io::Reader::open("cubemap/px.png").unwrap().decode().unwrap(),
+        //                          image::io::Reader::open("cubemap/nx.png").unwrap().decode().unwrap(),
+        //                          image::io::Reader::open("cubemap/py.png").unwrap().decode().unwrap(),
+        //                          image::io::Reader::open("cubemap/ny.png").unwrap().decode().unwrap(),
+        //                          image::io::Reader::open("cubemap/pz.png").unwrap().decode().unwrap(),
+        //                          image::io::Reader::open("cubemap/nz.png").unwrap().decode().unwrap(),];
+        //
+        // let width = dynamic_images[0].width();
+        // let height = dynamic_images[0].height();
+        //
+        // let pixels = dynamic_images.iter().map(|dynamic_image|{
+        //     return dynamic_image.into_rgba8().into_raw();
+        // }).collect::<Vec<u8>>();
+        //
+        //
+        //
+        // let mut images:Vec<vk::Image> = Vec::with_capacity(pixels.len());
+        //
+        //
+        // let image_info = vk::ImageCreateInfo::builder()
+        //     .image_type(vk::ImageType::TYPE_2D)
+        //     .extent(vk::Extent3D{
+        //         width,
+        //         height,
+        //         depth: 1
+        //     })
+        //     .mip_levels(0)
+        //     .array_layers(1)
+        //     .format(vk::Format::R8G8B8A8_SRGB)
+        //     .tiling(vk::ImageTiling::OPTIMAL)
+        //     .initial_layout(vk::ImageLayout::UNDEFINED)
+        //     .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+        //     .samples(vk::SampleCountFlags::TYPE_1)
+        //     .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        //
+        //
+        // pixels.into_iter().enumerate().for_each(|(i,pixel_array)|{
+        //     images[i] = unsafe{self.device.as_ref().unwrap().create_image(&image_info,None)}.unwrap();
+        // });
+        //
+        // let memory_requirements = unsafe{self.device.as_ref().unwrap().get_image_memory_requirements(images[0])};
+        // // let total_memory = (memory_requirements.size*pixels.len()) as ;
+        //
+        //
+        // let (buffers, buffer_memories) = pixels.iter().map(|_|{
+        //     return self.create_buffer(memory_requirements.size,vk::BufferUsageFlags::TRANSFER_SRC,vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT);
+        // }).collect::<(Vec<vk::Buffer>, Vec<vk::DeviceMemory>)>();
+        //
+        //
+        //
+        // let buffer_allocate_info = vk::MemoryAllocateInfo::builder()
+        //     .allocation_size(memory_requirements.size*pixels.len())
+        //     .memory_type_index(self.find_memory_type(memory_requirements.memory_type_bits,vk::MemoryPropertyFlags::HOST_VISIBLE| vk::MemoryPropertyFlags::HOST_COHERENT));
+        //
+        //
+        //
+        //
+        // self.cubemap = Some (Cubemap{
+        //     width: 0,
+        //     height: 0,
+        //     memory: Default::default(),
+        //     positive_x: Default::default(),
+        //     negative_x: Default::default(),
+        //     positive_y: Default::default(),
+        //     negative_y: Default::default(),
+        //     positive_z: Default::default(),
+        //     negative_z: Default::default()
+        // });
     }
 
     fn create_command_pool(&mut self) {
@@ -1322,7 +1498,7 @@ impl VulkanData {
             .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
             .mip_lod_bias(0.0)
             .min_lod(0.0)
-            .max_lod(0.0);
+            .max_lod(self.mip_levels as f32);
 
         self.texture_sampler = Some(unsafe{self.device.as_ref().unwrap().create_sampler(&sampler_info, None)}.unwrap());
 
@@ -1483,12 +1659,17 @@ impl VulkanData {
         let surface_height = self.surface_capabilities.unwrap().current_extent.height as f32;
 
         // self.player.rotation.x += delta_time as f32;
-        self.player.process_inputs(&self.inputs,delta_time);
 
-        self.player.yaw += self.mouse_buffer.x*0.1;
-        self.player.pitch = (self.player.pitch +  self.mouse_buffer.y*0.1).clamp(-80.0,80.0);
+        if self.focused {
+            self.player.process_inputs(&self.inputs, delta_time);
 
-        self.mouse_buffer = Vector2::zero();
+            self.player.yaw += self.mouse_buffer.x*0.1;
+            self.player.pitch = (self.player.pitch +  self.mouse_buffer.y*0.1).clamp(-80.0,80.0);
+
+            self.mouse_buffer = Vector2::zero();
+        }
+
+        self.player.process(delta_time);
 
         // println!("pitch: {:?} yaw: {:?}", self.player.pitch, self.player.yaw);
 
@@ -1609,11 +1790,10 @@ impl VulkanData {
 
 
                 unsafe {
-                    self.device.as_ref().unwrap().cmd_draw_indexed(
+                    self.device.as_ref().unwrap().cmd_draw(
                         *command_buffer,
                         self.vertices.len() as u32,
                         1,
-                        0,
                         0,
                         0,
                     )
@@ -1634,10 +1814,12 @@ impl VulkanData {
             });
     }
     fn create_texture_image(&mut self) {
-        let reader = image::io::Reader::open("texture.png").unwrap();
+        let reader = image::io::Reader::open("viking_room.png").unwrap();
         let reader_decode =  reader.decode();
         let dynamic_image = reader_decode.unwrap();
-        let texture_image = dynamic_image.as_rgba8().unwrap();
+        let width = dynamic_image.width();
+        let height = dynamic_image.height();
+        let texture_image = dynamic_image.into_rgba8();
         let pixels = texture_image.as_raw();
         let image_size: vk::DeviceSize  = (texture_image.width() * texture_image.height() * 4) as u64;
 
@@ -1646,22 +1828,118 @@ impl VulkanData {
         let (staging_buffer, staging_buffer_memory) = self.create_buffer(image_size,vk::BufferUsageFlags::TRANSFER_SRC, vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT);
 
         let destination_pointer = unsafe {self.device.as_ref().unwrap().map_memory(staging_buffer_memory, 0, image_size,vk::MemoryMapFlags::empty())}.unwrap();
-        // unsafe {std::ptr::write_bytes(destination_pointer, 100, image_size as usize)}
-        // unsafe {std::ptr::copy_nonoverlapping(pixels, destination_pointer as *mut Vec<u8>, pixels.len())};
-        unsafe{destination_pointer.copy_from_nonoverlapping(pixels.as_ptr() as *const c_void,image_size as usize)}
+        unsafe{destination_pointer.copy_from_nonoverlapping(pixels.as_ptr() as *const c_void,pixels.len() as usize)}
 
         unsafe{self.device.as_ref().unwrap().unmap_memory(staging_buffer_memory)}
 
-        let (texture, texture_memory) = self.create_image(texture_image.width(), texture_image.height(), vk::Format::R8G8B8A8_SRGB, vk::ImageTiling::OPTIMAL, vk::ImageUsageFlags::TRANSFER_DST|vk::ImageUsageFlags::SAMPLED, vk::MemoryPropertyFlags::DEVICE_LOCAL);
+        let (texture, texture_memory) = self.create_image_with_memory(width, height, self.mip_levels, vk::SampleCountFlags::TYPE_1, vk::Format::R8G8B8A8_SRGB, vk::ImageTiling::OPTIMAL, vk::ImageUsageFlags::TRANSFER_DST|vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::SAMPLED, vk::MemoryPropertyFlags::DEVICE_LOCAL);
         self.texture_image = Some(texture);
         self.texture_image_memory = Some(texture_memory);
 
-        self.transition_image_layout(self.texture_image.unwrap(), vk::Format::R8G8B8A8_SRGB, vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL);
-        self.copy_buffer_to_image(staging_buffer,self.texture_image.unwrap(), texture_image.width(), texture_image.height());
-        self.transition_image_layout(self.texture_image.unwrap(), vk::Format::R8G8B8A8_SRGB, vk::ImageLayout::TRANSFER_DST_OPTIMAL,vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-
+        self.transition_image_layout(self.texture_image.unwrap(), vk::Format::R8G8B8A8_SRGB, vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL, self.mip_levels);
+        self.copy_buffer_to_image(staging_buffer,self.texture_image.unwrap(), width, height);
+        self.generate_mipmaps(self.texture_image.unwrap(), width,height, self.mip_levels);
         unsafe{self.device.as_ref().unwrap().destroy_buffer(staging_buffer, None)};
         unsafe{self.device.as_ref().unwrap().free_memory(staging_buffer_memory, None)};
+    }
+
+    fn generate_mipmaps(&self, image: vk::Image, texture_width: u32, texture_height:u32, mip_levels: u32){
+        let command_buffer = self.begin_single_time_commands();
+
+        let mut barriers = [vk::ImageMemoryBarrier::builder()
+            .image(image)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .subresource_range(vk::ImageSubresourceRange{
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1
+            }).build()];
+
+
+        let mut mip_width = texture_width as i32;
+        let mut mip_height = texture_height as i32;
+
+        let mut i = 1;
+        while i < mip_levels && mip_height > 1 && mip_width > 1{
+            barriers[0].subresource_range.base_mip_level = i - 1;
+            barriers[0].old_layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
+            barriers[0].new_layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
+            barriers[0].src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
+            barriers[0].dst_access_mask = vk::AccessFlags::TRANSFER_READ;
+
+
+            unsafe {
+                self.device.as_ref().unwrap().cmd_pipeline_barrier(
+                    command_buffer,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                &[],
+                    &barriers
+                )
+            };
+
+            let blit = vk::ImageBlit::builder()
+                .src_offsets([vk::Offset3D{ x: 0,y: 0,z: 0 }, vk::Offset3D{ x: mip_width,y: mip_height,z: 1 }])
+                .src_subresource(vk::ImageSubresourceLayers{
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: i - 1,
+                    base_array_layer: 0,
+                    layer_count: 1
+                })
+                .dst_offsets([vk::Offset3D{x: 0, y: 0, z: 0}, vk::Offset3D{x: mip_width/2,y: mip_height/2, z: 1}])
+                .dst_subresource(vk::ImageSubresourceLayers{
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: i,
+                    base_array_layer: 0,
+                    layer_count: 1
+                });
+            unsafe{self.device.as_ref().unwrap().cmd_blit_image(
+                command_buffer,
+                image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,&[blit.build()],vk::Filter::LINEAR)};
+
+            barriers[0].old_layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
+            barriers[0].new_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+            barriers[0].src_access_mask = vk::AccessFlags::TRANSFER_READ;
+            barriers[0].dst_access_mask = vk::AccessFlags::SHADER_READ;
+
+            unsafe{self.device.as_ref().unwrap().cmd_pipeline_barrier(command_buffer,
+                                                                      vk::PipelineStageFlags::TRANSFER,
+                                                                      vk::PipelineStageFlags::FRAGMENT_SHADER,
+                                                                      vk::DependencyFlags::empty(),
+                                                                      &[],
+                                                                      &[],
+                                                                      &barriers)};
+
+
+            mip_width /= 2;
+            mip_height /= 2;
+            i+= 1;
+        }
+        barriers[0].subresource_range.base_mip_level = mip_levels - 1;
+        barriers[0].old_layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
+        barriers[0].new_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+        barriers[0].src_access_mask = vk::AccessFlags::TRANSFER_READ;
+        barriers[0].dst_access_mask = vk::AccessFlags::SHADER_READ;
+
+        unsafe{self.device.as_ref().unwrap().cmd_pipeline_barrier(command_buffer,
+                                                                  vk::PipelineStageFlags::TRANSFER,
+                                                                  vk::PipelineStageFlags::FRAGMENT_SHADER,
+                                                                  vk::DependencyFlags::empty(),
+                                                                  &[],
+                                                                  &[],
+                                                                  &barriers)};
+
+        self.end_single_time_commands(command_buffer);
+
+
     }
 
     fn begin_single_time_commands(&self) -> vk::CommandBuffer{
@@ -1686,7 +1964,7 @@ impl VulkanData {
 
     }
 
-    fn transition_image_layout(&self, image: vk::Image, format: vk::Format, old_layout: vk::ImageLayout, new_layout: vk::ImageLayout){
+    fn transition_image_layout(&self, image: vk::Image, format: vk::Format, old_layout: vk::ImageLayout, new_layout: vk::ImageLayout, mip_levels: u32){
         let command_buffer = self.begin_single_time_commands();
 
         let mut barrier = vk::ImageMemoryBarrier::builder()
@@ -1698,7 +1976,7 @@ impl VulkanData {
             .subresource_range(vk::ImageSubresourceRange{
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,
-                level_count: 1,
+                level_count: mip_levels,
                 base_array_layer: 0,
                 layer_count: 1
             });
@@ -1748,7 +2026,7 @@ impl VulkanData {
             .subresource_range(vk::ImageSubresourceRange{
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,
-                level_count: 1,
+                level_count: self.mip_levels,
                 base_array_layer: 0,
                 layer_count: 1
             });
@@ -1756,7 +2034,7 @@ impl VulkanData {
         self.texture_image_view = Some(unsafe{ self.device.as_ref().unwrap().create_image_view(&view_info,None)}.unwrap());
     }
 
-    fn create_image_view(&self, image: vk::Image, format: vk::Format, aspect_flags: vk::ImageAspectFlags) -> vk::ImageView{
+    fn create_image_view(&self, image: vk::Image, format: vk::Format, aspect_flags: vk::ImageAspectFlags, mip_levels: u32) -> vk::ImageView{
         let view_info = vk::ImageViewCreateInfo::builder()
             .image(image)
             .view_type(vk::ImageViewType::TYPE_2D)
@@ -1764,7 +2042,7 @@ impl VulkanData {
             .subresource_range(vk::ImageSubresourceRange{
                 aspect_mask: aspect_flags,
                 base_mip_level: 0,
-                level_count: 1,
+                level_count: mip_levels,
                 base_array_layer: 0,
                 layer_count: 1
             });
@@ -1802,8 +2080,7 @@ impl VulkanData {
         self.end_single_time_commands(command_buffer);
     }
 
-    fn create_image(&self, width: u32, height:u32, format: vk::Format, tiling: vk::ImageTiling, usage:vk::ImageUsageFlags, properties: vk::MemoryPropertyFlags) -> (vk::Image, vk::DeviceMemory){
-
+    fn create_image_with_memory(&self, width: u32, height:u32, mip_levels: u32, num_samples: vk::SampleCountFlags, format: vk::Format, tiling: vk::ImageTiling, usage:vk::ImageUsageFlags, properties: vk::MemoryPropertyFlags) -> (vk::Image, vk::DeviceMemory){
 
         let image_info = vk::ImageCreateInfo::builder()
             .image_type(vk::ImageType::TYPE_2D)
@@ -1812,13 +2089,13 @@ impl VulkanData {
                 height,
                 depth: 1
             })
-            .mip_levels(1)
+            .mip_levels(mip_levels)
             .array_layers(1)
             .format(format)
             .tiling(tiling)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .usage(usage)
-            .samples(vk::SampleCountFlags::TYPE_1)
+            .samples(num_samples)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
         let image = unsafe{self.device.as_ref().unwrap().create_image(&image_info,None)}.unwrap();
@@ -1928,6 +2205,12 @@ fn main() {
                                 };
                             }if keycode == VirtualKeyCode::LControl{
                                 vulkan_data.inputs.down = match key.state{
+                                    ElementState::Released => 0.0,
+                                    ElementState::Pressed => 1.0
+                                };
+                            }
+                            if keycode == VirtualKeyCode::LShift{
+                                vulkan_data.inputs.sprint = match key.state{
                                     ElementState::Released => 0.0,
                                     ElementState::Pressed => 1.0
                                 };
