@@ -254,16 +254,140 @@ impl Inputs{
     }
 }
 
+struct CombinedImage{
+    image: vk::Image,
+    image_view: vk::ImageView,
+    sampler: vk::Sampler,
+    allocation: vk_mem::Allocation,
+    width: u32,
+    height: u32,
+}
+
+struct Object{
+    vertex_start: u32,
+    vertex_count: u32,
+    index_start: u32,
+    index_count: u32,
+    texture: Option<CombinedImage>,
+}
+
+impl Object{
+    fn new(vulkan_data: &mut VulkanData, vertices: &Vec<Vertex>, indices: &Vec<u32>, texture_path: Option<std::path::PathBuf>) -> Self{
+
+        let vertex_start = vulkan_data.vertices.len() as u32;
+        let index_start = vulkan_data.indices.len() as u32;
+
+        vulkan_data.vertices.extend(vertices);
+        vulkan_data.indices.extend(indices);
+
+
+        let mut texture = None;
+        if texture.is_some() {
+            let dynamic_image = image::io::Reader::open(texture_path.unwrap()).unwrap().decode().unwrap();
+            let width = dynamic_image.width();
+            let height = dynamic_image.height();
+            let pixels = dynamic_image.into_rgba8().as_raw();
+
+            let format = vk::Format::R8G8B8A8_SRGB;
+
+            let image_info = vk::ImageCreateInfo::builder()
+                .image_type(vk::ImageType::TYPE_2D)
+                .extent(vk::Extent3D{
+                    width,
+                    height,
+                    depth: 1
+                })
+                .mip_levels(1)
+                .array_layers(1)
+                .format(format)
+                .tiling(vk::ImageTiling::OPTIMAL)
+                .initial_layout(vk::ImageLayout::UNDEFINED)
+                .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+            let allocation_info = vk_mem::AllocationCreateInfo{
+                usage: vk_mem::MemoryUsage::GpuOnly,
+                required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                ..Default::default()
+            };
+
+            let (image, allocation, _) = vulkan_data.allocator.unwrap().create_image(&image_info,&allocation_info).unwrap();
+
+            let image_view = vulkan_data.create_image_view(image,format,vk::ImageAspectFlags::COLOR, 1);
+
+            let sampler_info = vk::SamplerCreateInfo::builder()
+                .mag_filter(vk::Filter::LINEAR)
+                .min_filter(vk::Filter::LINEAR)
+                .address_mode_u(vk::SamplerAddressMode::REPEAT)
+                .address_mode_v(vk::SamplerAddressMode::REPEAT)
+                .address_mode_w(vk::SamplerAddressMode::REPEAT)
+                .anisotropy_enable(true)
+                .max_anisotropy(1.0)
+                .border_color(vk::BorderColor::INT_OPAQUE_WHITE)
+                .unnormalized_coordinates(false)
+                .compare_enable(false)
+                .compare_op(vk::CompareOp::ALWAYS)
+                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                .mip_lod_bias(0.0)
+                .min_lod(0.0)
+                .max_lod(vk::LOD_CLAMP_NONE);
+
+            let sampler = unsafe{vulkan_data.device.as_ref().unwrap().create_sampler(&sampler_info,None).unwrap()};
+
+
+            let buffer_info = vk::BufferCreateInfo::builder()
+                .size(pixels.len() as u64)
+                .usage(vk::BufferUsageFlags::TRANSFER_DST);
+            
+            let buffer_allocation_create_info = vk_mem::AllocationCreateInfo{
+                usage: vk_mem::MemoryUsage::CpuOnly,
+                flags: vk_mem::AllocationCreateFlags::MAPPED,
+                ..Default::default()
+            };
+            let (staging_buffer, staging_buffer_allocation, staging_buffer_allocation_info) = vulkan_data.allocator.as_ref().unwrap().create_buffer(&buffer_info,&buffer_allocation_create_info).unwrap();
+            unsafe{staging_buffer_allocation_info.get_mapped_data().copy_from_nonoverlapping(pixels.as_ptr(), pixels.len())};
+            vulkan_data.copy_buffer_to_image(staging_buffer,image, width, height);
+            vulkan_data.allocator.as_ref().unwrap().destroy_buffer(staging_buffer, &staging_buffer_allocation);
+
+
+
+            texture = Some(CombinedImage{
+                image,
+                image_view,
+                sampler,
+                allocation,
+                width,
+                height
+            });
+
+        }
+
+        return Object{
+            vertex_start,
+            vertex_count: vertices.len() as u32,
+            index_start,
+            index_count: indices.len() as u32,
+            texture
+        }
+    }
+}
+
+
+trait Drawable{
+    fn draw(&self);
+}
+
 struct Cubemap{
     width: u32,
     height: u32,
     sampler: vk::Sampler,
-    positive_x_view: vk::ImageView,
-    negative_x_view: vk::ImageView,
-    positive_y_view: vk::ImageView,
-    negative_y_view: vk::ImageView,
-    positive_z_view: vk::ImageView,
-    negative_z_view: vk::ImageView,
+    positive_x: Object,
+    negative_x: Object,
+    positive_y: Object,
+    negative_y: Object,
+    positive_z: Object,
+    negative_z: Object,
 }
 
 
@@ -333,60 +457,42 @@ impl VulkanData {
     fn new() -> Self {
 
         let uniform_buffer_object = UniformBufferObject {
-            model: Matrix4::identity() * Matrix4::from_angle_x(Deg(90.0)),
-            view: [Matrix4::look_at_rh(
-                Point3 {
-                    x: 3.0,
-                    y: 3.0,
-                    z: -3.0,
-                },
-                Point3 {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-                Vector3 {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 1.0,
-                },
-            ); NUM_MODELS],
+            model: Matrix4::identity(),
+            view: [Matrix4::identity(); NUM_MODELS],
             proj: cgmath::perspective(cgmath::Deg(1.0), 1.0, 0.1, 10.0),
         };
 
         let mut indices = vec![];
-        let mut index_offsets = vec![0];
+        let mut index_offsets = vec![];
 
         let mut vertices = vec![];
-        let mut vertex_offsets = vec![0];
+        let mut vertex_offsets = vec![];
 
         let mut is_indexed = vec![];
 
-        for index in SKYBOX_BACKPLANE_INDICES{
-            indices.push(index);
-        }
-        index_offsets.push(SKYBOX_BACKPLANE_INDICES.len() as u32);
-        index_offsets.push(SKYBOX_BACKPLANE_INDICES.len() as u32);
-        index_offsets.push(SKYBOX_BACKPLANE_INDICES.len() as u32);
-        index_offsets.push(SKYBOX_BACKPLANE_INDICES.len() as u32);
-        index_offsets.push(SKYBOX_BACKPLANE_INDICES.len() as u32);
-        index_offsets.push(SKYBOX_BACKPLANE_INDICES.len() as u32);
-        for vertex in SKYBOX_BACKPLANE_VERTICES{
-            vertices.push(vertex);
-        }
-        vertex_offsets.push(SKYBOX_BACKPLANE_VERTICES.len() as u32);
-        vertex_offsets.push(SKYBOX_BACKPLANE_VERTICES.len() as u32);
-        vertex_offsets.push(SKYBOX_BACKPLANE_VERTICES.len() as u32);
-        vertex_offsets.push(SKYBOX_BACKPLANE_VERTICES.len() as u32);
-        vertex_offsets.push(SKYBOX_BACKPLANE_VERTICES.len() as u32);
-        vertex_offsets.push(SKYBOX_BACKPLANE_VERTICES.len() as u32);
 
-        is_indexed.push(true);
-        is_indexed.push(true);
-        is_indexed.push(true);
-        is_indexed.push(true);
-        is_indexed.push(true);
-        is_indexed.push(true);
+
+
+        for i in 0..6{
+
+
+            index_offsets.push(indices.len() as u32);
+
+            vertex_offsets.push(vertices.len() as u32);
+
+
+            for index in SKYBOX_BACKPLANE_INDICES{
+                indices.push(index);
+            }
+            for vertex in SKYBOX_BACKPLANE_VERTICES{
+                vertices.push(vertex);
+            }
+
+
+
+            is_indexed.push(true);
+
+        }
 
         return VulkanData {
             instance: None,
@@ -695,6 +801,8 @@ impl VulkanData {
     }
 
     fn load_model(&mut self){
+
+        self.vertex_offsets.push(self.vertices.len() as u32);
 
         let (models, _) = tobj::load_obj("viking_room.obj", &tobj::LoadOptions{
             single_index: true  ,
@@ -1603,7 +1711,7 @@ impl VulkanData {
                     if j+1 < self.index_offsets.len(){
                         index_count = self.index_offsets[j+1];
                     }else{
-                        index_count = (self.indices.len() as u32 - self.index_offsets[i] as u32) ;
+                        index_count = (self.indices.len() as u32 - self.index_offsets[j] as u32) ;
                     }
 
                     self.push_constants(*command_buffer, PushConstants{index:j as u32});
@@ -1658,6 +1766,8 @@ impl VulkanData {
 
     }
 
+
+    #[inline(always)]
     fn push_constants(&self, command_buffer: vk::CommandBuffer, data: PushConstants){
         println!("index: {:?}", data.index);
         unsafe {
@@ -2052,8 +2162,7 @@ impl VulkanData {
         self.uniform_buffer_object.proj =
             cgmath::perspective(Deg(90.0), surface_width / surface_height, 0.1, 100.0);
 
-        self.uniform_buffer_object.view = [self.player.get_view_matrix();NUM_MODELS];
-        self.uniform_buffer_object.view[0] = Matrix4::identity();
+        self.uniform_buffer_object.view[6] = self.player.get_view_matrix();
 
         for i in 0..self.uniform_buffer_pointers.len(){
             unsafe{self.uniform_buffer_pointers[i].copy_from_nonoverlapping(&self.uniform_buffer_object as *const UniformBufferObject as *const u8, std::mem::size_of::<UniformBufferObject>())};
