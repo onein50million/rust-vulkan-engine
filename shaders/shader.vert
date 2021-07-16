@@ -22,9 +22,7 @@ layout(location = 1) out vec2 fragTexCoord;
 
 
 void main() {
-    vec3 adjustedPosition = inPosition;
-    adjustedPosition.z += pushConstant.index;
-    gl_Position = ubos.proj * ubos.view[pushConstant.index] * ubos.model * vec4(adjustedPosition, 1.0);
+    gl_Position = ubos.proj * ubos.view[pushConstant.index] * ubos.model * vec4(inPosition, 1.0);
     fragColor = inColor;
     fragTexCoord = inTexCoord;
 
