@@ -1,6 +1,5 @@
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Swapchain};
-use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0};
 use ash::{vk, Device, Entry, Instance};
 use cgmath::{Matrix4, SquareMatrix, Vector2, Vector3, Deg, Transform, InnerSpace, Zero, Matrix3};
 use std::env;
@@ -372,7 +371,7 @@ impl Object{
             unsafe{staging_buffer_allocation_info.get_mapped_data().copy_from_nonoverlapping(pixels.as_ptr(), pixels.len())};
             vulkan_data.transition_image_layout(image,vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL,1);
             vulkan_data.copy_buffer_to_image(staging_buffer,image, width, height);
-            vulkan_data.allocator.as_ref().unwrap().destroy_buffer(staging_buffer, &staging_buffer_allocation).unwrap();
+            vulkan_data.allocator.as_ref().unwrap().destroy_buffer(staging_buffer, &staging_buffer_allocation);
             vulkan_data.transition_image_layout(image,vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL, 1   );
 
 
@@ -475,8 +474,9 @@ impl Cubemap{
         positive_z: std::path::PathBuf,
         negative_z: std::path::PathBuf,
     ) -> Self{
+
         let cubemap = Cubemap{
-            positive_x: Object::new(vulkan_data, vertices, indices,Some(positive_x)),
+            positive_x: Object::new(vulkan_data, vertices, indices, Some(positive_x)),
             negative_x: Object::new(vulkan_data, vertices, indices,Some(negative_x)),
             positive_y: Object::new(vulkan_data, vertices, indices,Some(positive_y)),
             negative_y: Object::new(vulkan_data, vertices, indices,Some(negative_y)),
@@ -778,8 +778,11 @@ impl VulkanData {
 
         let device_features = vk::PhysicalDeviceFeatures::builder().sampler_anisotropy(true);
 
-        let device_extension_names_raw = vec![Swapchain::name().as_ptr()];
+        let mut physical_Device_extended_dynamic_state_features = vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT::builder().extended_dynamic_state(true);
+
+        let device_extension_names_raw = vec![Swapchain::name().as_ptr(),vk::ExtExtendedDynamicStateFn::name().as_ptr()];
         let device_create_info = vk::DeviceCreateInfo::builder()
+            .push_next(&mut physical_Device_extended_dynamic_state_features)
             .queue_create_infos(queue_create_infos)
             .enabled_layer_names(&validation_layer_names_raw)
             .enabled_extension_names(&device_extension_names_raw)
@@ -1534,27 +1537,28 @@ impl VulkanData {
 
         let color_attachment_resolve_references = [color_attachment_resolve_reference.build()];
 
-        let subpass = vk::SubpassDescription::builder()
+        let main_subpass = vk::SubpassDescription::builder()
             .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
             .color_attachments(&color_attachment_references)
             .depth_stencil_attachment(&depth_attachment_reference)
             .resolve_attachments(&color_attachment_resolve_references);
 
-        let dependencies = [vk::SubpassDependency::builder()
-            .src_subpass(vk::SUBPASS_EXTERNAL)
-            .dst_subpass(0)
-            .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT| vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS)
-            .src_access_mask(vk::AccessFlags::empty())
-            .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS)
-            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE)
-            .build()];
+        let dependencies = [
+            vk::SubpassDependency::builder()
+                .src_subpass(vk::SUBPASS_EXTERNAL)
+                .dst_subpass(0)
+                .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT| vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS)
+                .src_access_mask(vk::AccessFlags::empty())
+                .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS)
+                .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE)
+                .build(),
+        ];
 
-        let attachments = [color_attachment.build(), depth_attchement.build(), color_attachment_resolve.build()];
+        let attachments = [color_attachment.build(), depth_attchement.build(), color_attachment_resolve.build(), ];
 
-        let subpasses = [subpass.build()];
+        let subpasses = [main_subpass.build()];
 
         let render_pass_info = vk::RenderPassCreateInfo::builder()
-            .subpasses(&subpasses)
             .attachments(&attachments)
             .subpasses(&subpasses)
             .dependencies(&dependencies);
@@ -1581,6 +1585,11 @@ impl VulkanData {
         let input_assembly_create_info = vk::PipelineInputAssemblyStateCreateInfo::builder()
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
             .primitive_restart_enable(false);
+
+        let dynamic_states = [vk::DynamicState::DEPTH_TEST_ENABLE_EXT];
+
+        let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::builder()
+            .dynamic_states(&dynamic_states);
 
         let viewport = vk::Viewport::builder()
             .x(0.0f32)
@@ -1660,7 +1669,9 @@ impl VulkanData {
                 .layout(self.pipeline_layout.unwrap())
                 .render_pass(self.render_pass.unwrap())
                 .subpass(0)
-                .depth_stencil_state(&depth_stencil).build(),
+                .depth_stencil_state(&depth_stencil)
+                .dynamic_state(&dynamic_state_info)
+                .build(),
         ];
 
         self.graphics_pipelines =
@@ -1674,6 +1685,7 @@ impl VulkanData {
                 .unwrap();
     }
 
+
     fn create_framebuffers(&mut self){
         self.swapchain_framebuffers = Some(
             self.swapchain_image_views
@@ -1681,7 +1693,7 @@ impl VulkanData {
                 .unwrap()
                 .iter()
                 .map(|image_view| {
-                    let attachments = vec![self.color_image_view.unwrap(),self.depth_image_view.unwrap(), *image_view, ];
+                    let attachments = vec![self.color_image_view.unwrap(),self.depth_image_view.unwrap(), *image_view];
                     let framebuffer_create_info = vk::FramebufferCreateInfo::builder()
                         .render_pass(self.render_pass.unwrap())
                         .attachments(&attachments)
@@ -1724,6 +1736,8 @@ impl VulkanData {
     }
 
     fn run_commands(&self){
+        let extended_dynamic_state = ash::extensions::ext::ExtendedDynamicState::new(self.instance.as_ref().unwrap(),self.device.as_ref().unwrap());
+
         self.command_buffers
             .as_ref()
             .unwrap()
@@ -1806,8 +1820,11 @@ impl VulkanData {
                     )
                 };
 
-
+                unsafe{ extended_dynamic_state.cmd_set_depth_test_enable(*command_buffer,false)};
                 self.cubemap.as_ref().unwrap().draw(self.device.as_ref().unwrap(), *command_buffer, self.pipeline_layout.unwrap());
+                unsafe{ extended_dynamic_state.cmd_set_depth_test_enable(*command_buffer,true)};
+
+
                 for object in &self.objects{
                     object.draw(self.device.as_ref().unwrap(), *command_buffer, self.pipeline_layout.unwrap());
                 }
@@ -1843,9 +1860,6 @@ impl VulkanData {
         self.create_descriptor_pool();
         self.create_descriptor_sets();
         self.create_command_buffers();
-
-
-
 
     }
 
