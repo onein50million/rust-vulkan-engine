@@ -9,8 +9,8 @@ edition = "2018"
 [dependencies]
 winit = "0.25.0"
 cgmath = "0.18.0"
-ash = "0.32.1"
-ash-window = "0.6.0"
+ash = { git = "https://github.com/MaikKlein/ash.git" }
+ash-window = { git = "https://github.com/MaikKlein/ash.git" }
 image = "0.23.14"
 tobj = "3.0.1"
-vk-mem = "0.2.2"
+vk-mem = { path = "../vk-mem-rs" }
