@@ -107,18 +107,18 @@ impl Object{
             let image_view = vulkan_data.create_image_view(image,format,vk::ImageAspectFlags::COLOR, 1);
 
             let sampler_info = vk::SamplerCreateInfo::builder()
-                .mag_filter(vk::Filter::LINEAR)
-                .min_filter(vk::Filter::LINEAR)
-                .address_mode_u(vk::SamplerAddressMode::REPEAT)
-                .address_mode_v(vk::SamplerAddressMode::REPEAT)
-                .address_mode_w(vk::SamplerAddressMode::REPEAT)
+                .mag_filter(vk::Filter::NEAREST)
+                .min_filter(vk::Filter::NEAREST)
+                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
                 .anisotropy_enable(true)
                 .max_anisotropy(1.0)
                 .border_color(vk::BorderColor::INT_OPAQUE_WHITE)
                 .unnormalized_coordinates(false)
                 .compare_enable(false)
                 .compare_op(vk::CompareOp::ALWAYS)
-                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
                 .mip_lod_bias(0.0)
                 .min_lod(0.0)
                 .max_lod(vk::LOD_CLAMP_NONE);
@@ -222,49 +222,26 @@ trait Processable {
     fn process(vulkan_data: &mut VulkanData, delta_time: f64, aspect_ratio: f32);
 }
 struct Cubemap{
-    positive_x: Object,
-    negative_x: Object,
-    positive_y: Object,
-    negative_y: Object,
-    positive_z: Object,
-    negative_z: Object,
+    cube: Object,
 }
 
 impl Cubemap{
     fn new(
         vulkan_data: &mut VulkanData,
-        positive_x: std::path::PathBuf,
-        negative_x: std::path::PathBuf,
-        positive_y: std::path::PathBuf,
-        negative_y: std::path::PathBuf,
-        positive_z: std::path::PathBuf,
-        negative_z: std::path::PathBuf,
+        texture_path: std::path::PathBuf,
     ) -> Self{
 
-        let indices = &QUAD_INDICES.to_vec();
-
         let cubemap = Cubemap{
-            positive_x: Object::new(vulkan_data, &POSITIVE_X_VERTICES.to_vec(), indices, Some(positive_x)),
-            negative_x: Object::new(vulkan_data, &NEGATIVE_X_VERTICES.to_vec(), indices,Some(negative_x)),
-            positive_y: Object::new(vulkan_data, &POSITIVE_Y_VERTICES.to_vec(), indices,Some(positive_y)),
-            negative_y: Object::new(vulkan_data, &NEGATIVE_Y_VERTICES.to_vec(), indices,Some(negative_y)),
-            positive_z: Object::new(vulkan_data, &POSITIVE_Z_VERTICES.to_vec(), indices,Some(positive_z)),
-            negative_z: Object::new(vulkan_data, &NEGATIVE_Z_VERTICES.to_vec(), indices,Some(negative_z)),
+            cube: Object::new(vulkan_data, &CUBE.to_vec(), &CUBE_INDICES.to_vec(), Some(texture_path)),
         };
-        vulkan_data.uniform_buffer_object.model[cubemap.positive_x.object_index as usize] = Matrix4::from_translation(Vector3::<f32>::new(0.0,0.0,-2.0));
+        vulkan_data.uniform_buffer_object.model[cubemap.cube.object_index as usize] = Matrix4::from_translation(Vector3::<f32>::new(0.0, 0.0, -2.0));
 
         return cubemap;
     }
     fn get_image_infos(&self) -> Vec<vk::DescriptorImageInfo>{
 
         return vec![
-            vk::DescriptorImageInfo::builder().image_view(self.positive_x.texture.as_ref().unwrap().image_view).sampler(self.positive_x.texture.as_ref().unwrap().sampler).build(),
-            vk::DescriptorImageInfo::builder().image_view(self.negative_x.texture.as_ref().unwrap().image_view).sampler(self.negative_x.texture.as_ref().unwrap().sampler).build(),
-            vk::DescriptorImageInfo::builder().image_view(self.positive_y.texture.as_ref().unwrap().image_view).sampler(self.positive_y.texture.as_ref().unwrap().sampler).build(),
-            vk::DescriptorImageInfo::builder().image_view(self.negative_y.texture.as_ref().unwrap().image_view).sampler(self.negative_y.texture.as_ref().unwrap().sampler).build(),
-            vk::DescriptorImageInfo::builder().image_view(self.positive_z.texture.as_ref().unwrap().image_view).sampler(self.positive_y.texture.as_ref().unwrap().sampler).build(),
-            vk::DescriptorImageInfo::builder().image_view(self.negative_z.texture.as_ref().unwrap().image_view).sampler(self.negative_y.texture.as_ref().unwrap().sampler).build(),
-
+            vk::DescriptorImageInfo::builder().image_view(self.cube.texture.as_ref().unwrap().image_view).sampler(self.cube.texture.as_ref().unwrap().sampler).build(),
         ];
 
     }
@@ -275,28 +252,13 @@ impl Cubemap{
 impl Processable for Cubemap{
     fn process(vulkan_data: &mut VulkanData, delta_time: f64, aspect_ratio: f32) {
         let view = vulkan_data.player.get_view_matrix_no_translation();
-        vulkan_data.uniform_buffer_object.view[vulkan_data.cubemap.as_ref().unwrap().positive_x.object_index as usize] = view;
-        vulkan_data.uniform_buffer_object.view[vulkan_data.cubemap.as_ref().unwrap().negative_x.object_index as usize] = view;
-        vulkan_data.uniform_buffer_object.view[vulkan_data.cubemap.as_ref().unwrap().positive_y.object_index as usize] = view;
-        vulkan_data.uniform_buffer_object.view[vulkan_data.cubemap.as_ref().unwrap().negative_y.object_index as usize] = view;
-        vulkan_data.uniform_buffer_object.view[vulkan_data.cubemap.as_ref().unwrap().positive_z.object_index as usize] = view;
-        vulkan_data.uniform_buffer_object.view[vulkan_data.cubemap.as_ref().unwrap().negative_z.object_index as usize] = view;
+        vulkan_data.uniform_buffer_object.view[vulkan_data.cubemap.as_ref().unwrap().cube.object_index as usize] = view;
 
-        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().positive_x.object_index as usize] = Matrix4::identity();
-        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().negative_x.object_index as usize] = Matrix4::identity();
-        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().positive_y.object_index as usize] = Matrix4::identity();
-        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().negative_y.object_index as usize] = Matrix4::identity();
-        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().positive_z.object_index as usize] = Matrix4::identity();
-        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().negative_z.object_index as usize] = Matrix4::identity();
+        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().cube.object_index as usize] = Matrix4::identity();
 
         let projection = cgmath::perspective(Deg(90.0), aspect_ratio, 0.1, 100.0);
 
-        vulkan_data.uniform_buffer_object.proj[vulkan_data.cubemap.as_ref().unwrap().positive_x.object_index as usize] = projection;
-        vulkan_data.uniform_buffer_object.proj[vulkan_data.cubemap.as_ref().unwrap().negative_x.object_index as usize] = projection;
-        vulkan_data.uniform_buffer_object.proj[vulkan_data.cubemap.as_ref().unwrap().positive_y.object_index as usize] = projection;
-        vulkan_data.uniform_buffer_object.proj[vulkan_data.cubemap.as_ref().unwrap().negative_y.object_index as usize] = projection;
-        vulkan_data.uniform_buffer_object.proj[vulkan_data.cubemap.as_ref().unwrap().positive_z.object_index as usize] = projection;
-        vulkan_data.uniform_buffer_object.proj[vulkan_data.cubemap.as_ref().unwrap().negative_z.object_index as usize] = projection;
+        vulkan_data.uniform_buffer_object.proj[vulkan_data.cubemap.as_ref().unwrap().cube.object_index as usize] = projection;
 
     }
 }
@@ -305,12 +267,7 @@ impl Drawable for Cubemap{
 
         // unsafe{device.cmd_set_depth_bias(command_buffer,1.0,1.0, 1.0)};
 
-        self.positive_x.draw(device, command_buffer, pipeline_layout);
-        self.negative_x.draw(device, command_buffer, pipeline_layout);
-        self.positive_y.draw(device, command_buffer, pipeline_layout);
-        self.negative_y.draw(device, command_buffer, pipeline_layout);
-        self.positive_z.draw(device, command_buffer, pipeline_layout);
-        self.negative_z.draw(device, command_buffer, pipeline_layout);
+        self.cube.draw(device, command_buffer, pipeline_layout);
 
     }
 }
@@ -676,6 +633,9 @@ impl VulkanData {
 
     fn get_max_usable_sample_count(&self) -> vk::SampleCountFlags {
         let physical_device_properties = unsafe{ self.instance.as_ref().unwrap().get_physical_device_properties(self.physical_device.unwrap())};
+        // let mut physical_device_properties2 = vk::PhysicalDeviceProperties2::builder().build();
+        // unsafe{ self.instance.as_ref().unwrap().get_physical_device_properties2(self.physical_device.unwrap(), &mut physical_device_properties2)};
+
         let counts = physical_device_properties.limits.framebuffer_color_sample_counts & physical_device_properties.limits.framebuffer_depth_sample_counts;
 
         if counts.contains(vk::SampleCountFlags::TYPE_64){return vk::SampleCountFlags::TYPE_64}
@@ -854,6 +814,9 @@ impl VulkanData {
 
     fn create_index_buffer(&mut self) {
         let buffer_size: vk::DeviceSize = (std::mem::size_of::<u32>() * self.indices.len()) as u64;
+        if buffer_size <= 0{
+            return;
+        }
         let (staging_buffer, staging_buffer_memory) = self.create_buffer_with_memory(
             buffer_size,
             vk::BufferUsageFlags::TRANSFER_SRC,
@@ -1562,14 +1525,17 @@ impl VulkanData {
                     )
                 };
 
-                unsafe {
-                    self.device.as_ref().unwrap().cmd_bind_index_buffer(
-                        *command_buffer,
-                        self.index_buffer.unwrap(),
-                        0 as vk::DeviceSize,
-                        vk::IndexType::UINT32,
-                    )
-                };
+                if self.index_buffer.is_some() {
+                    unsafe {
+                        self.device.as_ref().unwrap().cmd_bind_index_buffer(
+                            *command_buffer,
+                            self.index_buffer.unwrap(),
+                            0 as vk::DeviceSize,
+                            vk::IndexType::UINT32,
+                        )
+                    };
+                }
+
 
                 unsafe {
                     self.device.as_ref().unwrap().cmd_bind_descriptor_sets(
@@ -1647,12 +1613,7 @@ impl VulkanData {
     fn create_cubemap_resources(&mut self){
         self.cubemap = Some(Cubemap::new(
             self,
-            std::path::PathBuf::from("cubemap/px.png"),
-            std::path::PathBuf::from("cubemap/nx.png"),
-            std::path::PathBuf::from("cubemap/py.png"),
-            std::path::PathBuf::from("cubemap/ny.png"),
-            std::path::PathBuf::from("cubemap/pz.png"),
-            std::path::PathBuf::from("cubemap/nz.png"),
+            std::path::PathBuf::from("cubemap.png"),
         ));
 
     }
