@@ -74,6 +74,7 @@ impl Object{
         let mut texture = None;
         if texture_path.is_some() {
             let dynamic_image = image::io::Reader::open(texture_path.unwrap()).unwrap().decode().unwrap();
+
             let width = dynamic_image.width();
             let height = dynamic_image.height();
             let pixels = dynamic_image.into_rgba8().into_raw();
@@ -107,8 +108,9 @@ impl Object{
             let image_view = vulkan_data.create_image_view(image,format,vk::ImageAspectFlags::COLOR, 1);
 
             let sampler_info = vk::SamplerCreateInfo::builder()
-                .mag_filter(vk::Filter::NEAREST)
-                .min_filter(vk::Filter::NEAREST)
+
+                .mag_filter(vk::Filter::LINEAR)
+                .min_filter(vk::Filter::LINEAR)
                 .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
                 .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
                 .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
@@ -141,9 +143,6 @@ impl Object{
             vulkan_data.copy_buffer_to_image(staging_buffer,image, width, height);
             vulkan_data.allocator.as_ref().unwrap().destroy_buffer(staging_buffer, &staging_buffer_allocation);
             vulkan_data.transition_image_layout(image,vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL, 1   );
-
-
-
 
             texture = Some(CombinedImage{
                 image,
@@ -497,11 +496,11 @@ impl VulkanData {
 
         let device_features = vk::PhysicalDeviceFeatures::builder().sampler_anisotropy(true);
 
-        let mut physical_Device_extended_dynamic_state_features = vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT::builder().extended_dynamic_state(true);
+        let mut extended_dynamic_state_features = vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT::builder().extended_dynamic_state(true);
 
         let device_extension_names_raw = vec![Swapchain::name().as_ptr(),vk::ExtExtendedDynamicStateFn::name().as_ptr()];
         let device_create_info = vk::DeviceCreateInfo::builder()
-            .push_next(&mut physical_Device_extended_dynamic_state_features)
+            .push_next(&mut extended_dynamic_state_features)
             .queue_create_infos(queue_create_infos)
             .enabled_layer_names(&validation_layer_names_raw)
             .enabled_extension_names(&device_extension_names_raw)
@@ -542,7 +541,7 @@ impl VulkanData {
         self.create_command_pool();
 
 
-        self.load_model();
+        self.load_obj_model(std::path::PathBuf::from("viking_room.obj"));
         self.create_color_resources();
         self.create_depth_resources();
         self.create_cubemap_resources();
@@ -647,11 +646,14 @@ impl VulkanData {
         else if counts.contains(vk::SampleCountFlags::TYPE_1){return vk::SampleCountFlags::TYPE_1}
         else {panic!("No samples found???")}
     }
+    fn load_gltf_model(&mut self, path: std::path::PathBuf){
 
-    fn load_model(&mut self){
+    }
+
+    fn load_obj_model(&mut self, path: std::path::PathBuf){
 
 
-        let (models, _) = tobj::load_obj("viking_room.obj", &tobj::LoadOptions{
+        let (models, _) = tobj::load_obj(path, &tobj::LoadOptions{
             single_index: true  ,
             triangulate: false,
             ignore_points: false,
@@ -684,6 +686,7 @@ impl VulkanData {
 
         }
         let object = Object::new(self, &vertices, &vec![], Some(std::path::PathBuf::from("viking_room.png")));
+        self.uniform_buffer_object.model[object.object_index as usize] = self.uniform_buffer_object.model[object.object_index as usize] * Matrix4::<f32>::from_scale(3.0);
         self.objects.push(object);
 
     }
