@@ -233,8 +233,6 @@ struct Cubemap{
 impl Cubemap{
     fn new(
         vulkan_data: &mut VulkanData,
-        vertices: &Vec<Vertex>,
-        indices: &Vec<u32>,
         positive_x: std::path::PathBuf,
         negative_x: std::path::PathBuf,
         positive_y: std::path::PathBuf,
@@ -243,13 +241,15 @@ impl Cubemap{
         negative_z: std::path::PathBuf,
     ) -> Self{
 
+        let indices = &QUAD_INDICES.to_vec();
+
         let cubemap = Cubemap{
-            positive_x: Object::new(vulkan_data, vertices, indices, Some(positive_x)),
-            negative_x: Object::new(vulkan_data, vertices, indices,Some(negative_x)),
-            positive_y: Object::new(vulkan_data, vertices, indices,Some(positive_y)),
-            negative_y: Object::new(vulkan_data, vertices, indices,Some(negative_y)),
-            positive_z: Object::new(vulkan_data, vertices, indices,Some(positive_z)),
-            negative_z: Object::new(vulkan_data, vertices, indices,Some(negative_z)),
+            positive_x: Object::new(vulkan_data, &POSITIVE_X_VERTICES.to_vec(), indices, Some(positive_x)),
+            negative_x: Object::new(vulkan_data, &NEGATIVE_X_VERTICES.to_vec(), indices,Some(negative_x)),
+            positive_y: Object::new(vulkan_data, &POSITIVE_Y_VERTICES.to_vec(), indices,Some(positive_y)),
+            negative_y: Object::new(vulkan_data, &NEGATIVE_Y_VERTICES.to_vec(), indices,Some(negative_y)),
+            positive_z: Object::new(vulkan_data, &POSITIVE_Z_VERTICES.to_vec(), indices,Some(positive_z)),
+            negative_z: Object::new(vulkan_data, &NEGATIVE_Z_VERTICES.to_vec(), indices,Some(negative_z)),
         };
         vulkan_data.uniform_buffer_object.model[cubemap.positive_x.object_index as usize] = Matrix4::from_translation(Vector3::<f32>::new(0.0,0.0,-2.0));
 
@@ -282,18 +282,12 @@ impl Processable for Cubemap{
         vulkan_data.uniform_buffer_object.view[vulkan_data.cubemap.as_ref().unwrap().positive_z.object_index as usize] = view;
         vulkan_data.uniform_buffer_object.view[vulkan_data.cubemap.as_ref().unwrap().negative_z.object_index as usize] = view;
 
-        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().positive_x.object_index as usize] =
-            Matrix4::from_translation(Vector3::new(1.0, 0.0, 0.0)) * Matrix4::from_angle_y(Deg(-90.0));
-        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().negative_x.object_index as usize] =
-            Matrix4::from_translation(Vector3::new(-1.0, 0.0, 0.0)) * Matrix4::from_angle_y(Deg(90.0));
-        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().positive_y.object_index as usize] =
-            Matrix4::from_translation(Vector3::new(0.0, 1.0, 0.0)) * Matrix4::from_angle_x(Deg(90.0));
-        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().negative_y.object_index as usize] =
-            Matrix4::from_translation(Vector3::new(0.0, -1.0, 0.0))* Matrix4::from_angle_x(Deg(-90.0));
-        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().positive_z.object_index as usize] =
-            Matrix4::from_translation(Vector3::new(0.0, 0.0, 1.0))* Matrix4::from_angle_y(Deg(180.0));
-        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().negative_z.object_index as usize] =
-            Matrix4::from_translation(Vector3::new(0.0, 0.0, -1.0))* Matrix4::from_angle_y(Deg(0.0));
+        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().positive_x.object_index as usize] = Matrix4::identity();
+        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().negative_x.object_index as usize] = Matrix4::identity();
+        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().positive_y.object_index as usize] = Matrix4::identity();
+        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().negative_y.object_index as usize] = Matrix4::identity();
+        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().positive_z.object_index as usize] = Matrix4::identity();
+        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().negative_z.object_index as usize] = Matrix4::identity();
 
         let projection = cgmath::perspective(Deg(90.0), aspect_ratio, 0.1, 100.0);
 
@@ -1651,14 +1645,8 @@ impl VulkanData {
     }
 
     fn create_cubemap_resources(&mut self){
-
-        let vertices = SKYBOX_BACKPLANE_VERTICES.to_vec();
-        let indices = SKYBOX_BACKPLANE_INDICES.to_vec();
-
         self.cubemap = Some(Cubemap::new(
             self,
-            &vertices,
-            &indices,
             std::path::PathBuf::from("cubemap/px.png"),
             std::path::PathBuf::from("cubemap/nx.png"),
             std::path::PathBuf::from("cubemap/py.png"),
