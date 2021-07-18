@@ -1,3 +1,6 @@
+mod support;
+mod cube;
+
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Swapchain};
 use ash::{vk, Device, Entry, Instance};
@@ -10,8 +13,9 @@ use winit::window::{Window, WindowBuilder};
 use image::GenericImageView;
 use ash::vk::{CommandBuffer, PipelineLayout};
 
+use crate::{support::*, cube::*};
+
 const FRAMERATE_TARGET: f64 = 280.0;
-const NUM_MODELS: usize = 100;
 
 
 //Coordinate system for future reference:
@@ -23,58 +27,6 @@ const NUM_MODELS: usize = 100;
 //left: positive x
 //right: negative x
 
-const SKYBOX_BACKPLANE_VERTICES: [Vertex;4] = [
-    Vertex {
-        position: Vector3 {
-            x: -1.0,
-            y: -1.0,
-            z: 0.0,
-        },
-        color: Vector3 {
-            x: 1.0,
-            y: 1.0,
-            z: 1.0
-        },
-        texture_coordinate: Vector2 { x: 0.0, y: 0.0 }
-    }, Vertex {
-        position: Vector3 {
-            x: -1.0,
-            y: 1.0,
-            z: 0.0,
-        },
-        color: Vector3 {
-            x: 1.0,
-            y: 1.0,
-            z: 1.0
-        },
-        texture_coordinate: Vector2 { x: 0.0, y: 1.0 }
-    }, Vertex {
-        position: Vector3 {
-            x: 1.0,
-            y: 1.0,
-            z: 0.0,
-        },
-        color: Vector3 {
-            x: 1.0,
-            y: 1.0,
-            z: 1.0
-        },
-        texture_coordinate: Vector2 { x: 1.0, y: 1.0 }
-    }, Vertex {
-        position: Vector3 {
-            x: 1.0,
-            y: -1.0,
-            z: 0.0,
-        },
-        color: Vector3 {
-            x: 1.0,
-            y: 1.0,
-            z: 1.0
-        },
-        texture_coordinate: Vector2 { x: 1.0, y: 0.0 }
-    }
-];
-const SKYBOX_BACKPLANE_INDICES: [u32;6] = [0,1,2,2,3,0];
 
 
 //TODO:
@@ -85,191 +37,7 @@ const SKYBOX_BACKPLANE_INDICES: [u32;6] = [0,1,2,2,3,0];
 
  */
 
-//TODO: see what happens if you take this off
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct Vertex {
-    position: Vector3<f32>,
-    color: Vector3<f32>,
-    texture_coordinate: Vector2<f32>,
-}
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct UniformBufferObject {
-    model: [Matrix4<f32>; NUM_MODELS],
-    view: [Matrix4<f32>; NUM_MODELS],
-    proj: [Matrix4<f32>; NUM_MODELS],
-}
 
-#[repr(C)]
-struct PushConstants {
-    uniform_index: u32,
-    texture_index: u32,
-}
-
-struct Player {
-    movement: Vector3<f64>,
-    position: Vector3<f64>,
-    velocity: Vector3<f64>,
-    yaw: f64,
-    pitch: f64,
-    stamina: f64,
-    move_accel: f64,
-    touching_ground: bool,
-    sprinting: bool,
-}
-
-impl Default for Player{
-    fn default() -> Self {
-        Player{
-            movement: Vector3::new(0.0,0.0,0.0),
-            position: Vector3::new(2.0, -10.0, 1.0),
-            velocity: Vector3::new(0.0,0.0,0.0),
-            yaw: 0.0, pitch: 0.0,
-            move_accel: Self::BASE_ACCEL,stamina: 1.0,
-            touching_ground: true, sprinting: false,
-
-        }
-
-    }
-}
-
-impl Player{
-
-    const HEIGHT: f64 = 1.7;
-    const FALL_ACCELERATION: f64 = 9.8;
-    const JUMP_SPEED: f64 = 5.0;
-    const STAMINA_REGEN: f64 = 0.1;
-    const BASE_ACCEL: f64 = 50.0;
-    const SPRINT_MULTIPLIER: f64 = 2.0;
-
-    fn get_view_matrix_no_translation(&self) -> Matrix4<f32>{
-        let matrix = Matrix4::<f32>::from_angle_y(Deg(-self.yaw as f32))
-            * Matrix4::<f32>::from_angle_x(Deg(self.pitch as f32));
-
-        return matrix.inverse_transform().unwrap();
-    }
-
-    fn get_view_matrix(&self) -> Matrix4<f32>{
-        let matrix = Matrix4::<f32>::from_translation(Vector3::new(self.position.x as f32, self.position.y as f32, self.position.z as f32))
-                * Matrix4::<f32>::from_angle_y(Deg(-self.yaw as f32))
-                * Matrix4::<f32>::from_angle_x(Deg(self.pitch as f32));
-
-        return matrix.inverse_transform().unwrap();
-    }
-    fn process(&mut self, delta_time: f64){
-        self.stamina += Player::STAMINA_REGEN * delta_time;
-        if self.touching_ground{
-            self.velocity.x += self.movement.x*delta_time;
-            self.velocity.z += self.movement.z*delta_time;
-        }
-
-        self.position += self.velocity * delta_time;
-
-        if -self.position.y > Player::HEIGHT{
-            self.velocity.y += Player::FALL_ACCELERATION*delta_time;
-        }else{
-            self.touching_ground = true;
-            self.position.y = -Player::HEIGHT;
-            self.velocity.x *= 0.9;
-            self.velocity.z *= 0.9;
-            self.velocity.y = 0.0;
-
-        }
-        if self.stamina < 0.01{
-            self.sprinting = false;
-        }
-        if self.sprinting{
-            self.move_accel = Self::SPRINT_MULTIPLIER * Self::BASE_ACCEL;
-        }else{
-            self.move_accel = Self::BASE_ACCEL;
-        }
-        if self.sprinting && self.movement.magnitude() > 0.0{
-            self.stamina -= Self::STAMINA_REGEN * 2.0 * delta_time;
-        } else{
-            self.stamina += Self::STAMINA_REGEN * delta_time;
-        }
-        self.stamina = self.stamina.min(1.0);
-    }
-    fn process_inputs(&mut self, inputs: &Inputs, delta_time:f64){
-        self.movement = (Matrix3::from_angle_y(Deg(-self.yaw))) * Vector3::new(
-            inputs.right - inputs.left,
-            0.0,
-            inputs.backward - inputs.forward,
-        ) * self.move_accel;
-
-        if inputs.up > 0.5 && self.touching_ground {
-            self.touching_ground = false;
-            self.velocity.y = -Player::JUMP_SPEED;
-        }
-        if self.stamina > 0.25 && inputs.sprint > 0.5{
-            self.sprinting = true;
-        }
-        if inputs.sprint < 0.5{
-            self.sprinting = false;
-        }
-    }
-}
-
-
-impl Vertex {
-    //noinspection RsSelfConvention
-    fn get_binding_description() -> vk::VertexInputBindingDescription {
-        return vk::VertexInputBindingDescription::builder()
-            .binding(0)
-            .stride(std::mem::size_of::<Vertex>() as u32)
-            .input_rate(vk::VertexInputRate::VERTEX)
-            .build();
-    }
-    fn get_attribute_description() -> Vec<vk::VertexInputAttributeDescription> {
-        let attribute_descriptions = vec![
-            vk::VertexInputAttributeDescription::builder()
-                .binding(0)
-                .location(0)
-                .format(vk::Format::R32G32B32_SFLOAT)
-                .offset(0),
-            vk::VertexInputAttributeDescription::builder()
-                .binding(0)
-                .location(1)
-                .format(vk::Format::R32G32B32_SFLOAT)
-                .offset(12), //might be off, could be fun to see what happens when it's off
-            vk::VertexInputAttributeDescription::builder()
-                .binding(0)
-                .location(2)
-                .format(vk::Format::R32G32_SFLOAT)
-                .offset(24),
-
-        ];
-
-        return attribute_descriptions
-            .into_iter()
-            .map(|attribute_description| attribute_description.build())
-            .collect();
-    }
-}
-
-struct Inputs{
-    forward: f64,
-    backward: f64,
-    left: f64,
-    right: f64,
-    up: f64,
-    down: f64,
-    sprint: f64,
-}
-impl Inputs{
-    fn new() -> Self{
-        return Inputs{
-            forward: 0.0,
-            backward: 0.0,
-            left: 0.0,
-            right: 0.0,
-            up: 0.0,
-            down: 0.0,
-            sprint: 0.0
-        }
-    }
-}
 
 struct CombinedImage{
     image: vk::Image,
@@ -2074,11 +1842,7 @@ impl VulkanData {
         // self.player.rotation.x += delta_time as f32;
 
         if self.focused {
-            self.player.process_inputs(&self.inputs, delta_time);
-
-            self.player.yaw += self.mouse_buffer.x*0.1;
-            self.player.pitch = (self.player.pitch +  self.mouse_buffer.y*0.1).clamp(-80.0,80.0);
-
+            self.player.process_inputs(&self.inputs, delta_time, self.mouse_buffer);
             self.mouse_buffer = Vector2::zero();
         }
 
