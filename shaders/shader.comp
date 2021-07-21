@@ -1,0 +1,13 @@
+#version 450
+
+layout(binding = 0) uniform sampler2D texSampler;
+layout(binding = 1, rgba8) uniform image2D outImage;
+
+
+void main()
+{
+//    imageStore(outImage, ivec2(gl_GlobalInvocationID.x,gl_GlobalInvocationID.y),texture(texSampler,gl_GlobalInvocationID.xy/512.0));
+    vec4 swapchain_color = imageLoad(outImage,ivec2(gl_GlobalInvocationID.x,gl_GlobalInvocationID.y));
+    imageStore(outImage, ivec2(gl_GlobalInvocationID.x,gl_GlobalInvocationID.y),swapchain_color + gl_GlobalInvocationID.xyxy/512.0);
+
+}
