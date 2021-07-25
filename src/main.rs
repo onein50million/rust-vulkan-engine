@@ -374,6 +374,8 @@ struct VulkanData {
     descriptor_set_layout: Option<vk::DescriptorSetLayout>,
     descriptor_sets: Option<Vec<vk::DescriptorSet>>,
     compute_descriptor_pool: Option<vk::DescriptorPool>,
+    compute_descriptor_set_layout: Option<vk::DescriptorSetLayout>,
+    compute_descriptor_sets: Option<Vec<vk::DescriptorSet>>,
     uniform_buffer_object: UniformBufferObject,
     last_frame_instant: std::time::Instant,
     mouse_buffer: Vector2<f64>,
@@ -1510,7 +1512,14 @@ impl VulkanData {
 
     fn create_compute_pipelines(&mut self){
 
+        let ubo_layout_binding = vk::DescriptorSetLayoutBinding::builder()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE);
+
         let layout_bindings = [
+            ubo_layout_binding.build(),
             vk::DescriptorSetLayoutBinding::builder().binding(2).descriptor_count(self.compute_images.len() as u32).descriptor_type(vk::DescriptorType::STORAGE_IMAGE).stage_flags(vk::ShaderStageFlags::COMPUTE).build(),
         ];
 
@@ -1531,6 +1540,13 @@ impl VulkanData {
         self.compute_descriptor_sets = Some(unsafe{self.device.as_ref().unwrap().allocate_descriptor_sets(&descriptor_set_allocate_info)}.unwrap());
 
         for descriptor_set in self.compute_descriptor_sets.as_ref().unwrap(){
+            let buffer_infos = vec![vk::DescriptorBufferInfo::builder().buffer(self.uniform_buffers[0]).offset(0).range(std::mem::size_of::<UniformBufferObject>() as vk::DeviceSize).build()];
+            let mut image_infos = vec![];
+            for object in &self.objects{
+                image_infos.push(vk::DescriptorImageInfo::builder().image_view(object.texture.as_ref().unwrap().image_view).sampler(object.texture.as_ref().unwrap().sampler).build());
+            }
+            image_infos.extend(self.cubemap.as_ref().unwrap().get_image_infos());
+
             let mut storage_info: Vec<vk::DescriptorImageInfo> = vec![];
 
             for image_view in &self.compute_image_views{
@@ -1541,7 +1557,20 @@ impl VulkanData {
             }
 
             let descriptor_writes = [
-
+                vk::WriteDescriptorSet::builder()
+                    .dst_set(*descriptor_set)
+                    .dst_binding(0)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(&buffer_infos)
+                    .build(),
+                vk::WriteDescriptorSet::builder()
+                    .dst_set(*descriptor_set)
+                    .dst_binding(1)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&image_infos)
+                    .build(),
                 vk::WriteDescriptorSet::builder()
                     .dst_set(*descriptor_set)
                     .dst_binding(2)
@@ -1558,7 +1587,15 @@ impl VulkanData {
 
         }
 
+        let push_constant_range = vk::PushConstantRange::builder()
+            .offset(0)
+            .size(std::mem::size_of::<PushConstants>() as u32)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE);
+        let push_constant_ranges = [push_constant_range.build()];
+
+
         let compute_pipeline_layout_info = vk::PipelineLayoutCreateInfo::builder()
+            .push_constant_ranges(&push_constant_ranges)
             .set_layouts(&descriptor_set_layouts).build();
 
         self.compute_pipeline_layout = Some(unsafe{
@@ -1808,6 +1845,19 @@ impl VulkanData {
                                                   &self.compute_descriptor_sets.as_ref().unwrap(),
                                                   &[])
                 };
+
+
+
+                let push_constant = PushConstants{ uniform_index: self.objects[0].object_index, texture_index: self.objects[0].texture.as_ref().unwrap().index };
+                unsafe {
+                    let constants = std::slice::from_raw_parts(
+                        (&push_constant as *const PushConstants) as *const u8,
+                        std::mem::size_of::<PushConstants>(),
+                    );
+                    self.device
+                        .as_ref()
+                        .unwrap()
+                        .cmd_push_constants(*command_buffer,self.compute_pipeline_layout.unwrap(),vk::ShaderStageFlags::COMPUTE,0,constants)};
 
                 unsafe {
                     self.device

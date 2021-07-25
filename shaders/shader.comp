@@ -21,30 +21,43 @@ struct Ray{
     vec3 direction;
 };
 
+vec3 view_transform(vec3 position){
+    mat4 ubo = ubos.view[pushConstant.uniform_index];
+
+    return (ubo * vec4(position,1.0)).xyz;
+}
+
 vec3 rayAt(Ray ray, float ratio){
     return ray.origin + ray.direction*ratio;
 }
-bool hit_sphere(vec3 center, float radius, Ray ray){
+float hit_sphere(vec3 center, float radius, Ray ray){
 
     vec3 origin_center = ray.origin - center;
     float a = dot(ray.direction, ray.direction);
     float b = 2.0 * dot(origin_center, ray.direction);
     float c = dot(origin_center,origin_center) - radius*radius;
     float discriminant = b*b - 4*a*c;
-    return discriminant > 0.0;
+    if(discriminant < 0){
+        return -1.0;
+    }else{
+        return (-b - sqrt(discriminant) ) / (2.0*a);
+    }
 
 }
 
 vec4 rayColor(Ray ray){
-    vec3 unit_vector = normalize(ray.direction);
-    if(hit_sphere(vec3(0.5,0.5,-1.0),1.0, ray)){
-        return vec4(1.0,0.0,0.0,1.0);
+    float sphere_result = (hit_sphere(view_transform(vec3(0,0,-1.0)),0.5, ray));
+    if (sphere_result > 0.0){
+        vec3 normal = normalize(rayAt(ray, sphere_result) - view_transform(vec3(0,0,-1.0)));
+        return vec4(0.5 * (normal.xyz + 1.0),1.0);
     }
+    vec3 unit_vector = normalize(ray.direction);
 
-    return vec4(unit_vector.yyy,1.0);
+    mat4 matrix = inverse(ubos.view[3]); //This is immensely ghetto. Just grabbing an index and hoping it's part of the skybox
+    float lerp_ratio = (matrix * vec4(normalize(ray.direction),1.0)).y;
+    return (1.0-lerp_ratio)*vec4(0.6, 0.5, 1.0,1.0) + lerp_ratio*vec4(0.0, 0.0, 1.0,1.0);
+
 }
-
-
 
 void main()
 {
@@ -53,13 +66,22 @@ void main()
     float aspect_ratio = resolution.x/resolution.y;
     vec4 out_color = vec4(0.0);
 
-    vec3 origin = vec3(0.0);
+    float focal_length = 1.0;
+    vec3 origin = (vec3(0.0));
     vec2 screen_ratio = gl_GlobalInvocationID.xy/resolution.xy;
 
-    Ray cool_ray = Ray(origin, vec3(screen_ratio, 1.0));
+    vec2 viewport_size = vec2(2.0 * aspect_ratio, 2.0);
+
+    vec3 horizontal = vec3(viewport_size.x,0.0,0.0);
+    vec3 vertical = vec3(0.0,viewport_size.y,0.0);
+
+    vec3 upper_left_corner = (origin - horizontal/2.0 - vertical/2.0 - vec3(0.0,0.0,focal_length));
+
+    vec3 target = (upper_left_corner + screen_ratio.x * horizontal + screen_ratio.y * vertical);
+
+    Ray cool_ray = Ray((origin), (target));
 
     out_color = rayColor(cool_ray);
-
 
     imageStore(outImage, ivec2(gl_GlobalInvocationID.xy),out_color);
 
