@@ -4,7 +4,7 @@ mod cube;
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Swapchain};
 use ash::{vk, Device, Entry, Instance};
-use cgmath::{Matrix4, SquareMatrix, Vector2, Vector3, Deg, Transform, InnerSpace, Zero, Matrix3};
+use cgmath::{Matrix4, SquareMatrix, Vector2, Vector3, Deg, Transform, InnerSpace, Zero, Matrix3, Vector4};
 use std::env;
 use std::ffi::{c_void, CStr, CString};
 use winit::event::{DeviceEvent, Event, VirtualKeyCode, WindowEvent, ElementState};
@@ -15,9 +15,10 @@ use ash::vk::{CommandBuffer, PipelineLayout, DescriptorImageInfo};
 
 use crate::{support::*, cube::*};
 use std::mem::swap;
+use std::convert::TryInto;
 
 const FRAMERATE_TARGET: f64 = 280.0;
-
+const NUM_RANDOM: usize = 100;
 
 //Coordinate system for future reference:
 //from starting location
@@ -179,7 +180,7 @@ impl Drawable for Object{
                 Some(image) => image.index,
                 None => 0
             };
-            let push_constant = PushConstants{ uniform_index:self.object_index, texture_index };
+            let push_constant = PushConstants{ uniform_index:self.object_index, texture_index};
             let constants = std::slice::from_raw_parts(
                 (&push_constant as *const PushConstants) as *const u8,
                 std::mem::size_of::<PushConstants>(),
@@ -261,12 +262,12 @@ impl Cubemap{
     fn get_image_infos(&self) -> Vec<vk::DescriptorImageInfo>{
 
         return vec![
-            vk::DescriptorImageInfo::builder().image_view(self.positive_x.texture.as_ref().unwrap().image_view).sampler(self.positive_x.texture.as_ref().unwrap().sampler).build(),
-            vk::DescriptorImageInfo::builder().image_view(self.negative_x.texture.as_ref().unwrap().image_view).sampler(self.negative_x.texture.as_ref().unwrap().sampler).build(),
-            vk::DescriptorImageInfo::builder().image_view(self.positive_y.texture.as_ref().unwrap().image_view).sampler(self.positive_y.texture.as_ref().unwrap().sampler).build(),
-            vk::DescriptorImageInfo::builder().image_view(self.negative_y.texture.as_ref().unwrap().image_view).sampler(self.negative_y.texture.as_ref().unwrap().sampler).build(),
-            vk::DescriptorImageInfo::builder().image_view(self.positive_z.texture.as_ref().unwrap().image_view).sampler(self.positive_y.texture.as_ref().unwrap().sampler).build(),
-            vk::DescriptorImageInfo::builder().image_view(self.negative_z.texture.as_ref().unwrap().image_view).sampler(self.negative_y.texture.as_ref().unwrap().sampler).build(),
+            vk::DescriptorImageInfo::builder().image_view(self.positive_x.texture.as_ref().unwrap().image_view).sampler(self.positive_x.texture.as_ref().unwrap().sampler).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL).build(),
+            vk::DescriptorImageInfo::builder().image_view(self.negative_x.texture.as_ref().unwrap().image_view).sampler(self.negative_x.texture.as_ref().unwrap().sampler).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL).build(),
+            vk::DescriptorImageInfo::builder().image_view(self.positive_y.texture.as_ref().unwrap().image_view).sampler(self.positive_y.texture.as_ref().unwrap().sampler).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL).build(),
+            vk::DescriptorImageInfo::builder().image_view(self.negative_y.texture.as_ref().unwrap().image_view).sampler(self.negative_y.texture.as_ref().unwrap().sampler).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL).build(),
+            vk::DescriptorImageInfo::builder().image_view(self.positive_z.texture.as_ref().unwrap().image_view).sampler(self.positive_y.texture.as_ref().unwrap().sampler).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL).build(),
+            vk::DescriptorImageInfo::builder().image_view(self.negative_z.texture.as_ref().unwrap().image_view).sampler(self.negative_y.texture.as_ref().unwrap().sampler).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL).build(),
 
         ];
 
@@ -319,6 +320,7 @@ impl Drawable for Cubemap{
 }
 
 struct VulkanData {
+    rng: fastrand::Rng,
     instance: Option<Instance>,
     entry: Option<Entry>,
     device: Option<Device>,
@@ -387,6 +389,14 @@ struct VulkanData {
     objects: Vec<Object>,
 }
 
+fn get_random_vector(rng: &fastrand::Rng, length:usize) -> Vec<f32>{
+    let mut vector = Vec::new();
+    for _ in 0..length{
+        vector.push(rng.f32());
+    }
+    return vector;
+}
+
 impl VulkanData {
     fn new() -> Self {
 
@@ -394,12 +404,14 @@ impl VulkanData {
             model: [Matrix4::identity(); NUM_MODELS],
             view: [Matrix4::identity(); NUM_MODELS],
             proj: [cgmath::perspective(cgmath::Deg(90.0), 1.0, 0.1, 10.0); NUM_MODELS],
+            random: [Vector4::new(0.0f32,0.0f32,0.0f32,0.0f32,); NUM_RANDOM],
         };
 
         let indices = vec![];
         let vertices = vec![];
 
         return VulkanData {
+            rng: fastrand::Rng::new(),
             instance: None,
             entry: None,
             device: None,
@@ -592,15 +604,20 @@ impl VulkanData {
                 .get_device_queue(self.main_queue_index.unwrap(), 0)
         });
 
-
+        println!("Creating Allocator");
         self.create_allocator();
+
+        println!("Creating Surface");
         self.create_surface(window);
 
+        println!("Getting surface support and capabilities");
         self.get_surface_support();
         self.get_surface_capabilities();
 
+        println!("Creating Swapchain");
         self.create_swapchain();
         self.create_image_views();
+        println!("Creating uniform buffers");
         self.create_uniform_buffers();
 
         self.create_descriptor_set_layout();
@@ -633,6 +650,7 @@ impl VulkanData {
             self.fullscreen_quads.push(quad);
         }
 
+        println!("Loading Shaders");
         self.load_shaders();
         self.create_graphics_pipelines();
 
@@ -642,15 +660,21 @@ impl VulkanData {
         self.create_vertex_buffer();
         self.create_index_buffer();
 
-        self.create_descriptor_pool();
-        self.create_compute_pipelines();
-        self.create_descriptor_sets();
-        self.create_command_buffers();
 
+        println!("Creating Descriptor pools");
+        self.create_descriptor_pool();
+        println!("Creating compute pipeline");
+        self.create_compute_pipelines();
+        println!("Creating descriptor sets");
+        self.create_descriptor_sets();
+        println!("Creating command buffer");
+        self.create_command_buffers();
+        println!("Creating sync objects");
         self.create_sync_objects();
 
-        self.process();
+        // self.process();
 
+        println!("Finished init");
 
     }
 
@@ -945,19 +969,18 @@ impl VulkanData {
             .binding(0)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE);
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
         let sampler_layout_binding = vk::DescriptorSetLayoutBinding::builder()
             .binding(1)
             .descriptor_count(NUM_MODELS as u32)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE);
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
 
 
 
         let layout_bindings = [
             ubo_layout_binding.build(),
             sampler_layout_binding.build(),
-            vk::DescriptorSetLayoutBinding::builder().binding(2).descriptor_count(self.compute_images.len() as u32).descriptor_type(vk::DescriptorType::STORAGE_IMAGE).stage_flags(vk::ShaderStageFlags::COMPUTE).build(),
         ];
 
         let layout_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&layout_bindings);
@@ -987,11 +1010,16 @@ impl VulkanData {
             let buffer_infos = vec![vk::DescriptorBufferInfo::builder().buffer(self.uniform_buffers[0]).offset(0).range(std::mem::size_of::<UniformBufferObject>() as vk::DeviceSize).build()];
             let mut image_infos = vec![];
             for object in &self.objects{
-                image_infos.push(vk::DescriptorImageInfo::builder().image_view(object.texture.as_ref().unwrap().image_view).sampler(object.texture.as_ref().unwrap().sampler).build());
+                image_infos.push(vk::DescriptorImageInfo::builder()
+                    .image_view(object.texture.as_ref().unwrap().image_view)
+                    .sampler(object.texture.as_ref().unwrap().sampler)
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .build());
             }
             image_infos.extend(self.cubemap.as_ref().unwrap().get_image_infos());
             image_infos.push(
                 vk::DescriptorImageInfo::builder()
+                    .image_layout(vk::ImageLayout::GENERAL)
                     .image_view(self.compute_image_views[0])
                     .sampler(self.compute_samplers[0])
                     .build());
@@ -1010,6 +1038,7 @@ impl VulkanData {
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(&image_infos)
                     .build()
+
             ];
 
             unsafe{
@@ -1518,8 +1547,15 @@ impl VulkanData {
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE);
 
+        let sampler_layout_binding = vk::DescriptorSetLayoutBinding::builder()
+            .binding(1)
+            .descriptor_count(NUM_MODELS as u32)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE);
+
         let layout_bindings = [
             ubo_layout_binding.build(),
+            sampler_layout_binding.build(),
             vk::DescriptorSetLayoutBinding::builder().binding(2).descriptor_count(self.compute_images.len() as u32).descriptor_type(vk::DescriptorType::STORAGE_IMAGE).stage_flags(vk::ShaderStageFlags::COMPUTE).build(),
         ];
 
@@ -1540,10 +1576,15 @@ impl VulkanData {
         self.compute_descriptor_sets = Some(unsafe{self.device.as_ref().unwrap().allocate_descriptor_sets(&descriptor_set_allocate_info)}.unwrap());
 
         for descriptor_set in self.compute_descriptor_sets.as_ref().unwrap(){
+            println!("compute descriptor set construction started");
             let buffer_infos = vec![vk::DescriptorBufferInfo::builder().buffer(self.uniform_buffers[0]).offset(0).range(std::mem::size_of::<UniformBufferObject>() as vk::DeviceSize).build()];
             let mut image_infos = vec![];
             for object in &self.objects{
-                image_infos.push(vk::DescriptorImageInfo::builder().image_view(object.texture.as_ref().unwrap().image_view).sampler(object.texture.as_ref().unwrap().sampler).build());
+                image_infos.push(vk::DescriptorImageInfo::builder()
+                    .image_view(object.texture.as_ref().unwrap().image_view)
+                    .sampler(object.texture.as_ref().unwrap().sampler)
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .build());
             }
             image_infos.extend(self.cubemap.as_ref().unwrap().get_image_infos());
 
@@ -1580,6 +1621,8 @@ impl VulkanData {
                     .build()
             ];
 
+            println!("Updating compute descriptor sets");
+
             unsafe{
                 self.device.as_ref().unwrap().update_descriptor_sets(&descriptor_writes, &[]);
             }
@@ -1597,6 +1640,8 @@ impl VulkanData {
         let compute_pipeline_layout_info = vk::PipelineLayoutCreateInfo::builder()
             .push_constant_ranges(&push_constant_ranges)
             .set_layouts(&descriptor_set_layouts).build();
+
+        println!("Creating compute pipeline layout");
 
         self.compute_pipeline_layout = Some(unsafe{
             self.device.as_ref().unwrap().create_pipeline_layout(&compute_pipeline_layout_info,None)
@@ -1848,7 +1893,7 @@ impl VulkanData {
 
 
 
-                let push_constant = PushConstants{ uniform_index: self.objects[0].object_index, texture_index: self.objects[0].texture.as_ref().unwrap().index };
+                let push_constant = PushConstants{ uniform_index: self.objects[0].object_index, texture_index: self.objects[0].texture.as_ref().unwrap().index};
                 unsafe {
                     let constants = std::slice::from_raw_parts(
                         (&push_constant as *const PushConstants) as *const u8,
@@ -2233,7 +2278,10 @@ impl VulkanData {
                 cgmath::perspective(Deg(90.0), surface_width / surface_height, 0.1, 100.0);
 
         }
-
+        let random: [f32;NUM_RANDOM] = get_random_vector(&self.rng, NUM_RANDOM).try_into().unwrap();
+        for i in 0..NUM_RANDOM{
+            self.uniform_buffer_object.random[i] = Vector4::new(random[i],random[i],random[i],random[i],);
+        }
         // println!("pitch: {:?} yaw: {:?}", self.player.pitch, self.player.yaw);
 
         // for mut i in 0..self.uniform_buffer_objects.len(){
@@ -2248,7 +2296,6 @@ impl VulkanData {
         //     // self.mouse_buffer = Vector2{ x: 0.0, y: 0.0 };
         //
         // }
-
 
         for i in 0..self.uniform_buffer_pointers.len(){
             unsafe{self.uniform_buffer_pointers[i].copy_from_nonoverlapping(&self.uniform_buffer_object as *const UniformBufferObject as *const u8, std::mem::size_of::<UniformBufferObject>())};
