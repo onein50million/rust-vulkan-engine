@@ -1,5 +1,6 @@
-use cgmath::{Vector3, Vector2, Matrix4, Transform, Deg, Matrix3, InnerSpace};
+use cgmath::{Vector3, Vector2, Matrix4, Transform, Deg, Matrix3, InnerSpace, Vector4};
 use ash::vk;
+use crate::NUM_RANDOM;
 
 pub(crate) const NUM_MODELS: usize = 100;
 
@@ -16,6 +17,8 @@ pub(crate)struct UniformBufferObject {
     pub(crate)model: [Matrix4<f32>; NUM_MODELS],
     pub(crate)view: [Matrix4<f32>; NUM_MODELS],
     pub(crate)proj: [Matrix4<f32>; NUM_MODELS],
+    pub(crate)random: [Vector4<f32>; NUM_RANDOM], //std140 packing so it needs to be 16 bytes wide
+
 }
 
 #[repr(C)]

@@ -2,11 +2,18 @@
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
 const int num_models = 100;
+const int NUM_RANDOM = 100;
+const uint TYPE_SPHERE = 0;
+const uint TYPE_PLANE = 1;
 
+const uint MAX_BOUNCES = 5;
+
+const uint SAMPLE_COUNT = 1;
 layout(binding = 0) uniform UniformBufferObject {
     mat4 model[num_models];
     mat4 view[num_models];
     mat4 proj[num_models];
+    float random[NUM_RANDOM];
 } ubos;
 
 layout(push_constant) uniform PushConstants{
@@ -21,6 +28,18 @@ struct Ray{
     vec3 direction;
 };
 
+struct RayResult{
+    vec3 color;
+    vec3 position;
+    vec3 normal;
+    bool absorbed;
+};
+
+struct Hittable{
+    uint type;
+    mat4 data; //Might be a better way to do this
+};
+
 vec3 view_transform(vec3 position){
     mat4 ubo = ubos.view[pushConstant.uniform_index];
 
@@ -32,6 +51,7 @@ vec3 rayAt(Ray ray, float ratio){
 }
 float hit_sphere(vec3 center, float radius, Ray ray){
 
+    //TODO: Learn vector algebra
     vec3 origin_center = ray.origin - center;
     float a = dot(ray.direction, ray.direction);
     float b = 2.0 * dot(origin_center, ray.direction);
@@ -42,46 +62,145 @@ float hit_sphere(vec3 center, float radius, Ray ray){
     }else{
         return (-b - sqrt(discriminant) ) / (2.0*a);
     }
-
 }
 
-vec4 rayColor(Ray ray){
-    float sphere_result = (hit_sphere(view_transform(vec3(0,0,-1.0)),0.5, ray));
-    if (sphere_result > 0.0){
-        vec3 normal = normalize(rayAt(ray, sphere_result) - view_transform(vec3(0,0,-1.0)));
-        return vec4(0.5 * (normal.xyz + 1.0),1.0);
+float hit(Ray ray, Hittable hittable){
+    if(hittable.type == TYPE_SPHERE){
+        return hit_sphere(view_transform(hittable.data[1].xyz),hittable.data[0].x, ray);
     }
-    vec3 unit_vector = normalize(ray.direction);
+    return -1.0;
+}
+
+
+
+RayResult castRay(Ray ray){
+    Hittable hittables[5] = Hittable[5](
+    Hittable(0,
+    mat4(
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0
+    )
+    ),
+    Hittable(0,
+    mat4(
+    1.0, 0.0, 0.0, 0.0,
+    5.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0
+    )
+    ),
+    Hittable(0,
+    mat4(
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 5.0, 0.0,
+    0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0
+    )
+    ),
+    Hittable(0,
+    mat4(
+    1.0, 0.0, 0.0, 0.0,
+    5.0, 5.0, 5.0, 0.0,
+    0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0
+    )
+    ),
+    Hittable(0,
+    mat4(
+    100.0, 0.0, 0.0, 0.0,
+    0.0, 101.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0
+    )
+    )
+    );
+
+    float closest_distance = 1.0/0.0; //infinity
+    RayResult result;
+    bool found = false;
+    for(int i = 0; i < hittables.length(); i++){
+        float hit_result = hit(ray, hittables[i]);
+        if (hit_result > 0.0 && hit_result < closest_distance){
+            closest_distance = hit_result;
+            found = true;
+            vec3 normal = normalize(rayAt(ray,hit_result) - view_transform(hittables[i].data[1].xyz));
+            result = RayResult(vec3(1.0,0.1,0.1),rayAt(ray,hit_result),normal,false);
+        }
+    }
+    if(found){
+        return result;
+    }
 
     mat4 matrix = inverse(ubos.view[3]); //This is immensely ghetto. Just grabbing an index and hoping it's part of the skybox
-    float lerp_ratio = (matrix * vec4(normalize(ray.direction),1.0)).y;
-    return (1.0-lerp_ratio)*vec4(0.6, 0.5, 1.0,1.0) + lerp_ratio*vec4(0.0, 0.0, 1.0,1.0);
+    float lerp_ratio = (matrix * vec4(normalize(ray.direction),1.0)).y + 1.0;
+    vec3 color = mix(vec3(1.0, 1.0, 1.0),vec3(0.26, 0.42, 0.70), lerp_ratio);
+    return RayResult(color, vec3(0.0), vec3(0.0),true);
 
 }
+
 
 void main()
 {
 
-    vec3 resolution = gl_NumWorkGroups*gl_WorkGroupSize;
+    vec3 resolution = gl_NumWorkGroups;
     float aspect_ratio = resolution.x/resolution.y;
     vec4 out_color = vec4(0.0);
 
     float focal_length = 1.0;
-    vec3 origin = (vec3(0.0));
-    vec2 screen_ratio = gl_GlobalInvocationID.xy/resolution.xy;
 
     vec2 viewport_size = vec2(2.0 * aspect_ratio, 2.0);
 
     vec3 horizontal = vec3(viewport_size.x,0.0,0.0);
     vec3 vertical = vec3(0.0,viewport_size.y,0.0);
-
+    vec3 origin = (vec3(0.0));
     vec3 upper_left_corner = (origin - horizontal/2.0 - vertical/2.0 - vec3(0.0,0.0,focal_length));
 
-    vec3 target = (upper_left_corner + screen_ratio.x * horizontal + screen_ratio.y * vertical);
+    float sample_size = 1.0/SAMPLE_COUNT;
 
-    Ray cool_ray = Ray((origin), (target));
+    vec4 samples[SAMPLE_COUNT];
 
-    out_color = rayColor(cool_ray);
+    for(int current_sample = 0; current_sample < SAMPLE_COUNT; current_sample++){
+        vec2 offset = vec2(sample_size*current_sample - sample_size, 0.0);
+        vec2 screen_ratio = (gl_GlobalInvocationID.xy + offset)/resolution.xy;
+
+        vec3 target = (upper_left_corner + screen_ratio.x * horizontal + screen_ratio.y * vertical);
+        origin = (vec3(0.0));
+        samples[current_sample] = vec4(0.0,0.0,0.0,1.0);
+        vec4 average_albedo = vec4(0.0,0.0,0.0,1.0);
+        for(int i = 0; i<MAX_BOUNCES; i++){
+            Ray ray = Ray(origin,target);
+            RayResult ray_result = castRay(ray);
+
+            if (ray_result.absorbed){
+                if(i <= 0){
+                    samples[current_sample] = vec4(ray_result.color*pow(0.1,i),1.0);
+                }else{
+                    samples[current_sample] = vec4(ray_result.color*pow(0.1,i),1.0) + pow(0.5, i) * (average_albedo/(i+1));
+                }
+                break;
+            }
+            average_albedo += vec4(ray_result.color,1.0);
+            target = (ray.direction - 2*dot(ray.direction, ray_result.normal)*ray_result.normal);
+            origin = ray_result.position;
+            vec3 random_vector = vec3(0.0);
+            random_vector.x = (ubos.random[(gl_GlobalInvocationID.x * gl_GlobalInvocationID.y) % NUM_RANDOM] - 0.5)*2.0;
+            random_vector.y = (ubos.random[(gl_GlobalInvocationID.y * gl_GlobalInvocationID.x + 1) % NUM_RANDOM] - 0.5)*2.0;
+            random_vector.z = (ubos.random[(gl_GlobalInvocationID.y * gl_GlobalInvocationID.x + 2) % NUM_RANDOM] - 0.5)*2.0;
+            random_vector = normalize(random_vector);
+
+            target += (random_vector*0.5);
+        }
+    }
+
+
+    vec4 sum = vec4(0.0);
+    for(int i = 0; i < SAMPLE_COUNT; i++){
+        sum += samples[i];
+    }
+
+    out_color = sum/SAMPLE_COUNT;
 
     imageStore(outImage, ivec2(gl_GlobalInvocationID.xy),out_color);
 
