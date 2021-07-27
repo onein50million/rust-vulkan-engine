@@ -1,0 +1,32 @@
+#version 450
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+const int num_models = 100;
+const int NUM_RANDOM = 100;
+const uint TYPE_SPHERE = 0;
+const uint TYPE_PLANE = 1;
+
+const uint MAX_BOUNCES = 5;
+
+const uint SAMPLE_COUNT = 1;
+const uint SAMPLE_WIDTH = 1;
+
+layout(binding = 0) uniform UniformBufferObject {
+    mat4 model[num_models];
+    mat4 view[num_models];
+    mat4 proj[num_models];
+    float random[NUM_RANDOM];
+} ubos;
+
+layout(push_constant) uniform PushConstants{
+    int uniform_index;
+    int texture_index;
+} pushConstant;
+
+layout(binding = 2, rgba8) uniform image2D outImage;
+
+
+void main()
+{
+    imageStore(outImage, ivec2(gl_GlobalInvocationID.xy),vec4(0.0));
+}
