@@ -91,8 +91,8 @@ impl Player{
         }else{
             self.touching_ground = true;
             self.position.y = -Player::HEIGHT;
-            self.velocity.x *= 0.9;
-            self.velocity.z *= 0.9;
+            self.velocity.x -= 10.0*self.velocity.x*delta_time;
+            self.velocity.z -= 10.0*self.velocity.z*delta_time;
             self.velocity.y = 0.0;
 
         }
