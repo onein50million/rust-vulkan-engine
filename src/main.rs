@@ -1,5 +1,6 @@
 mod support;
 mod cube;
+mod game;
 
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Swapchain};
@@ -51,7 +52,7 @@ struct CombinedImage{
     height: u32,
 }
 
-struct Object{
+struct RenderObject {
     vertex_start: u32,
     vertex_count: u32,
     index_start: u32,
@@ -60,7 +61,7 @@ struct Object{
     object_index: u32,
 }
 
-impl Object{
+impl RenderObject {
     fn new(vulkan_data: &mut VulkanData, vertices: &Vec<Vertex>, indices: &Vec<u32>, texture_path: Option<std::path::PathBuf> ) -> Self{
 
         let vertex_start = vulkan_data.vertices.len() as u32;
@@ -159,7 +160,7 @@ impl Object{
         }
 
 
-        let object = Object{
+        let object = RenderObject {
             vertex_start,
             vertex_count: vertices.len() as u32,
             index_start,
@@ -172,7 +173,7 @@ impl Object{
     }
 }
 
-impl Drawable for Object{
+impl Drawable for RenderObject {
     fn draw(&self, device: &Device, command_buffer: vk::CommandBuffer, pipeline_layout: vk::PipelineLayout) {
 
         unsafe {
@@ -226,12 +227,12 @@ trait Processable {
     fn process(vulkan_data: &mut VulkanData, delta_time: f64, aspect_ratio: f32);
 }
 struct Cubemap{
-    positive_x: Object,
-    negative_x: Object,
-    positive_y: Object,
-    negative_y: Object,
-    positive_z: Object,
-    negative_z: Object,
+    positive_x: RenderObject,
+    negative_x: RenderObject,
+    positive_y: RenderObject,
+    negative_y: RenderObject,
+    positive_z: RenderObject,
+    negative_z: RenderObject,
 }
 
 impl Cubemap{
@@ -248,12 +249,12 @@ impl Cubemap{
         let indices = &QUAD_INDICES.to_vec();
 
         let cubemap = Cubemap{
-            positive_x: Object::new(vulkan_data, &POSITIVE_X_VERTICES.to_vec(), indices, Some(positive_x)),
-            negative_x: Object::new(vulkan_data, &NEGATIVE_X_VERTICES.to_vec(), indices,Some(negative_x)),
-            positive_y: Object::new(vulkan_data, &POSITIVE_Y_VERTICES.to_vec(), indices,Some(positive_y)),
-            negative_y: Object::new(vulkan_data, &NEGATIVE_Y_VERTICES.to_vec(), indices,Some(negative_y)),
-            positive_z: Object::new(vulkan_data, &POSITIVE_Z_VERTICES.to_vec(), indices,Some(positive_z)),
-            negative_z: Object::new(vulkan_data, &NEGATIVE_Z_VERTICES.to_vec(), indices,Some(negative_z)),
+            positive_x: RenderObject::new(vulkan_data, &POSITIVE_X_VERTICES.to_vec(), indices, Some(positive_x)),
+            negative_x: RenderObject::new(vulkan_data, &NEGATIVE_X_VERTICES.to_vec(), indices, Some(negative_x)),
+            positive_y: RenderObject::new(vulkan_data, &POSITIVE_Y_VERTICES.to_vec(), indices, Some(positive_y)),
+            negative_y: RenderObject::new(vulkan_data, &NEGATIVE_Y_VERTICES.to_vec(), indices, Some(negative_y)),
+            positive_z: RenderObject::new(vulkan_data, &POSITIVE_Z_VERTICES.to_vec(), indices, Some(positive_z)),
+            negative_z: RenderObject::new(vulkan_data, &NEGATIVE_Z_VERTICES.to_vec(), indices, Some(negative_z)),
         };
         vulkan_data.uniform_buffer_object.model[cubemap.positive_x.object_index as usize] = Matrix4::from_translation(Vector3::<f32>::new(0.0,0.0,-2.0));
 
@@ -365,7 +366,7 @@ struct VulkanData {
     color_image_memory: Option<vk::DeviceMemory>,
     color_image_view: Option<vk::ImageView>,
     cubemap: Option<Cubemap>,
-    fullscreen_quads: Vec<Object>,
+    fullscreen_quads: Vec<RenderObject>,
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
     uniform_buffer_pointers: Vec<*mut u8>,
@@ -386,7 +387,7 @@ struct VulkanData {
     focused: bool,
     current_object_index: u32,
     current_texture_index: u32,
-    objects: Vec<Object>,
+    objects: Vec<RenderObject>,
 }
 
 fn get_random_vector(rng: &fastrand::Rng, length:usize) -> Vec<f32>{
@@ -627,8 +628,8 @@ impl VulkanData {
         self.create_command_pool();
 
 
-        self.load_obj_model(std::path::PathBuf::from("viking_room.obj"));
-
+        self.load_obj_model(std::path::PathBuf::from("models/viking_room/viking_room.obj"), std::path::PathBuf::from("models/viking_room/viking_room.png"));
+        self.load_obj_model(std::path::PathBuf::from("models/person/person.obj"), std::path::PathBuf::from("models/person/person.png"));
 
 
         self.create_color_resources();
@@ -636,7 +637,7 @@ impl VulkanData {
         self.create_cubemap_resources();
         self.create_compute_images();
         for _ in 0..1 {
-            let mut quad = Object::new(self, &NEGATIVE_Z_VERTICES.to_vec(), &QUAD_INDICES.to_vec(), None);
+            let mut quad = RenderObject::new(self, &NEGATIVE_Z_VERTICES.to_vec(), &QUAD_INDICES.to_vec(), None);
             quad.texture = Some(CombinedImage {
                 image: self.compute_images[0],
                 image_view: self.compute_image_views[0],
@@ -729,7 +730,7 @@ impl VulkanData {
 
             let barrier = vk::ImageMemoryBarrier::builder()
                 .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::GENERAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .src_access_mask(vk::AccessFlags::empty())
                 .dst_access_mask(vk::AccessFlags::MEMORY_WRITE)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -862,7 +863,7 @@ impl VulkanData {
     //
     // }
 
-    fn load_obj_model(&mut self, path: std::path::PathBuf){
+    fn load_obj_model(&mut self, path: std::path::PathBuf, texture_path: std::path::PathBuf){
 
 
         let (models, _) = tobj::load_obj(path, &tobj::LoadOptions{
@@ -897,8 +898,7 @@ impl VulkanData {
             }
 
         }
-        let object = Object::new(self, &vertices, &vec![], Some(std::path::PathBuf::from("viking_room.png")));
-        self.uniform_buffer_object.model[object.object_index as usize] = self.uniform_buffer_object.model[object.object_index as usize] * Matrix4::<f32>::from_scale(3.0);
+        let object = RenderObject::new(self, &vertices, &vec![], Some(texture_path));
         self.objects.push(object);
 
     }
@@ -1019,10 +1019,19 @@ impl VulkanData {
             image_infos.extend(self.cubemap.as_ref().unwrap().get_image_infos());
             image_infos.push(
                 vk::DescriptorImageInfo::builder()
-                    .image_layout(vk::ImageLayout::GENERAL)
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(self.compute_image_views[0])
                     .sampler(self.compute_samplers[0])
                     .build());
+            let textures_left = NUM_MODELS - image_infos.len();
+            for _ in 0..textures_left{
+                image_infos.push(
+                    vk::DescriptorImageInfo::builder()
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .image_view(self.compute_image_views[0])
+                        .sampler(self.compute_samplers[0])
+                        .build());
+            }
             let descriptor_writes = [
                 vk::WriteDescriptorSet::builder()
                     .dst_set(*descriptor_set)
@@ -1259,6 +1268,9 @@ impl VulkanData {
         }
             .unwrap();
         unsafe { self.device.as_ref().unwrap().reset_fences(&fences) }.unwrap();
+
+        self.run_commands();
+
 
         let image_index: u32;
 
@@ -1587,9 +1599,14 @@ impl VulkanData {
                     .build());
             }
             image_infos.extend(self.cubemap.as_ref().unwrap().get_image_infos());
+            image_infos.push(
+                vk::DescriptorImageInfo::builder()
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image_view(self.compute_image_views[0])
+                    .sampler(self.compute_samplers[0])
+                    .build());
 
             let mut storage_info: Vec<vk::DescriptorImageInfo> = vec![];
-
             for image_view in &self.compute_image_views{
                 storage_info.push(vk::DescriptorImageInfo::builder()
                     .image_view(*image_view)
@@ -1849,7 +1866,6 @@ impl VulkanData {
 
         println!("Num command buffers: {:?}", self.command_buffers.as_ref().unwrap().len());
 
-        self.run_commands();
 
     }
 
@@ -1891,6 +1907,31 @@ impl VulkanData {
                                                   &[])
                 };
 
+                let barrier = vk::ImageMemoryBarrier::builder()
+                    .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .new_layout(vk::ImageLayout::GENERAL)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .src_access_mask(vk::AccessFlags::MEMORY_WRITE| vk::AccessFlags::MEMORY_READ)
+                    .dst_access_mask(vk::AccessFlags::MEMORY_WRITE| vk::AccessFlags::MEMORY_READ)
+                    .image(self.compute_images[0])
+                    .subresource_range(vk::ImageSubresourceRange{
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1
+                    });
+
+                unsafe{
+                    self.device.as_ref().unwrap().cmd_pipeline_barrier(*command_buffer,
+                                                                       vk::PipelineStageFlags::ALL_COMMANDS,
+                                                                       vk::PipelineStageFlags::ALL_COMMANDS,
+                                                                       vk::DependencyFlags::empty(),
+                                                                       &[],
+                                                                       &[],
+                                                                       &[barrier.build()]);
+                }
 
 
                 let push_constant = PushConstants{ uniform_index: self.objects[0].object_index, texture_index: self.objects[0].texture.as_ref().unwrap().index};
@@ -1912,7 +1953,7 @@ impl VulkanData {
 
                 let barrier = vk::ImageMemoryBarrier::builder()
                     .old_layout(vk::ImageLayout::GENERAL)
-                    .new_layout(vk::ImageLayout::GENERAL)
+                    .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .src_access_mask(vk::AccessFlags::MEMORY_WRITE| vk::AccessFlags::MEMORY_READ)
@@ -1962,7 +2003,6 @@ impl VulkanData {
 
 
 
-                println!("Pipeline count: {:?}", self.graphics_pipelines.len());
                 for pipeline in &self.graphics_pipelines{
                     unsafe {
                         self.device.as_ref().unwrap().cmd_bind_pipeline(
@@ -2091,7 +2131,7 @@ impl VulkanData {
 
     fn create_command_pool(&mut self) {
         let command_pool_create_info =
-            vk::CommandPoolCreateInfo::builder().queue_family_index(self.main_queue_index.unwrap());
+            vk::CommandPoolCreateInfo::builder().flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER).queue_family_index(self.main_queue_index.unwrap());
         self.command_pool = Some(
             unsafe {
                 self.device
@@ -2275,7 +2315,7 @@ impl VulkanData {
         for object in &self.objects{
             self.uniform_buffer_object.view[object.object_index as usize] = self.player.get_view_matrix();
             self.uniform_buffer_object.proj[object.object_index as usize] =
-                cgmath::perspective(Deg(90.0), surface_width / surface_height, 0.1, 100.0);
+                cgmath::perspective(Deg(90.0), surface_width / surface_height, 0.001, 100.0);
 
         }
         let random: [f32;NUM_RANDOM] = get_random_vector(&self.rng, NUM_RANDOM).try_into().unwrap();
