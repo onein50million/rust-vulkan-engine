@@ -8,8 +8,8 @@ const uint TYPE_PLANE = 1;
 
 const uint MAX_BOUNCES = 5;
 
-const uint SAMPLE_COUNT = 1;
-const uint SAMPLE_WIDTH = 1;
+const uint SAMPLE_COUNT = 9;
+const uint SAMPLE_WIDTH = 3;
 
 layout(binding = 0) uniform UniformBufferObject {
     mat4 model[num_models];
@@ -209,7 +209,7 @@ void main()
             random_vector.z = (ubos.random[((gl_GlobalInvocationID.x * gl_GlobalInvocationID.y + 2 ) + current_sample*123) % NUM_RANDOM] - 0.5)*2.0;
             //            random_vector = normalize(random_vector);
 
-            target += (random_vector*0.1);
+            target += (random_vector*0.9);
         }
     }
 
