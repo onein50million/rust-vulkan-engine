@@ -1,4 +1,4 @@
-use cgmath::{Vector3, Vector2, Matrix4, Transform, Deg, Matrix3, InnerSpace, Vector4};
+use cgmath::{Vector3, Vector2, Matrix4, Transform, Deg, Matrix3, InnerSpace, Vector4, Quaternion};
 use ash::vk;
 use crate::NUM_RANDOM;
 
@@ -27,6 +27,7 @@ pub(crate)struct PushConstants {
     pub(crate)texture_index: u32,
 }
 
+
 pub(crate)struct Player {
     movement: Vector3<f64>,
     position: Vector3<f64>,
@@ -38,7 +39,6 @@ pub(crate)struct Player {
     touching_ground: bool,
     sprinting: bool,
 }
-
 impl Default for Player{
     fn default() -> Self {
         Player{
