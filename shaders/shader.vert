@@ -1,12 +1,17 @@
 #version 450
 
-const int num_models = 100;
-
+const int NUM_MODELS = 100;
+const int NUM_RANDOM = 100;
 
 layout(binding = 0) uniform UniformBufferObject {
-    mat4 model[num_models];
-    mat4 view[num_models];
-    mat4 proj[num_models];
+    mat4 model[NUM_MODELS];
+    mat4 view[NUM_MODELS];
+    mat4 proj[NUM_MODELS];
+    float random[NUM_RANDOM];
+    int player_index;
+    int value2;
+    int value3;
+    int value4;
 } ubos;
 
 layout(push_constant) uniform PushConstants{
