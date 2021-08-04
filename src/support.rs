@@ -3,7 +3,7 @@ use ash::vk;
 
 pub(crate) const FRAMERATE_TARGET: f64 = 280.0;
 pub(crate) const NUM_RANDOM: usize = 100;
-pub(crate) const FRAME_SAMPLES: usize = 10;
+pub(crate) const FRAME_SAMPLES: usize = 500;
 pub(crate) const NUM_MODELS: usize = 100;
 
 #[derive(Copy, Clone)]
