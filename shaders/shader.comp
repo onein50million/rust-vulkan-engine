@@ -1,12 +1,12 @@
 #version 450
 layout(local_size_x = 8, local_size_y =8, local_size_z = 1) in;
 
-const bool RAYTRACING_ENABLED = false;
+const bool RAYTRACING_ENABLED = true;
 
 const int NUM_MODELS = 100;
 const int NUM_RANDOM = 100;
 const uint TYPE_SPHERE = 0;
-const uint TYPE_PLANE = 1;
+const uint TYPE_BOX = 1;
 
 const uint MAX_BOUNCES = 5;
 
@@ -49,8 +49,8 @@ struct Hittable{
     mat4 data; //Might be a better way to do this
 };
 
-vec3 view_transform(vec3 position){
-    mat4 ubo = ubos.view[pushConstant.uniform_index];
+vec3 camera_location(vec3 position){
+    mat4 ubo = inverse(ubos.view[pushConstant.uniform_index]);
 
     return (ubo * vec4(position,1.0)).xyz;
 }
@@ -59,6 +59,7 @@ vec3 rayAt(Ray ray, float ratio){
     return ray.origin + ray.direction*ratio;
 }
 float hit_sphere(vec3 center, float radius, Ray ray){
+//    center = camera_location(center);
 
     //TODO: Learn vector algebra
     vec3 origin_center = ray.origin - center;
@@ -73,20 +74,60 @@ float hit_sphere(vec3 center, float radius, Ray ray){
     }
 }
 
-float hit(Ray ray, Hittable hittable){
-    if(hittable.type == TYPE_SPHERE){
-        return hit_sphere(view_transform(hittable.data[1].xyz),hittable.data[0].x, ray);
+float hit_box(vec3 position, float size, Ray ray) {
+    float tmin = -1.0/0.0;
+    float tmax = 1.0/0.0;
+
+    for(int axis = 0; axis < 3; axis++){
+        float invD = 1.0/ray.direction[axis];
+        float t0 = (position[axis] - ray.origin[axis]) * invD;
+        float t1 = (position[axis] + size - ray.origin[axis]) * invD;
+//        if(invD < 0.0){
+//            float temp = t0;
+//            t0 = t1;
+//            t1 = temp;
+//        }
+        tmin = max(min(t0,t1), tmin);
+        tmax = min(max(t0,t1), tmax);
+
+        if (tmax <= tmin){
+            return -1.0;
+        }
+
     }
-    return -1.0;
+    return min(tmin,tmax);
 }
 
+vec3 sphere_normals(vec3 center, vec3 hit_position) {
+    return normalize(hit_position - center);
+}
+
+vec3 box_normals(vec3 position, float size, vec3 hit_position) {
+    vec3 relative_position = (hit_position - ( size*0.5 + position))*2.0 / size;
+    vec3 clipped = step(0.99999, abs(relative_position));
+
+    vec3 out_normal = mix(relative_position, clipped, 1.0);
+    return out_normal;
+}
+
+
+
+
+float hit(Ray ray, Hittable hittable){
+    return mix(hit_sphere((hittable.data[1].xyz),hittable.data[0].x, ray),hit_box(hittable.data[1].xyz, hittable.data[0].x, ray),hittable.type);
+}
+
+vec3 get_normals(vec3 position, Hittable hittable){
+    return mix(sphere_normals(hittable.data[1].xyz, position),box_normals(hittable.data[1].xyz, hittable.data[0].x, position),hittable.type);
+
+}
 
 
 RayResult castRay(Ray ray){
 
     vec4 player_position = ubos.model[ubos.player_index]*vec4(0.0,0.0,0.0,1.0);
 
-    Hittable hittables[6] = Hittable[6](
+    Hittable hittables[5] = Hittable[5](
     Hittable(0,
     mat4(
     0.5, 0.0, 0.0, 0.0,
@@ -126,30 +167,12 @@ RayResult castRay(Ray ray){
     1.0, 1.0, 0.0, 0.0,
     0.0, 0.0, 0.0, 0.0
     )
-    ),
-    Hittable(0,
-    mat4(
-    100.0, 0.0, 0.0, 0.0,
-    0.0, 101.0, 0.0, 0.0,
-    0.0, 1.0, 1.0, 0.0,
-    0.0, 0.0, 0.0, 0.0
-    )
     )
     );
 
-    const int NUM_SPHERES = 100;
-    Hittable test_spheres[NUM_SPHERES];
-
-    for(int i =0; i < NUM_SPHERES; i++){
-        test_spheres[i] = Hittable(0,
-        mat4(
-        1.0, 0.0, 0.0, 0.0,
-        i*3.0, 0.0, 0.0, 0.0,
-        1.0, 1.0, 1.0, 0.0,
-        0.0, 0.0, 0.0, 0.0
-        ));
-    }
-
+    const int NUM_SHAPES_WIDTH = 10;
+    const int NUM_SHAPES = NUM_SHAPES_WIDTH * NUM_SHAPES_WIDTH;
+    Hittable test_shapes[NUM_SHAPES];
 
     float closest_distance = 1.0/0.0; //infinity
     RayResult result;
@@ -159,21 +182,33 @@ RayResult castRay(Ray ray){
         if (hit_result > 0.0 && hit_result < closest_distance){
             closest_distance = hit_result;
             found = true;
-            vec3 normal = normalize(rayAt(ray,hit_result) - view_transform(hittables[i].data[1].xyz));
+            vec3 normal = get_normals(rayAt(ray,hit_result),hittables[i]);
             result = RayResult(hittables[i].data[2].xyz,rayAt(ray,hit_result),normal,false, 0.0);
         }
     }
 
-//    for(int i = 0; i < NUM_SPHERES; i++){
-//        float hit_result = hit(ray, test_spheres[i]);
-//        if (hit_result > 0.0 && hit_result < closest_distance){
-//            closest_distance = hit_result;
-//            found = true;
-//            vec3 normal = normalize(rayAt(ray,hit_result) - view_transform(test_spheres[i].data[1].xyz));
-//            result = RayResult(test_spheres[i].data[2].xyz,rayAt(ray,hit_result),normal,false, 0.0);
-//        }
-//    }
+    for(int i = 0; i < NUM_SHAPES; i++){
 
+        const int cube_size = 100;
+
+        Hittable test_shape =
+                Hittable(TYPE_BOX,
+                mat4(
+                cube_size, 0.0, 0.0, 0.0,
+                (i % NUM_SHAPES_WIDTH) * cube_size, 1.0, (i / NUM_SHAPES_WIDTH) * cube_size, 0.0,
+                0.1,0.8,0.1, 0.0,
+                //                ubos.random[(i*3) % NUM_RANDOM], ubos.random[(i*3+1) % NUM_RANDOM], ubos.random[(i*3+2) % NUM_RANDOM], 0.0, //slow
+                0.0, 0.0, 0.0, 0.0
+                ));
+
+        float hit_result = hit(ray, test_shape);
+        if (hit_result > 0.0 && hit_result < closest_distance){
+            closest_distance = hit_result;
+            found = true;
+            vec3 normal = get_normals(rayAt(ray,hit_result),test_shape);
+            result = RayResult(test_shape.data[2].xyz,rayAt(ray,hit_result),normal,false, 0.0);
+        }
+    }
 
     if(found){
         return result;
@@ -181,8 +216,8 @@ RayResult castRay(Ray ray){
 
     vec3 sun_position = normalize(vec3(0.0,-0.2,1.0));
     float sun_radius = 0.1;
-    float distance_to_sun = distance(normalize(ray.direction), (ubos.view[3] * vec4(sun_position,1.0)).xyz);
-    vec3 sky_color = vec3(0.26, 0.42, 0.70);
+    float distance_to_sun = distance(normalize(ray.direction), (sun_position));
+    vec3 sky_color = mix(vec3(0.26, 0.42, 0.70), vec3(0.02, 0.04, 0.07), distance_to_sun*0.5);
     vec3 sun_color = vec3(0.97, 0.80, 0.59);
     float sky_light_power = 10.0;
     float sun_light_power = 100.0;
@@ -208,17 +243,20 @@ void main()
     }
 
     vec3 resolution = gl_NumWorkGroups * gl_WorkGroupSize;
+//    vec3 resolution = vec3(800,600,1);
     float aspect_ratio = resolution.x/resolution.y;
     vec4 out_color = vec4(0.0);
 
     float focal_length = 1.0;
 
-    vec2 viewport_size = vec2(2.0 * aspect_ratio, 2.0);
 
-    vec3 horizontal = vec3(viewport_size.x,0.0,0.0);
-    vec3 vertical = vec3(0.0,viewport_size.y,0.0);
-    vec3 origin = (vec3(0.0));
-    vec3 upper_left_corner = (origin - horizontal/2.0 - vertical/2.0 - vec3(0.0,0.0,focal_length));
+    float viewport_height = 2.0;
+    vec2 viewport_size = vec2(viewport_height * aspect_ratio, viewport_height);
+
+    vec3 horizontal = (vec3(viewport_size.x,0.0,0.0));
+    vec3 vertical = (vec3(0.0,viewport_size.y,0.0));
+    vec3 origin = (vec3(0.0,0.0,0.0));
+    vec3 upper_left_corner = (-horizontal/2.0 - vertical/2.0 - vec3(0.0,0.0,focal_length));
 
     float sample_size = 1.0/SAMPLE_COUNT;
 
@@ -231,16 +269,19 @@ void main()
         vec2 offset = sample_size*sample_coord - sample_size;
         vec2 screen_ratio = (gl_GlobalInvocationID.xy + offset)/resolution.xy;
 
-        vec3 target = (upper_left_corner + screen_ratio.x * horizontal + screen_ratio.y * vertical);
-        origin = (vec3(0.0));
+        origin = (camera_location(vec3(0.0)));
+        vec3 target = (inverse(ubos.view[3]) * vec4(upper_left_corner + screen_ratio.x * horizontal + screen_ratio.y * vertical,1.0)).xyz;
+//        vec3 target = vec3(0.0,0.0,1.0);
         samples[current_sample] = vec4(0.0,0.0,0.0,1.0);
         vec4 last_albedo = vec4(0.0,0.0,0.0,1.0);
 
         for(int i = 0; i<MAX_BOUNCES; i++){
-            Ray ray = Ray(origin,target);
+            Ray ray = Ray((origin),(target));
             RayResult ray_result = castRay(ray);
+
+//            samples[current_sample] = vec4((ray_result.normal + 1.0)/2.0, 1.0);
+            float power = ray_result.light_power * pow(1.0, i);
             if (ray_result.is_light){
-                float power = ray_result.light_power * pow(1.0, i);
                 if(i <= 0){
                     samples[current_sample] = vec4(ray_result.color*power/exposure,1.0);
                 }else{
@@ -255,9 +296,9 @@ void main()
             random_vector.x = (ubos.random[((gl_GlobalInvocationID.x * gl_GlobalInvocationID.y) + current_sample*56) % NUM_RANDOM] - 0.5)*2.0;
             random_vector.y = (ubos.random[((gl_GlobalInvocationID.x * gl_GlobalInvocationID.y + 1) + current_sample*32) % NUM_RANDOM] - 0.5)*2.0;
             random_vector.z = (ubos.random[((gl_GlobalInvocationID.x * gl_GlobalInvocationID.y + 2 ) + current_sample*123) % NUM_RANDOM] - 0.5)*2.0;
-            //            random_vector = normalize(random_vector);
+            random_vector = normalize(random_vector);
 
-            target += (random_vector*0.0);
+            target += (random_vector*0.1);
         }
     }
 
