@@ -1,5 +1,6 @@
 use cgmath::{Vector3, Vector2, Matrix4, Transform, Deg, Matrix3, InnerSpace, Vector4, Quaternion, Point3};
 use ash::vk;
+use crate::octree::Node;
 
 pub(crate) const FRAMERATE_TARGET: f64 = 280.0;
 pub(crate) const NUM_RANDOM: usize = 100;
@@ -13,6 +14,15 @@ pub(crate) struct Vertex {
     pub(crate) color: Vector3<f32>,
     pub(crate) texture_coordinate: Vector2<f32>,
 }
+
+// #[derive(Copy, Clone)]
+// #[repr(C)]
+// pub(crate) struct NodeBuffer{
+//     pub(crate) node_type: Vector4<u32>,
+//     pub(crate) node_indices: [Vector4<u32>;8],
+// }
+
+
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub(crate)struct UniformBufferObject {
@@ -20,14 +30,18 @@ pub(crate)struct UniformBufferObject {
     pub(crate)view: [Matrix4<f32>; NUM_MODELS],
     pub(crate)proj: [Matrix4<f32>; NUM_MODELS],
     pub(crate)random: [Vector4<f32>; NUM_RANDOM], //std140 packing so it needs to be 16 bytes wide
-    pub(crate) player_index: u32, pub(crate) value2: i32, pub(crate) value3: i32, pub(crate) value4: i32,
-
+    pub(crate) player_index: u32,
+    pub(crate) value2: i32,
+    pub(crate) value3: i32,
+    pub(crate) value4: i32,
+    pub(crate) mouse_position: Vector2<f32>,
 }
 
 #[repr(C)]
 pub(crate)struct PushConstants {
     pub(crate)uniform_index: u32,
     pub(crate)texture_index: u32,
+    pub(crate)constant: f32,
 }
 
 
