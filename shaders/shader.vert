@@ -14,9 +14,12 @@ layout(binding = 0) uniform UniformBufferObject {
     int value4;
 } ubos;
 
+
 layout(push_constant) uniform PushConstants{
     int uniform_index;
     int texture_index;
+    float constant;
+
 } pushConstant;
 
 layout(location = 0) in vec3 inPosition;

@@ -1,9 +1,11 @@
-use cgmath::{Vector3, Quaternion, Matrix4, Transform, One, Vector2, Matrix3, Deg, InnerSpace, Point3, Zero, Euler, Rotation3, Rad, Angle};
+use cgmath::{Vector3, Quaternion, Matrix4, Transform, One, Vector2, Matrix3, Deg, InnerSpace, Point3, Zero, Euler, Rotation3, Rad, Angle, Vector4};
 use crate::renderer::*;
 use std::time::Instant;
 use winit::window::Window;
 use std::f32::consts::PI;
 use cgmath::num_traits::Pow;
+use crate::octree::Octree;
+use std::convert::TryInto;
 
 trait Position{
     fn get_position(&self) -> Vector3<f32>;
@@ -30,6 +32,8 @@ pub(crate)struct Inputs{
     pub(crate)backward: f32,
     pub(crate)left: f32,
     pub(crate)right: f32,
+    pub(crate) camera_y: f32,
+    pub(crate) camera_x: f32,
     pub(crate)up: f32,
     pub(crate)down: f32,
     pub(crate)sprint: f32,
@@ -41,6 +45,8 @@ impl Inputs{
             backward: 0.0,
             left: 0.0,
             right: 0.0,
+            camera_y: 0.0,
+            camera_x: 0.0,
             up: 0.0,
             down: 0.0,
             sprint: 0.0
@@ -53,14 +59,16 @@ pub(crate) struct Camera {
     position:Vector3<f32>,
     rotation:Quaternion<f32>,
     target: Vector3<f32>,
-    angle: Deg<f32>,
+    angle: Vector2<Deg<f32>>,
 }
 impl Camera{
-    fn process(&mut self, delta_time:  f64){
+    fn process(&mut self, delta_time:  f64, inputs: &Inputs){
 
+        self.angle.x += Deg(inputs.camera_x*50.0*delta_time as f32);
+        self.angle.y += Deg(inputs.camera_y*50.0*delta_time as f32);
         let radius = 5.0;
-        self.angle += Deg(10.0*delta_time as f32);
-        self.position = self.target + Vector3::new(self.angle.cos() * radius, -radius, self.angle.sin() * radius);
+
+        self.position = self.target + Vector3::new(self.angle.y.sin() * self.angle.x.cos() * radius, self.angle.y.cos() * -radius, self.angle.y.sin() * self.angle.x.sin() * radius);
 
 
         let difference = self.target - self.position;
@@ -203,6 +211,7 @@ pub(crate) struct Game {
     pub(crate) focused: bool,
     last_frame_instant: Instant,
     pub(crate) vulkan_data: VulkanData,
+    voxels: Octree,
 }
 
 impl Game{
@@ -214,10 +223,15 @@ impl Game{
             position: Vector3::new(0.0,-5.0,0.0),
             rotation: Quaternion::one(),
             target: player.position,
-            angle: Deg(0.0)
+            angle: Vector2::new(Deg(0.0), Deg(0.0))
         };
 
-        let mut vulkan_data = VulkanData::new();
+        let mut voxels = Octree::new();
+        voxels.fill_random(2);
+        voxels.calculate_nexts();
+        println!("num nodes: {:}",voxels.nodes.len());
+
+        let mut vulkan_data = VulkanData::new(voxels.nodes.clone());
         vulkan_data.init_vulkan(&window);
         player.model = Some(vulkan_data.player_object_index);
 
@@ -229,7 +243,8 @@ impl Game{
             inputs: Inputs::new(),
             focused: false,
             last_frame_instant: Instant::now(),
-            vulkan_data
+            vulkan_data,
+            voxels,
         };
         return game;
     }
@@ -241,14 +256,17 @@ impl Game{
         self.player.process(delta_time as f32);
 
         self.camera.target = self.player.position - Vector3::new(0.0,Player::HEIGHT, 0.0);
-        self.camera.process( delta_time);
+        self.camera.process( delta_time, &self.inputs);
 
 
         for i in 0..self.objects.len(){
             self.objects[i].process(delta_time);
         }
-        self.vulkan_data.process(&self.camera);
+        // self.vulkan_data.nodes = self.voxels.nodes.clone();
         self.vulkan_data.uniform_buffer_object.model[self.player.model.unwrap()] = Matrix4::from_translation(self.player.position) * Matrix4::from(self.player.rotation);
+        self.vulkan_data.uniform_buffer_object.mouse_position = Vector2::new((self.mouse_buffer.x/self.vulkan_data.surface_capabilities.unwrap().current_extent.width as f64) as f32,
+                                                                             (self.mouse_buffer.y/self.vulkan_data.surface_capabilities.unwrap().current_extent.height as f64) as f32);
+        self.vulkan_data.process(&self.camera);
         self.vulkan_data.draw_frame();
     }
 }
