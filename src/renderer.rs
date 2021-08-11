@@ -12,9 +12,7 @@ use ash::extensions::ext::DebugUtils;
 use crate::octree::Node;
 use crate::{main, octree};
 use ash::vk::{CommandBuffer, PipelineLayout};
-use cgmath::num_traits::Pow;
-
-const BASE_VOXEL_SIZE: f32 = 4.0;
+const BASE_VOXEL_SIZE: f32 = 128.0;
 
 struct CombinedImage{
     image: vk::Image,
@@ -32,7 +30,9 @@ pub (crate) struct RenderObject {
     index_start: u32,
     index_count: u32,
     texture: Option<CombinedImage>,
-    pub(crate) object_index: u32,
+    pub(crate) model: Matrix4<f32>,
+    pub(crate) view: Matrix4<f32>,
+    pub(crate) proj: Matrix4<f32>,
 }
 
 impl RenderObject {
@@ -140,9 +140,10 @@ impl RenderObject {
             index_start,
             index_count: indices.len() as u32,
             texture,
-            object_index: vulkan_data.current_object_index,
+            model: Matrix4::identity(),
+            view: Matrix4::identity(),
+            proj: Matrix4::identity()
         };
-        vulkan_data.current_object_index += 1;
         return object;
     }
 }
@@ -155,7 +156,13 @@ impl Drawable for RenderObject {
                 Some(image) => image.index,
                 None => 0
             };
-            let push_constant = PushConstants{ uniform_index:self.object_index, texture_index, constant: frag_constant };
+            let push_constant = PushConstants{
+                model: self.model,
+                view: self.view,
+                proj: self.proj,
+                texture_index,
+                constant: frag_constant,
+            };
             let constants = std::slice::from_raw_parts(
                 (&push_constant as *const PushConstants) as *const u8,
                 std::mem::size_of::<PushConstants>(),
@@ -227,7 +234,6 @@ impl Cubemap{
             positive_z: RenderObject::new(vulkan_data, &POSITIVE_Z_VERTICES.to_vec(), indices, Some(positive_z)),
             negative_z: RenderObject::new(vulkan_data, &NEGATIVE_Z_VERTICES.to_vec(), indices, Some(negative_z)),
         };
-        vulkan_data.uniform_buffer_object.model[cubemap.positive_x.object_index as usize] = Matrix4::from_translation(Vector3::<f32>::new(0.0,0.0,-2.0));
 
         return cubemap;
     }
@@ -249,30 +255,28 @@ impl Cubemap{
 }
 
 impl Cubemap{
-    fn process(vulkan_data: &mut VulkanData,camera: &Camera, aspect_ratio: f32) {
+    fn process(&mut self,camera: &Camera, proj: Matrix4<f32>) {
         let view = camera.get_view_matrix_no_translation();
-        vulkan_data.uniform_buffer_object.view[vulkan_data.cubemap.as_ref().unwrap().positive_x.object_index as usize] = view;
-        vulkan_data.uniform_buffer_object.view[vulkan_data.cubemap.as_ref().unwrap().negative_x.object_index as usize] = view;
-        vulkan_data.uniform_buffer_object.view[vulkan_data.cubemap.as_ref().unwrap().positive_y.object_index as usize] = view;
-        vulkan_data.uniform_buffer_object.view[vulkan_data.cubemap.as_ref().unwrap().negative_y.object_index as usize] = view;
-        vulkan_data.uniform_buffer_object.view[vulkan_data.cubemap.as_ref().unwrap().positive_z.object_index as usize] = view;
-        vulkan_data.uniform_buffer_object.view[vulkan_data.cubemap.as_ref().unwrap().negative_z.object_index as usize] = view;
+        self.positive_x.view = view;
+        self.negative_x.view = view;
+        self.positive_y.view = view;
+        self.negative_y.view = view;
+        self.positive_z.view = view;
+        self.negative_z.view = view;
 
-        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().positive_x.object_index as usize] = Matrix4::identity();
-        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().negative_x.object_index as usize] = Matrix4::identity();
-        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().positive_y.object_index as usize] = Matrix4::identity();
-        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().negative_y.object_index as usize] = Matrix4::identity();
-        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().positive_z.object_index as usize] = Matrix4::identity();
-        vulkan_data.uniform_buffer_object.model[vulkan_data.cubemap.as_ref().unwrap().negative_z.object_index as usize] = Matrix4::identity();
+        self.positive_x.model = Matrix4::identity();
+        self.negative_x.model = Matrix4::identity();
+        self.positive_y.model = Matrix4::identity();
+        self.negative_y.model = Matrix4::identity();
+        self.positive_z.model = Matrix4::identity();
+        self.negative_z.model = Matrix4::identity();
 
-        let projection = cgmath::perspective(Deg(90.0), aspect_ratio, 0.1, 100.0);
-
-        vulkan_data.uniform_buffer_object.proj[vulkan_data.cubemap.as_ref().unwrap().positive_x.object_index as usize] = projection;
-        vulkan_data.uniform_buffer_object.proj[vulkan_data.cubemap.as_ref().unwrap().negative_x.object_index as usize] = projection;
-        vulkan_data.uniform_buffer_object.proj[vulkan_data.cubemap.as_ref().unwrap().positive_y.object_index as usize] = projection;
-        vulkan_data.uniform_buffer_object.proj[vulkan_data.cubemap.as_ref().unwrap().negative_y.object_index as usize] = projection;
-        vulkan_data.uniform_buffer_object.proj[vulkan_data.cubemap.as_ref().unwrap().positive_z.object_index as usize] = projection;
-        vulkan_data.uniform_buffer_object.proj[vulkan_data.cubemap.as_ref().unwrap().negative_z.object_index as usize] = projection;
+        self.positive_x.proj = proj;
+        self.negative_x.proj = proj;
+        self.positive_y.proj = proj;
+        self.negative_y.proj = proj;
+        self.positive_z.proj = proj;
+        self.negative_z.proj = proj;
 
     }
 }
@@ -369,7 +373,9 @@ impl Voxels{
                 index_start: self.positive_x_index_offset,
                 index_count: QUAD_INDICES.len() as u32,
                 texture: None,
-                object_index: vulkan_data.current_object_index
+                model: Matrix4::identity(),
+                view: Matrix4::identity(),
+                proj: Matrix4::identity()
             },
             negative_x: RenderObject {
                 vertex_start: self.negative_x_vertex_offset,
@@ -377,7 +383,10 @@ impl Voxels{
                 index_start: self.negative_x_index_offset,
                 index_count: QUAD_INDICES.len() as u32,
                 texture: None,
-                object_index: vulkan_data.current_object_index
+                model: Matrix4::identity(),
+                view: Matrix4::identity(),
+                proj: Matrix4::identity()
+
             },
             positive_y: RenderObject {
                 vertex_start: self.positive_y_vertex_offset,
@@ -385,7 +394,10 @@ impl Voxels{
                 index_start: self.positive_y_index_offset,
                 index_count: QUAD_INDICES.len() as u32,
                 texture: None,
-                object_index: vulkan_data.current_object_index
+                model: Matrix4::identity(),
+                view: Matrix4::identity(),
+                proj: Matrix4::identity()
+
             },
             negative_y: RenderObject {
                 vertex_start: self.negative_y_vertex_offset,
@@ -393,7 +405,10 @@ impl Voxels{
                 index_start: self.negative_y_index_offset,
                 index_count: QUAD_INDICES.len() as u32,
                 texture: None,
-                object_index: vulkan_data.current_object_index
+                model: Matrix4::identity(),
+                view: Matrix4::identity(),
+                proj: Matrix4::identity()
+
             },
             positive_z: RenderObject {
                 vertex_start: self.positive_z_vertex_offset,
@@ -401,7 +416,10 @@ impl Voxels{
                 index_start: self.positive_z_index_offset,
                 index_count: QUAD_INDICES.len() as u32,
                 texture: None,
-                object_index: vulkan_data.current_object_index
+                model: Matrix4::identity(),
+                view: Matrix4::identity(),
+                proj: Matrix4::identity()
+
             },
             negative_z: RenderObject {
                 vertex_start: self.negative_z_vertex_offset,
@@ -409,35 +427,36 @@ impl Voxels{
                 index_start: self.negative_z_index_offset,
                 index_count: QUAD_INDICES.len() as u32,
                 texture: None,
-                object_index: vulkan_data.current_object_index
+                model: Matrix4::identity(),
+                view: Matrix4::identity(),
+                proj: Matrix4::identity()
             },
         };
-        vulkan_data.current_object_index += 1;
         self.voxels.push(new_voxel);
     }
 
-    fn process(&self, uniform_buffer_object: &mut UniformBufferObject, view_matrix: Matrix4<f32>, proj_matrix: Matrix4<f32>){
-        for voxel in &self.voxels{
-            uniform_buffer_object.model[voxel.positive_x.object_index as usize] = Matrix4::from_translation(voxel.position) * Matrix4::from_scale(voxel.size);
-            uniform_buffer_object.model[voxel.negative_x.object_index as usize] = Matrix4::from_translation(voxel.position) * Matrix4::from_scale(voxel.size);
-            uniform_buffer_object.model[voxel.positive_y.object_index as usize] = Matrix4::from_translation(voxel.position) * Matrix4::from_scale(voxel.size);
-            uniform_buffer_object.model[voxel.negative_y.object_index as usize] = Matrix4::from_translation(voxel.position) * Matrix4::from_scale(voxel.size);
-            uniform_buffer_object.model[voxel.positive_z.object_index as usize] = Matrix4::from_translation(voxel.position) * Matrix4::from_scale(voxel.size);
-            uniform_buffer_object.model[voxel.negative_z.object_index as usize] = Matrix4::from_translation(voxel.position) * Matrix4::from_scale(voxel.size);
+    fn process(&mut self, view_matrix: Matrix4<f32>, projection_matrix: Matrix4<f32>){
+        for mut voxel in 0..self.voxels.len(){
+            self.voxels[voxel].positive_x.model = Matrix4::from_translation(self.voxels[voxel].position) * Matrix4::from_scale(self.voxels[voxel].size);
+            self.voxels[voxel].negative_x.model = Matrix4::from_translation(self.voxels[voxel].position) * Matrix4::from_scale(self.voxels[voxel].size);
+            self.voxels[voxel].positive_y.model = Matrix4::from_translation(self.voxels[voxel].position) * Matrix4::from_scale(self.voxels[voxel].size);
+            self.voxels[voxel].negative_y.model = Matrix4::from_translation(self.voxels[voxel].position) * Matrix4::from_scale(self.voxels[voxel].size);
+            self.voxels[voxel].positive_z.model = Matrix4::from_translation(self.voxels[voxel].position) * Matrix4::from_scale(self.voxels[voxel].size);
+            self.voxels[voxel].negative_z.model = Matrix4::from_translation(self.voxels[voxel].position) * Matrix4::from_scale(self.voxels[voxel].size);
 
-            uniform_buffer_object.view[voxel.positive_x.object_index as usize] = view_matrix;
-            uniform_buffer_object.view[voxel.negative_x.object_index as usize] = view_matrix;
-            uniform_buffer_object.view[voxel.positive_y.object_index as usize] = view_matrix;
-            uniform_buffer_object.view[voxel.negative_y.object_index as usize] = view_matrix;
-            uniform_buffer_object.view[voxel.positive_z.object_index as usize] = view_matrix;
-            uniform_buffer_object.view[voxel.negative_z.object_index as usize] = view_matrix;
+            self.voxels[voxel].positive_x.view = view_matrix;
+            self.voxels[voxel].negative_x.view = view_matrix;
+            self.voxels[voxel].positive_y.view = view_matrix;
+            self.voxels[voxel].negative_y.view = view_matrix;
+            self.voxels[voxel].positive_z.view = view_matrix;
+            self.voxels[voxel].negative_z.view = view_matrix;
 
-            uniform_buffer_object.proj[voxel.positive_x.object_index as usize] = proj_matrix;
-            uniform_buffer_object.proj[voxel.negative_x.object_index as usize] = proj_matrix;
-            uniform_buffer_object.proj[voxel.positive_y.object_index as usize] = proj_matrix;
-            uniform_buffer_object.proj[voxel.negative_y.object_index as usize] = proj_matrix;
-            uniform_buffer_object.proj[voxel.positive_z.object_index as usize] = proj_matrix;
-            uniform_buffer_object.proj[voxel.negative_z.object_index as usize] = proj_matrix;
+            self.voxels[voxel].positive_x.proj = projection_matrix;
+            self.voxels[voxel].negative_x.proj = projection_matrix;
+            self.voxels[voxel].positive_y.proj = projection_matrix;
+            self.voxels[voxel].negative_y.proj = projection_matrix;
+            self.voxels[voxel].positive_z.proj = projection_matrix;
+            self.voxels[voxel].negative_z.proj = projection_matrix;
 
         }
     }
@@ -517,7 +536,6 @@ pub(crate) struct VulkanData {
     compute_descriptor_set_layout: Option<vk::DescriptorSetLayout>,
     compute_descriptor_sets: Option<Vec<vk::DescriptorSet>>,
     last_frame_instant: std::time::Instant,
-    current_object_index: u32,
     current_texture_index: u32,
     pub(crate) objects: Vec<RenderObject>,
     pub(crate) player_object_index: usize,
@@ -535,9 +553,6 @@ impl VulkanData {
     pub(crate) fn new(nodes: Vec<Node>) -> Self {
 
         let uniform_buffer_object = UniformBufferObject {
-            model: [Matrix4::identity(); NUM_MODELS],
-            view: [Matrix4::identity(); NUM_MODELS],
-            proj: [cgmath::perspective(cgmath::Deg(90.0), 1.0, 0.1, 10.0); NUM_MODELS],
             random: [Vector4::new(0.0f32, 0.0f32, 0.0f32, 0.0f32,); NUM_RANDOM],
             player_index: 0,
             value2: 0,
@@ -614,7 +629,6 @@ impl VulkanData {
             uniform_buffer_pointers: vec![],
             uniform_buffers: vec![],
             uniform_buffer_allocations: vec![],
-            current_object_index: 0,
             current_texture_index: 0,
             objects: vec![],
             fullscreen_quads: vec![],
@@ -781,7 +795,7 @@ impl VulkanData {
         self.create_cubemap_resources();
         self.create_compute_images();
         for _ in 0..1 {
-            let mut quad = RenderObject::new(self, &NEGATIVE_Z_VERTICES.to_vec(), &QUAD_INDICES.to_vec(), None);
+            let mut quad = RenderObject::new(self, &POSITIVE_Z_VERTICES.to_vec(), &QUAD_INDICES.to_vec(), None);
             quad.texture = Some(CombinedImage {
                 image: self.compute_images[0],
                 image_view: self.compute_image_views[0],
@@ -1067,9 +1081,8 @@ impl VulkanData {
 
         }
         let new_object = RenderObject::new(self, &vertices, &vec![], Some(texture_path));
-        let new_object_index = new_object.object_index;
         self.objects.push(new_object);
-        return new_object_index as usize;
+        return self.objects.len() - 1;
     }
 
     fn create_depth_resources(&mut self){
@@ -2200,7 +2213,13 @@ impl VulkanData {
                 }
 
 
-                let push_constant = PushConstants{ uniform_index: self.objects[0].object_index, texture_index: self.objects[0].texture.as_ref().unwrap().index, constant: 1.0 };
+                let push_constant = PushConstants{
+                    model: Matrix4::identity(),
+                    view: self.objects[self.player_object_index].view,
+                    proj: Matrix4::identity(),
+                    texture_index: self.objects[0].texture.as_ref().unwrap().index,
+                    constant: 1.0
+                };
                 unsafe {
                     let constants = std::slice::from_raw_parts(
                         (&push_constant as *const PushConstants) as *const u8,
@@ -2558,19 +2577,26 @@ impl VulkanData {
         unsafe { self.instance.as_ref().unwrap().destroy_instance(None) };
     }
     pub(crate) fn process(&mut self, camera: &Camera) {
-        // println!("fps: {}", 1.0/delta_time);
 
         let surface_width = self.surface_capabilities.unwrap().current_extent.width as f32;
         let surface_height = self.surface_capabilities.unwrap().current_extent.height as f32;
+        let projection = cgmath::perspective(Deg(90.0), surface_width/surface_height, 0.1, 100.0);
 
-        // self.player.rotation.x += delta_time as f32;
-        Cubemap::process(self, camera,surface_width/surface_height);
-        for object in &self.objects{
-            self.uniform_buffer_object.view[object.object_index as usize] = camera.get_view_matrix();
-            self.uniform_buffer_object.proj[object.object_index as usize] =
-                cgmath::perspective(Deg(90.0), surface_width / surface_height, 0.001, 100.0);
+        self.cubemap.as_mut().unwrap().process( camera,projection);
+
+        for object in 0..self.objects.len(){
+            self.objects[object].view = camera.get_view_matrix();
+            self.objects[object].proj = projection;
+
         }
-        self.voxels.as_ref().unwrap().process(&mut self.uniform_buffer_object, camera.get_view_matrix(), cgmath::perspective(Deg(90.0), surface_width / surface_height, 0.001, 100.0));
+        for object in 0..self.fullscreen_quads.len(){
+            self.objects[object].view = camera.get_view_matrix();
+            self.objects[object].proj = projection;
+
+        }
+
+        self.voxels.as_mut().unwrap().process(camera.get_view_matrix(), projection);
+
 
         let random: [f32;NUM_RANDOM] = get_random_vector(&self.rng, NUM_RANDOM).try_into().unwrap();
         for i in 0..NUM_RANDOM{

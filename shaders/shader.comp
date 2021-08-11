@@ -3,10 +3,9 @@ layout(local_size_x = 8, local_size_y =8, local_size_z = 1) in;
 
 const bool RAYTRACING_ENABLED = true;
 
-const int NUM_MODELS = 100;
 const int NUM_RANDOM = 100;
 const int TREE_DEPTH = 10;
-const float base_voxel_size = 4;
+const float base_voxel_size = 128;
 const float SPECULARITY = 0.5;
 
 const uint TYPE_SPHERE = 0;
@@ -32,9 +31,6 @@ struct Node{
 };
 
 layout(binding = 0, std140) uniform UniformBufferObject {
-    mat4 model[NUM_MODELS];
-    mat4 view[NUM_MODELS];
-    mat4 proj[NUM_MODELS];
     vec4 random[NUM_RANDOM];
     int player_index;
     int value2;
@@ -44,14 +40,18 @@ layout(binding = 0, std140) uniform UniformBufferObject {
 
 } ubos;
 
+
+layout(push_constant) uniform PushConstants{
+    mat4 model;
+    mat4 view;
+    mat4 proj;
+    int texture_index;
+    float constant;
+} pushConstant;
+
 layout(binding = 3, std430) buffer NodeBuffer{
     Node nodes[];
 }node_buffer;
-
-layout(push_constant) uniform PushConstants{
-    int uniform_index;
-    int texture_index;
-} pushConstant;
 
 layout(set = 0, binding = 2, rgba8) uniform image2D outImage;
 
@@ -74,8 +74,7 @@ struct Hittable{
 };
 
 vec3 camera_location(vec3 position){
-    mat4 ubo = inverse(ubos.view[pushConstant.uniform_index]);
-
+    mat4 ubo = inverse(pushConstant.view);
     return (ubo * vec4(position,1.0)).xyz;
 }
 
@@ -377,7 +376,7 @@ void main()
         vec2 screen_ratio = (gl_GlobalInvocationID.xy + offset)/resolution.xy;
 
         origin = (camera_location(vec3(0.0)));
-        vec3 target = (inverse(ubos.view[3]) * vec4(upper_left_corner + screen_ratio.x * horizontal + screen_ratio.y * vertical,1.0)).xyz;
+        vec3 target = (inverse(pushConstant.view) * vec4(upper_left_corner + screen_ratio.x * horizontal + screen_ratio.y * vertical,1.0)).xyz - origin;
 //        vec3 target = vec3(0.0,0.0,1.0);
         samples[current_sample] = vec4(0.0,0.0,0.0,1.0);
         vec4 last_albedo = vec4(0.0,0.0,0.0,1.0);

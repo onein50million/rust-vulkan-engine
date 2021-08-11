@@ -4,7 +4,7 @@ use crate::octree::Node;
 
 pub(crate) const FRAMERATE_TARGET: f64 = 280.0;
 pub(crate) const NUM_RANDOM: usize = 100;
-pub(crate) const FRAME_SAMPLES: usize = 500;
+pub(crate) const FRAME_SAMPLES: usize = 100;
 pub(crate) const NUM_MODELS: usize = 100;
 
 #[derive(Copy, Clone)]
@@ -26,9 +26,6 @@ pub(crate) struct Vertex {
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub(crate)struct UniformBufferObject {
-    pub(crate)model: [Matrix4<f32>; NUM_MODELS],
-    pub(crate)view: [Matrix4<f32>; NUM_MODELS],
-    pub(crate)proj: [Matrix4<f32>; NUM_MODELS],
     pub(crate)random: [Vector4<f32>; NUM_RANDOM], //std140 packing so it needs to be 16 bytes wide
     pub(crate) player_index: u32,
     pub(crate) value2: i32,
@@ -39,13 +36,12 @@ pub(crate)struct UniformBufferObject {
 
 #[repr(C)]
 pub(crate)struct PushConstants {
-    pub(crate)uniform_index: u32,
+    pub(crate)model: Matrix4<f32>,
+    pub(crate)view: Matrix4<f32>,
+    pub(crate)proj: Matrix4<f32>,
     pub(crate)texture_index: u32,
     pub(crate)constant: f32,
 }
-
-
-
 
 impl Vertex {
     //noinspection RsSelfConvention
