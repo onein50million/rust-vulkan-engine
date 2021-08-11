@@ -330,11 +330,27 @@ pub(crate) const POSITIVE_Z_VERTICES: [Vertex; 4] = [
             y: 1.0,
             z: 1.0,
         },
-        texture_coordinate: Vector2 { x: 0.0, y: 0.0 },
+        texture_coordinate: Vector2 { x: 1.0, y: 0.0 },
     },
     Vertex {
         position: Vector3 {
             x: 1.0,
+            y: 1.0,
+            z: 1.0,
+        },
+        color: Vector3 {
+            x: 1.0,
+            y: 1.0,
+            z: 1.0,
+        },
+        texture_coordinate: Vector2 {
+            x: 1.0,
+            y: 1.0,
+        },
+    },
+    Vertex {
+        position: Vector3 {
+            x: -1.0,
             y: 1.0,
             z: 1.0,
         },
@@ -351,22 +367,6 @@ pub(crate) const POSITIVE_Z_VERTICES: [Vertex; 4] = [
     Vertex {
         position: Vector3 {
             x: -1.0,
-            y: 1.0,
-            z: 1.0,
-        },
-        color: Vector3 {
-            x: 1.0,
-            y: 1.0,
-            z: 1.0,
-        },
-        texture_coordinate: Vector2 {
-            x: 1.0,
-            y: 1.0,
-        },
-    },
-    Vertex {
-        position: Vector3 {
-            x: -1.0,
             y: -1.0,
             z: 1.0,
         },
@@ -375,7 +375,7 @@ pub(crate) const POSITIVE_Z_VERTICES: [Vertex; 4] = [
             y: 1.0,
             z: 1.0,
         },
-        texture_coordinate: Vector2 { x: 1.0, y: 0.0 },
+        texture_coordinate: Vector2 { x: 0.0, y: 0.0 },
     },
 ];
 
