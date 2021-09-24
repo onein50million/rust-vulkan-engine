@@ -12,6 +12,9 @@ layout(binding = 0, std140) uniform UniformBufferObject {
     vec2 mouse_ratio;
 } ubos;
 
+layout(binding = 3, std430) buffer VoxelPositions{
+    vec4 positions[];
+}voxel_positions;
 
 layout(push_constant) uniform PushConstants{
     mat4 model;
@@ -19,7 +22,9 @@ layout(push_constant) uniform PushConstants{
     mat4 proj;
     int texture_index;
     float constant;
+    int is_voxel;
 } pushConstant;
+
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inColor;
@@ -30,7 +35,11 @@ layout(location = 1) out vec2 fragTexCoord;
 
 
 void main() {
-    gl_Position = pushConstant.proj * pushConstant.view * pushConstant.model * vec4(inPosition, 1.0);
+
+    gl_Position = pushConstant.proj *
+    pushConstant.view *
+    pushConstant.model *
+    vec4(inPosition + voxel_positions.positions[gl_InstanceIndex].xyz*pushConstant.is_voxel, 1.0);
     fragColor = inColor;
     fragTexCoord = inTexCoord;
 

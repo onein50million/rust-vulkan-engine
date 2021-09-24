@@ -4,7 +4,6 @@ use std::time::Instant;
 use winit::window::Window;
 use std::f32::consts::PI;
 use cgmath::num_traits::Pow;
-use crate::octree::Octree;
 use std::convert::TryInto;
 
 trait Position{
@@ -211,7 +210,6 @@ pub(crate) struct Game {
     pub(crate) focused: bool,
     last_frame_instant: Instant,
     pub(crate) vulkan_data: VulkanData,
-    voxels: Octree,
 }
 
 impl Game{
@@ -226,12 +224,7 @@ impl Game{
             angle: Vector2::new(Deg(0.0), Deg(0.0))
         };
 
-        let mut voxels = Octree::new();
-        voxels.fill_random(2);
-        voxels.calculate_nexts();
-        println!("num nodes: {:}",voxels.nodes.len());
-
-        let mut vulkan_data = VulkanData::new(voxels.nodes.clone());
+        let mut vulkan_data = VulkanData::new();
         vulkan_data.init_vulkan(&window);
         player.model = Some(vulkan_data.player_object_index);
 
@@ -244,7 +237,6 @@ impl Game{
             focused: false,
             last_frame_instant: Instant::now(),
             vulkan_data,
-            voxels,
         };
         return game;
     }
@@ -262,7 +254,7 @@ impl Game{
         for i in 0..self.objects.len(){
             self.objects[i].process(delta_time);
         }
-        self.vulkan_data.objects[self.player.model.unwrap()].model = Matrix4::from_translation(self.player.position) * Matrix4::from(self.player.rotation);
+        self.vulkan_data.objects[self.player.model.unwrap()].model = Matrix4::from_translation(self.player.position) * Matrix4::from(self.player.rotation) ;
         self.vulkan_data.uniform_buffer_object.mouse_position = Vector2::new((self.mouse_buffer.x/self.vulkan_data.surface_capabilities.unwrap().current_extent.width as f64) as f32,
                                                                              (self.mouse_buffer.y/self.vulkan_data.surface_capabilities.unwrap().current_extent.height as f64) as f32);
         self.vulkan_data.process(&self.camera);

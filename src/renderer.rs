@@ -2,17 +2,20 @@ use ash::{vk, Device, Instance, Entry};
 use crate::support::*;
 use crate::cube::*;
 use crate::game::*;
-use cgmath::{Matrix4, Vector3, SquareMatrix, Deg, Vector2, Vector4, Point3};
+use cgmath::{Matrix4, Vector3, SquareMatrix, Deg, Vector2, Vector4, Point3, Zero};
 use ash::extensions::khr::{Surface, Swapchain};
 use image::GenericImageView;
 use winit::window::Window;
 use std::ffi::{c_void, CString, CStr};
 use std::convert::TryInto;
 use ash::extensions::ext::DebugUtils;
-use crate::octree::Node;
-use crate::{main, octree};
+use crate::{main};
 use ash::vk::{CommandBuffer, PipelineLayout};
-const BASE_VOXEL_SIZE: f32 = 128.0;
+use fastrand::Rng;
+use noise::NoiseFn;
+
+const BASE_VOXEL_SIZE: f32 = 4.0;
+const MAX_VOXELS: usize = 10_000_000;
 
 struct CombinedImage{
     image: vk::Image,
@@ -33,6 +36,7 @@ pub (crate) struct RenderObject {
     pub(crate) model: Matrix4<f32>,
     pub(crate) view: Matrix4<f32>,
     pub(crate) proj: Matrix4<f32>,
+    is_voxel: u32,
 }
 
 impl RenderObject {
@@ -142,14 +146,15 @@ impl RenderObject {
             texture,
             model: Matrix4::identity(),
             view: Matrix4::identity(),
-            proj: Matrix4::identity()
+            proj: Matrix4::identity(),
+            is_voxel:0,
         };
         return object;
     }
 }
 
 impl Drawable for RenderObject {
-    fn draw(&self, device: &Device, command_buffer: vk::CommandBuffer, pipeline_layout: vk::PipelineLayout, frag_constant: f32) {
+    fn draw(&self, device: &Device, command_buffer: vk::CommandBuffer, pipeline_layout: vk::PipelineLayout, frag_constant: f32, instance_count: u32) {
 
         unsafe {
             let texture_index = match self.texture.as_ref(){
@@ -162,6 +167,7 @@ impl Drawable for RenderObject {
                 proj: self.proj,
                 texture_index,
                 constant: frag_constant,
+                is_voxel: self.is_voxel,
             };
             let constants = std::slice::from_raw_parts(
                 (&push_constant as *const PushConstants) as *const u8,
@@ -181,7 +187,7 @@ impl Drawable for RenderObject {
                 device.cmd_draw_indexed(
                     command_buffer,
                     self.index_count,
-                    1,
+                    instance_count,
                     self.index_start,
                     0,
                     0,
@@ -192,7 +198,7 @@ impl Drawable for RenderObject {
                 device.cmd_draw(
                     command_buffer,
                     self.vertex_count,
-                    1,
+                    instance_count,
                     self.vertex_start,
                     0,
                 )
@@ -202,7 +208,7 @@ impl Drawable for RenderObject {
 }
 
 trait Drawable {
-    fn draw(&self, device: &Device, command_buffer: vk::CommandBuffer, pipeline_layout: vk::PipelineLayout, frag_constant: f32);
+    fn draw(&self, device: &Device, command_buffer: vk::CommandBuffer, pipeline_layout: vk::PipelineLayout, frag_constant: f32, instance_count: u32);
 }
 struct Cubemap{
     positive_x: RenderObject,
@@ -281,193 +287,87 @@ impl Cubemap{
     }
 }
 impl Drawable for Cubemap{
-    fn draw(&self, device: &Device, command_buffer: vk::CommandBuffer, pipeline_layout: vk::PipelineLayout, frag_constant: f32) {
+    fn draw(&self, device: &Device, command_buffer: vk::CommandBuffer, pipeline_layout: vk::PipelineLayout, frag_constant: f32,instance_count:u32) {
 
-        self.positive_x.draw(device, command_buffer, pipeline_layout,frag_constant);
-        self.negative_x.draw(device, command_buffer, pipeline_layout,frag_constant);
-        self.positive_y.draw(device, command_buffer, pipeline_layout,frag_constant);
-        self.negative_y.draw(device, command_buffer, pipeline_layout,frag_constant);
-        self.positive_z.draw(device, command_buffer, pipeline_layout,frag_constant);
-        self.negative_z.draw(device, command_buffer, pipeline_layout,frag_constant);
-
-    }
-}
-
-struct Voxel{
-    position: Vector3<f32>,
-    size: f32,
-    positive_x: RenderObject,
-    negative_x: RenderObject,
-    positive_y: RenderObject,
-    negative_y: RenderObject,
-    positive_z: RenderObject,
-    negative_z: RenderObject,
-}
-
-impl Drawable for Voxel{
-    fn draw(&self, device: &Device, command_buffer: CommandBuffer, pipeline_layout: PipelineLayout, frag_constant: f32) {
-        self.positive_x.draw(device, command_buffer, pipeline_layout,frag_constant);
-        self.negative_x.draw(device, command_buffer, pipeline_layout,frag_constant);
-        self.positive_y.draw(device, command_buffer, pipeline_layout,frag_constant);
-        self.negative_y.draw(device, command_buffer, pipeline_layout,frag_constant);
-        self.positive_z.draw(device, command_buffer, pipeline_layout,frag_constant);
-        self.negative_z.draw(device, command_buffer, pipeline_layout,frag_constant);
+        self.positive_x.draw(device, command_buffer, pipeline_layout,frag_constant,instance_count);
+        self.negative_x.draw(device, command_buffer, pipeline_layout,frag_constant,instance_count);
+        self.positive_y.draw(device, command_buffer, pipeline_layout,frag_constant,instance_count);
+        self.negative_y.draw(device, command_buffer, pipeline_layout,frag_constant,instance_count);
+        self.positive_z.draw(device, command_buffer, pipeline_layout,frag_constant,instance_count);
+        self.negative_z.draw(device, command_buffer, pipeline_layout,frag_constant,instance_count);
 
     }
 }
 
 struct Voxels{
-    voxels: Vec<Voxel>,
-    positive_x_vertex_offset: u32,
-    negative_x_vertex_offset: u32,
-    positive_y_vertex_offset: u32,
-    negative_y_vertex_offset: u32,
-    positive_z_vertex_offset: u32,
-    negative_z_vertex_offset: u32,
-    positive_x_index_offset: u32,
-    negative_x_index_offset: u32,
-    positive_y_index_offset: u32,
-    negative_y_index_offset: u32,
-    positive_z_index_offset: u32,
-    negative_z_index_offset: u32,
+    positions: Vec<Vector4<f32>>,
+    render_object: RenderObject,
+    vertex_offset: u32,
+    index_offset: u32,
+    noise: noise::SuperSimplex,
+
 
 }
 impl Voxels{
     fn new(vulkan_data: &mut VulkanData) -> Self{
-        let indices = &QUAD_INDICES.to_vec();
-        let voxel = Voxel{
-            position: Vector3::new(0.0,0.0,-5.0),
-            size: 1.0,
-            positive_x: RenderObject::new(vulkan_data, &POSITIVE_X_VERTICES.to_vec(), indices, None),
-            negative_x: RenderObject::new(vulkan_data, &NEGATIVE_X_VERTICES.to_vec(), indices, None),
-            positive_y: RenderObject::new(vulkan_data, &POSITIVE_Y_VERTICES.to_vec(), indices, None),
-            negative_y: RenderObject::new(vulkan_data, &NEGATIVE_Y_VERTICES.to_vec(), indices, None),
-            positive_z: RenderObject::new(vulkan_data, &POSITIVE_Z_VERTICES.to_vec(), indices, None),
-            negative_z: RenderObject::new(vulkan_data, &NEGATIVE_Z_VERTICES.to_vec(), indices, None),
+        let indices = &VOXEL_INDICES.to_vec();
+        let mut vertices = Vec::new();
+        vertices.extend_from_slice(&POSITIVE_X_VERTICES);
+        vertices.extend_from_slice(&NEGATIVE_X_VERTICES);
+        vertices.extend_from_slice(&POSITIVE_Z_VERTICES);
+        vertices.extend_from_slice(&NEGATIVE_Z_VERTICES);
+        vertices.extend_from_slice(&POSITIVE_Y_VERTICES);
+        vertices.extend_from_slice(&NEGATIVE_Y_VERTICES);
+
+        let mut render_object = RenderObject::new(vulkan_data, &vertices.to_vec(), indices, None);
+        render_object.is_voxel = 1;
+
+        let mut voxels = Self{
+            vertex_offset: render_object.vertex_start,
+            positions: vec![],
+            index_offset: render_object.index_start,
+            render_object,
+            noise: noise::SuperSimplex::new(),
         };
 
-        return Self{
-            positive_x_vertex_offset: voxel.positive_x.vertex_start,
-            negative_x_vertex_offset: voxel.negative_x.vertex_start,
-            positive_y_vertex_offset: voxel.positive_y.vertex_start,
-            negative_y_vertex_offset: voxel.negative_y.vertex_start,
-            positive_z_vertex_offset: voxel.positive_z.vertex_start,
-            negative_z_vertex_offset: voxel.negative_z.vertex_start,
-            positive_x_index_offset: voxel.positive_x.index_start,
-            negative_x_index_offset: voxel.negative_x.index_start,
-            positive_y_index_offset: voxel.positive_y.index_start,
-            negative_y_index_offset: voxel.negative_y.index_start,
-            positive_z_index_offset: voxel.positive_z.index_start,
-            negative_z_index_offset: voxel.negative_z.index_start,
-            voxels: vec![voxel],
-        };
+        voxels.process_positions();
 
-    }
-    fn add_voxel(&mut self, vulkan_data: &mut VulkanData, position: Vector3<f32>, size: f32){
-        let new_voxel = Voxel{
-            position,
-            size,
-            positive_x: RenderObject {
-                vertex_start: self.positive_x_vertex_offset,
-                vertex_count: POSITIVE_X_VERTICES.len() as u32,
-                index_start: self.positive_x_index_offset,
-                index_count: QUAD_INDICES.len() as u32,
-                texture: None,
-                model: Matrix4::identity(),
-                view: Matrix4::identity(),
-                proj: Matrix4::identity()
-            },
-            negative_x: RenderObject {
-                vertex_start: self.negative_x_vertex_offset,
-                vertex_count: NEGATIVE_X_VERTICES.len() as u32,
-                index_start: self.negative_x_index_offset,
-                index_count: QUAD_INDICES.len() as u32,
-                texture: None,
-                model: Matrix4::identity(),
-                view: Matrix4::identity(),
-                proj: Matrix4::identity()
+        return voxels
 
-            },
-            positive_y: RenderObject {
-                vertex_start: self.positive_y_vertex_offset,
-                vertex_count: POSITIVE_Y_VERTICES.len() as u32,
-                index_start: self.positive_y_index_offset,
-                index_count: QUAD_INDICES.len() as u32,
-                texture: None,
-                model: Matrix4::identity(),
-                view: Matrix4::identity(),
-                proj: Matrix4::identity()
-
-            },
-            negative_y: RenderObject {
-                vertex_start: self.negative_y_vertex_offset,
-                vertex_count: NEGATIVE_Y_VERTICES.len() as u32,
-                index_start: self.negative_y_index_offset,
-                index_count: QUAD_INDICES.len() as u32,
-                texture: None,
-                model: Matrix4::identity(),
-                view: Matrix4::identity(),
-                proj: Matrix4::identity()
-
-            },
-            positive_z: RenderObject {
-                vertex_start: self.positive_z_vertex_offset,
-                vertex_count: POSITIVE_Z_VERTICES.len() as u32,
-                index_start: self.positive_z_index_offset,
-                index_count: QUAD_INDICES.len() as u32,
-                texture: None,
-                model: Matrix4::identity(),
-                view: Matrix4::identity(),
-                proj: Matrix4::identity()
-
-            },
-            negative_z: RenderObject {
-                vertex_start: self.negative_z_vertex_offset,
-                vertex_count: NEGATIVE_Z_VERTICES.len() as u32,
-                index_start: self.negative_z_index_offset,
-                index_count: QUAD_INDICES.len() as u32,
-                texture: None,
-                model: Matrix4::identity(),
-                view: Matrix4::identity(),
-                proj: Matrix4::identity()
-            },
-        };
-        self.voxels.push(new_voxel);
     }
 
     fn process(&mut self, view_matrix: Matrix4<f32>, projection_matrix: Matrix4<f32>){
-        for mut voxel in 0..self.voxels.len(){
-            self.voxels[voxel].positive_x.model = Matrix4::from_translation(self.voxels[voxel].position) * Matrix4::from_scale(self.voxels[voxel].size);
-            self.voxels[voxel].negative_x.model = Matrix4::from_translation(self.voxels[voxel].position) * Matrix4::from_scale(self.voxels[voxel].size);
-            self.voxels[voxel].positive_y.model = Matrix4::from_translation(self.voxels[voxel].position) * Matrix4::from_scale(self.voxels[voxel].size);
-            self.voxels[voxel].negative_y.model = Matrix4::from_translation(self.voxels[voxel].position) * Matrix4::from_scale(self.voxels[voxel].size);
-            self.voxels[voxel].positive_z.model = Matrix4::from_translation(self.voxels[voxel].position) * Matrix4::from_scale(self.voxels[voxel].size);
-            self.voxels[voxel].negative_z.model = Matrix4::from_translation(self.voxels[voxel].position) * Matrix4::from_scale(self.voxels[voxel].size);
-
-            self.voxels[voxel].positive_x.view = view_matrix;
-            self.voxels[voxel].negative_x.view = view_matrix;
-            self.voxels[voxel].positive_y.view = view_matrix;
-            self.voxels[voxel].negative_y.view = view_matrix;
-            self.voxels[voxel].positive_z.view = view_matrix;
-            self.voxels[voxel].negative_z.view = view_matrix;
-
-            self.voxels[voxel].positive_x.proj = projection_matrix;
-            self.voxels[voxel].negative_x.proj = projection_matrix;
-            self.voxels[voxel].positive_y.proj = projection_matrix;
-            self.voxels[voxel].negative_y.proj = projection_matrix;
-            self.voxels[voxel].positive_z.proj = projection_matrix;
-            self.voxels[voxel].negative_z.proj = projection_matrix;
-
-        }
+        // self.process_positions();
+        self.render_object.model = Matrix4::from_scale(0.5);
+        self.render_object.view = view_matrix;
+        self.render_object.proj = projection_matrix;
     }
-}
 
-
-impl Drawable for Voxels{
     fn draw(&self, device: &Device, command_buffer: CommandBuffer, pipeline_layout: PipelineLayout, frag_constant: f32) {
-        for voxel in &self.voxels{
-            voxel.draw(device, command_buffer, pipeline_layout,frag_constant);
+        self.render_object.draw(device, command_buffer, pipeline_layout, frag_constant, self.positions.len() as u32);
+    }
+    fn process_positions(&mut self){
+        self.positions = Vec::new();
+        const WIDTH: u64 = 16;
+        const HEIGHT: u64 = 256;
+        for i in 0..(WIDTH * WIDTH * HEIGHT){
+            let block_position = Vector4::new(
+                (i% WIDTH) as f32,
+                (i/(HEIGHT)) as f32,
+                (i/ WIDTH % WIDTH) as f32,
+                0.0
+            );
+            if self.noise.get([
+                (block_position.x as f64)*0.1,
+                (block_position.y as f64)*0.1,
+                (block_position.z as f64)*0.1
+            ]) > 0.0{
+
+                self.positions.push(block_position*2.0);
+            }
         }
+        assert!(self.positions.len()<MAX_VOXELS);
+
     }
 }
 pub(crate) struct VulkanData {
@@ -526,7 +426,6 @@ pub(crate) struct VulkanData {
     storage_buffer_pointer: Option<*mut u8>,
     storage_buffer: Option<vk::Buffer>,
     storage_buffer_allocation: Option<vk_mem::Allocation>,
-    pub(crate)nodes: Vec<Node>,
     voxels: Option<Voxels>,
     msaa_samples: vk::SampleCountFlags,
     descriptor_pool: Option<vk::DescriptorPool>,
@@ -550,7 +449,7 @@ fn get_random_vector(rng: &fastrand::Rng, length:usize) -> Vec<f32>{
 }
 
 impl VulkanData {
-    pub(crate) fn new(nodes: Vec<Node>) -> Self {
+    pub(crate) fn new() -> Self {
 
         let uniform_buffer_object = UniformBufferObject {
             random: [Vector4::new(0.0f32, 0.0f32, 0.0f32, 0.0f32,); NUM_RANDOM],
@@ -623,7 +522,6 @@ impl VulkanData {
             storage_buffer_pointer: None,
             storage_buffer: None,
             storage_buffer_allocation: None,
-            nodes,
             last_frame_instant: std::time::Instant::now(),
             cubemap: None,
             uniform_buffer_pointers: vec![],
@@ -777,6 +675,8 @@ impl VulkanData {
         self.create_image_views();
         println!("Creating uniform buffers");
         self.create_uniform_buffers();
+
+        self.create_voxels();
         self.create_storage_buffer();
 
         self.create_descriptor_set_layout();
@@ -809,7 +709,6 @@ impl VulkanData {
             self.fullscreen_quads.push(quad);
         }
 
-        self.create_voxels();
         println!("Loading Shaders");
         self.load_shaders();
         self.create_graphics_pipelines();
@@ -838,26 +737,6 @@ impl VulkanData {
 
     fn create_voxels(&mut self){
         let mut voxels = Voxels::new(self);
-        for node_index in 0..self.nodes.len(){
-            if self.nodes[node_index].node_type == octree::node_types::REFLECTIVE{
-                let mut voxel_position =  Vector3::new(0.0, -BASE_VOXEL_SIZE, 0.0);
-                for i in 0..self.nodes[node_index].current_depth + 1{
-                    let branch = self.nodes[node_index].path[i as usize];
-                    let voxel_step_size = 0.5*BASE_VOXEL_SIZE* 0.5f32.powi(i as i32);
-                    voxel_position += Vector3::new(
-                        ((branch % 2) as f32) * voxel_step_size,
-                        ((branch/4) as f32) * voxel_step_size,
-                        (((branch/2) % 2) as f32) * voxel_step_size
-                    );
-
-                }
-                voxels.add_voxel(self,
-                                 voxel_position + Vector3::new(0.5*BASE_VOXEL_SIZE * 0.5f32.powi(self.nodes[node_index].current_depth as i32),
-                                                               0.5*BASE_VOXEL_SIZE * 0.5f32.powi(self.nodes[node_index].current_depth as i32),
-                                                               0.5*BASE_VOXEL_SIZE * 0.5f32.powi(self.nodes[node_index].current_depth as i32)),
-                                 0.5*BASE_VOXEL_SIZE * 0.5f32.powi(self.nodes[node_index].current_depth as i32))
-            }
-        }
         self.voxels = Some(voxels);
 
     }
@@ -1158,11 +1037,10 @@ impl VulkanData {
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
 
-
-
         let layout_bindings = [
             ubo_layout_binding.build(),
             sampler_layout_binding.build(),
+            vk::DescriptorSetLayoutBinding::builder().binding(3).descriptor_count(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).stage_flags(vk::ShaderStageFlags::VERTEX).build(),
         ];
 
         let layout_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&layout_bindings);
@@ -1205,6 +1083,9 @@ impl VulkanData {
                     .image_view(self.compute_image_views[0])
                     .sampler(self.compute_samplers[0])
                     .build());
+            let storage_buffer_infos = vec![
+                vk::DescriptorBufferInfo::builder().buffer(self.storage_buffer.unwrap()).offset(0).range((std::mem::size_of::<Vector3<f32>>() * MAX_VOXELS) as vk::DeviceSize).build()
+            ];
             let textures_left = NUM_MODELS - image_infos.len();
             for _ in 0..textures_left{
                 image_infos.push(
@@ -1228,6 +1109,13 @@ impl VulkanData {
                     .dst_array_element(0)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(&image_infos)
+                    .build(),
+                vk::WriteDescriptorSet::builder()
+                    .dst_set(*descriptor_set)
+                    .dst_binding(3)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(&storage_buffer_infos)
                     .build()
 
             ];
@@ -1851,10 +1739,6 @@ impl VulkanData {
                 vk::DescriptorBufferInfo::builder().buffer(self.uniform_buffers[0]).offset(0).range((std::mem::size_of::<UniformBufferObject>()) as vk::DeviceSize).build(),
             ];
 
-            let storage_buffer_infos = vec![
-                vk::DescriptorBufferInfo::builder().buffer(self.storage_buffer.unwrap()).offset(0).range((std::mem::size_of::<Node>() * self.nodes.len()) as vk::DeviceSize).build()
-            ];
-
             let mut image_infos = vec![];
             for object in &self.objects{
                 image_infos.push(vk::DescriptorImageInfo::builder()
@@ -1901,13 +1785,6 @@ impl VulkanData {
                     .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                     .image_info(&storage_info)
                     .build(),
-                vk::WriteDescriptorSet::builder()
-                    .dst_set(*descriptor_set)
-                    .dst_binding(3)
-                    .dst_array_element(0)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(&storage_buffer_infos)
-                    .build()
             ];
 
             println!("Updating compute descriptor sets");
@@ -2013,7 +1890,7 @@ impl VulkanData {
             .depth_clamp_enable(false)
             .rasterizer_discard_enable(false)
             .polygon_mode(vk::PolygonMode::FILL)
-            .cull_mode(vk::CullModeFlags::NONE)
+            .cull_mode(vk::CullModeFlags::BACK)
             .front_face(vk::FrontFace::CLOCKWISE)
             .depth_bias_enable(false)
             .line_width(1.0f32);
@@ -2218,7 +2095,8 @@ impl VulkanData {
                     view: self.objects[self.player_object_index].view,
                     proj: Matrix4::identity(),
                     texture_index: self.objects[0].texture.as_ref().unwrap().index,
-                    constant: 1.0
+                    constant: 1.0,
+                    is_voxel:0
                 };
                 unsafe {
                     let constants = std::slice::from_raw_parts(
@@ -2333,16 +2211,18 @@ impl VulkanData {
 
                 unsafe{ extended_dynamic_state.cmd_set_depth_test_enable(*command_buffer,false)};
                 for object in &self.fullscreen_quads{
-                    object.draw(self.device.as_ref().unwrap(),*command_buffer,self.pipeline_layout.unwrap(),1.0);
+                    object.draw(self.device.as_ref().unwrap(),*command_buffer,self.pipeline_layout.unwrap(),1.0, 1);
+                    self.cubemap.as_ref().unwrap().draw(self.device.as_ref().unwrap(), *command_buffer, self.pipeline_layout.unwrap(),1.0, 1);
                 }
                 unsafe{ extended_dynamic_state.cmd_set_depth_test_enable(*command_buffer,true)};
 
-                self.voxels.as_ref().unwrap().draw(self.device.as_ref().unwrap(), *command_buffer, self.pipeline_layout.unwrap(),0.0);
+                self.voxels.as_ref().unwrap().draw(self.device.as_ref().unwrap(), *command_buffer, self.pipeline_layout.unwrap(),1.0);
 
 
                 for object in &self.objects{
-                    object.draw(self.device.as_ref().unwrap(), *command_buffer, self.pipeline_layout.unwrap(),1.0);
+                    object.draw(self.device.as_ref().unwrap(), *command_buffer, self.pipeline_layout.unwrap(),1.0, 1);
                 }
+
 
                 unsafe {
                     self.device
@@ -2608,8 +2488,9 @@ impl VulkanData {
                 self.uniform_buffer_pointers[i].copy_from_nonoverlapping(&self.uniform_buffer_object as *const UniformBufferObject as *const u8, std::mem::size_of::<UniformBufferObject>());
             };
         }
+
         unsafe{
-            self.storage_buffer_pointer.as_ref().unwrap().copy_from_nonoverlapping(self.nodes.as_ptr() as *const u8, self.nodes.len()*std::mem::size_of::<Node>());
+            self.storage_buffer_pointer.as_ref().unwrap().copy_from_nonoverlapping(self.voxels.as_ref().unwrap().positions.as_ptr() as *const u8, self.voxels.as_ref().unwrap().positions.len()*std::mem::size_of::<Vector3<f32>>());
         }
 
 
@@ -2635,7 +2516,7 @@ impl VulkanData {
     }
 
     fn create_storage_buffer(&mut self){
-        let device_size = (std::mem::size_of::<Node>()*self.nodes.len()) as vk::DeviceSize;
+        let device_size = (std::mem::size_of::<Vector3<f32>>()*MAX_VOXELS) as vk::DeviceSize;
 
         let buffer_create_info = vk::BufferCreateInfo::builder()
             .usage(vk::BufferUsageFlags::STORAGE_BUFFER).size(device_size)

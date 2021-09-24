@@ -1,6 +1,5 @@
 use cgmath::{Vector3, Vector2, Matrix4, Transform, Deg, Matrix3, InnerSpace, Vector4, Quaternion, Point3};
 use ash::vk;
-use crate::octree::Node;
 
 pub(crate) const FRAMERATE_TARGET: f64 = 280.0;
 pub(crate) const NUM_RANDOM: usize = 100;
@@ -41,6 +40,7 @@ pub(crate)struct PushConstants {
     pub(crate)proj: Matrix4<f32>,
     pub(crate)texture_index: u32,
     pub(crate)constant: f32,
+    pub(crate)is_voxel: u32,
 }
 
 impl Vertex {

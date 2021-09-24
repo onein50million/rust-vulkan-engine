@@ -386,12 +386,12 @@ pub(crate) const QUAD_INDICES: [u32; 6] = [
 
 
 
-// pub(crate) const SKYBOX_BACKPLANE_INDICES: [u32; 36] = [
-//     //front face
-//     0, 1, 2, 2, 3, 0, //right face
-//     3, 7, 2, 2, 6, 7, //back face
-//     4, 5, 6, 6, 7, 4, //left face
-//     4, 5, 1, 1, 0, 4, //top face
-//     4, 0, 3, 3, 7, 4, //bottom face
-//     1, 2, 6, 6, 5, 1,
-// ];
+pub(crate) const VOXEL_INDICES: [u32; 36] = [
+    //front face
+    0, 1, 2, 2, 3, 0, //right face
+    4, 5, 6, 6, 7, 4, //back face
+    8, 9, 10, 10, 11, 8, //left face
+    12, 13, 14, 14, 15, 12, //top face
+    16, 17, 18, 18, 19, 16, //bottom face
+    20, 21, 22, 22, 23, 20,
+];
