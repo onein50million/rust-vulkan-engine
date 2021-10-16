@@ -1,17 +1,16 @@
-mod support;
 mod cube;
 mod game;
-mod renderer;
 mod octree;
+mod renderer;
+mod support;
 
-use std::env;
-use winit::event::{DeviceEvent, Event, VirtualKeyCode, WindowEvent, ElementState};
-use winit::event_loop::{ControlFlow, EventLoop};
 use crate::game::*;
-use winit::window::WindowBuilder;
-use crate::support::*;
 use crate::renderer::*;
-
+use crate::support::*;
+use std::env;
+use winit::event::{DeviceEvent, ElementState, Event, VirtualKeyCode, WindowEvent};
+use winit::event_loop::{ControlFlow, EventLoop};
+use winit::window::WindowBuilder;
 
 //Coordinate system for future reference:
 //from starting location
@@ -45,21 +44,16 @@ fn main() {
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
 
-           match event {
-            Event::WindowEvent {
-                event,
-                ..
-            } => {
-                match event {
-                    WindowEvent::Focused(is_focused) => game.focused = is_focused,
-                    WindowEvent::CloseRequested => {
-                        unsafe { game.vulkan_data.device.as_ref().unwrap().device_wait_idle() }.unwrap();
-                        close_app(&mut game.vulkan_data, control_flow);
-                    }
-                    _ => {}
+        match event {
+            Event::WindowEvent { event, .. } => match event {
+                WindowEvent::Focused(is_focused) => game.focused = is_focused,
+                WindowEvent::CloseRequested => {
+                    unsafe { game.vulkan_data.device.as_ref().unwrap().device_wait_idle() }
+                        .unwrap();
+                    close_app(&mut game.vulkan_data, control_flow);
                 }
-
-            }
+                _ => {}
+            },
             Event::MainEventsCleared => {
                 //app update code
                 // window.request_redraw();
@@ -72,7 +66,7 @@ fn main() {
 
                     frametimes_start = (frametimes_start + 1) % FRAME_SAMPLES;
                     let mut average_frametime = 0.0;
-                    for i in 0..frametimes.len(){
+                    for i in 0..frametimes.len() {
                         average_frametime += frametimes[i];
                     }
                     average_frametime /= FRAME_SAMPLES as f64;
@@ -90,87 +84,105 @@ fn main() {
                 DeviceEvent::MouseMotion { delta } => {
                     game.mouse_buffer.x += delta.0;
                     game.mouse_buffer.y += delta.1;
-                    game.mouse_buffer.x = game.mouse_buffer.x.min(game.vulkan_data.surface_capabilities.unwrap().current_extent.width as f64).max(0.0);
-                    game.mouse_buffer.y = game.mouse_buffer.y.min(game.vulkan_data.surface_capabilities.unwrap().current_extent.height as f64).max(0.0);
-
+                    game.mouse_buffer.x = game
+                        .mouse_buffer
+                        .x
+                        .min(
+                            game.vulkan_data
+                                .surface_capabilities
+                                .unwrap()
+                                .current_extent
+                                .width as f64,
+                        )
+                        .max(0.0);
+                    game.mouse_buffer.y = game
+                        .mouse_buffer
+                        .y
+                        .min(
+                            game.vulkan_data
+                                .surface_capabilities
+                                .unwrap()
+                                .current_extent
+                                .height as f64,
+                        )
+                        .max(0.0);
                 }
-                DeviceEvent::Key(key) => {
-                    match key.virtual_keycode {
-                        Some(keycode) => {
-                            if keycode == VirtualKeyCode::Escape && key.state == ElementState::Released && game.focused{
-                                close_app(&mut game.vulkan_data, control_flow);
-                            }
-                            if keycode == VirtualKeyCode::W{
-                                game.inputs.forward = match key.state{
-                                    ElementState::Released => 0.0,
-                                    ElementState::Pressed => 1.0
-                                };
-                            }
-                            if keycode == VirtualKeyCode::S{
-                                game.inputs.backward = match key.state{
-                                    ElementState::Released => 0.0,
-                                    ElementState::Pressed => 1.0
-                                };
-                            }
-                            if keycode == VirtualKeyCode::A{
-                                game.inputs.left = match key.state{
-                                    ElementState::Released => 0.0,
-                                    ElementState::Pressed => 1.0
-                                };
-                            }
-                            if keycode == VirtualKeyCode::D{
-                                game.inputs.right = match key.state{
-                                    ElementState::Released => 0.0,
-                                    ElementState::Pressed => 1.0
-                                };
-                            }
-                            if keycode == VirtualKeyCode::Space{
-                                game.inputs.up = match key.state{
-                                    ElementState::Released => 0.0,
-                                    ElementState::Pressed => 1.0
-                                };
-                            }
-                            if keycode == VirtualKeyCode::LControl{
-                                game.inputs.down = match key.state{
-                                    ElementState::Released => 0.0,
-                                    ElementState::Pressed => 1.0
-                                };
-                            }
-                            if keycode == VirtualKeyCode::LShift{
-                                game.inputs.sprint = match key.state{
-                                    ElementState::Released => 0.0,
-                                    ElementState::Pressed => 1.0
-                                };
-                            }
-                            if keycode == VirtualKeyCode::Up{
-                                game.inputs.camera_y = match key.state{
-                                    ElementState::Released => 0.0,
-                                    ElementState::Pressed => 1.0
-                                };
-                            }
-                            if keycode == VirtualKeyCode::Down{
-                                game.inputs.camera_y = match key.state{
-                                    ElementState::Released => 0.0,
-                                    ElementState::Pressed => -1.0
-                                };
-                            }
-                            if keycode == VirtualKeyCode::Left{
-                                game.inputs.camera_x = match key.state{
-                                    ElementState::Released => 0.0,
-                                    ElementState::Pressed => -1.0
-                                };
-                            }
-                            if keycode == VirtualKeyCode::Right{
-                                game.inputs.camera_x = match key.state{
-                                    ElementState::Released => 0.0,
-                                    ElementState::Pressed => 1.0
-                                };
-                            }
-
-
+                DeviceEvent::Key(key) => match key.virtual_keycode {
+                    Some(keycode) => {
+                        if keycode == VirtualKeyCode::Escape
+                            && key.state == ElementState::Released
+                            && game.focused
+                        {
+                            close_app(&mut game.vulkan_data, control_flow);
                         }
-                        _ => {}
+                        if keycode == VirtualKeyCode::W {
+                            game.inputs.forward = match key.state {
+                                ElementState::Released => 0.0,
+                                ElementState::Pressed => 1.0,
+                            };
+                        }
+                        if keycode == VirtualKeyCode::S {
+                            game.inputs.backward = match key.state {
+                                ElementState::Released => 0.0,
+                                ElementState::Pressed => 1.0,
+                            };
+                        }
+                        if keycode == VirtualKeyCode::A {
+                            game.inputs.left = match key.state {
+                                ElementState::Released => 0.0,
+                                ElementState::Pressed => 1.0,
+                            };
+                        }
+                        if keycode == VirtualKeyCode::D {
+                            game.inputs.right = match key.state {
+                                ElementState::Released => 0.0,
+                                ElementState::Pressed => 1.0,
+                            };
+                        }
+                        if keycode == VirtualKeyCode::Space {
+                            game.inputs.up = match key.state {
+                                ElementState::Released => 0.0,
+                                ElementState::Pressed => 1.0,
+                            };
+                        }
+                        if keycode == VirtualKeyCode::LControl {
+                            game.inputs.down = match key.state {
+                                ElementState::Released => 0.0,
+                                ElementState::Pressed => 1.0,
+                            };
+                        }
+                        if keycode == VirtualKeyCode::LShift {
+                            game.inputs.sprint = match key.state {
+                                ElementState::Released => 0.0,
+                                ElementState::Pressed => 1.0,
+                            };
+                        }
+                        if keycode == VirtualKeyCode::Up {
+                            game.inputs.camera_y = match key.state {
+                                ElementState::Released => 0.0,
+                                ElementState::Pressed => 1.0,
+                            };
+                        }
+                        if keycode == VirtualKeyCode::Down {
+                            game.inputs.camera_y = match key.state {
+                                ElementState::Released => 0.0,
+                                ElementState::Pressed => -1.0,
+                            };
+                        }
+                        if keycode == VirtualKeyCode::Left {
+                            game.inputs.camera_x = match key.state {
+                                ElementState::Released => 0.0,
+                                ElementState::Pressed => -1.0,
+                            };
+                        }
+                        if keycode == VirtualKeyCode::Right {
+                            game.inputs.camera_x = match key.state {
+                                ElementState::Released => 0.0,
+                                ElementState::Pressed => 1.0,
+                            };
+                        }
                     }
+                    _ => {}
                 },
                 _ => {}
             },

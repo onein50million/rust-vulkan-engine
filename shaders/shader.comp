@@ -1,7 +1,7 @@
 #version 450
 layout(local_size_x = 8, local_size_y =8, local_size_z = 1) in;
 
-const bool RAYTRACING_ENABLED = true;
+const bool RAYTRACING_ENABLED = false;
 
 const int NUM_RANDOM = 100;
 const int TREE_DEPTH = 10;
@@ -11,7 +11,7 @@ const float SPECULARITY = 0.5;
 const uint TYPE_SPHERE = 0;
 const uint TYPE_BOX = 1;
 
-const uint MAX_BOUNCES = 5;
+const uint MAX_BOUNCES = 2;
 
 const uint SAMPLE_WIDTH = 1;
 const uint SAMPLE_COUNT = SAMPLE_WIDTH*SAMPLE_WIDTH;
@@ -268,11 +268,36 @@ RayResult castRay(Ray ray){
     }
 
     int current_node_index = 0;
-    float hit_result = hit_box(get_node_position(current_node_index), base_voxel_size, ray, 1.0/ray.direction);
-    if(hit_result > 0.0){
         while(true){
-//            bool skip = ubos.random[0].x > 0.5;
-            bool skip = false;
+            float hit_result = hit_box(get_node_position(current_node_index), base_voxel_size, ray, 1.0/ray.direction);
+            if(node_buffer.nodes[current_node_index].node_type != REFLECTIVE){
+                if(hit_result > 0.0){
+                    bool hit_child = false;
+                    for(int branch = 0; branch < 8; branch++){
+                        if(node_buffer.nodes[current_node_index].node_indices[branch] != 0){
+                            int branch_node_index = node_buffer.nodes[current_node_index].node_indices[branch];
+                            vec3 branch_position = get_node_position(branch_node_index);
+                            float voxel_size = base_voxel_size*pow(0.5, node_buffer.nodes[branch_node_index].current_depth);
+                            float branch_hit_result = hit_box(branch_position, voxel_size, ray, 1.0/ray.direction);
+                            if(branch_hit_result > 0.0){
+                                hit_child = true;
+                                if (node_buffer.nodes[branch_node_index].node_type == REFLECTIVE){
+                                    if (branch_hit_result < closest_distance){
+                                        closest_distance = branch_hit_result;
+                                        found = true;
+                                        vec3 normal = box_normals(branch_position, voxel_size, rayAt(ray, branch_hit_result));
+                                        result = RayResult(vec3(0.7,0.1,0.7), rayAt(ray, branch_hit_result), normal, false, 0.0);
+                                    }
+                                }
+
+                            }
+                        }
+                    }
+                }
+
+
+                //            bool skip = ubos.random[0].x > 0.5;
+            bool skip = true;
 
             for(int branch = 0; branch < 8; branch++){
                 if(node_buffer.nodes[current_node_index].node_indices[branch] != 0){
@@ -281,9 +306,8 @@ RayResult castRay(Ray ray){
                     float voxel_size = base_voxel_size*pow(0.5, node_buffer.nodes[branch_node_index].current_depth);
                     float branch_hit_result = hit_box(branch_position, voxel_size, ray, 1.0/ray.direction);
                     if(branch_hit_result > 0.0){
-                        if (node_buffer.nodes[branch_node_index].node_type == CHILDREN){
-                            skip = false;
-                        } else if (node_buffer.nodes[branch_node_index].node_type == REFLECTIVE){
+                        skip = false;
+                        if (node_buffer.nodes[branch_node_index].node_type == REFLECTIVE){
                             if (branch_hit_result < closest_distance){
                                 closest_distance = branch_hit_result;
                                 found = true;
@@ -291,14 +315,6 @@ RayResult castRay(Ray ray){
                                 result = RayResult(vec3(0.7,0.1,0.7), rayAt(ray, branch_hit_result), normal, false, 0.0);
                             }
                         }
-//                        else if (node_buffer.nodes[branch_node_index].node_type == EMPTY){
-//                            if (branch_hit_result < closest_distance){
-//                                closest_distance = branch_hit_result;
-//                                found = true;
-//                                vec3 normal = box_normals(branch_position, voxel_size, rayAt(ray, branch_hit_result));
-//                                result = RayResult(vec3(0.7, 0.1, 0.1), rayAt(ray, branch_hit_result), normal, false, 0.0);
-//                            }
-//                        }
 
                     }
                 }
