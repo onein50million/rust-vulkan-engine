@@ -1,23 +1,22 @@
 use crate::octree::Octree;
 use crate::renderer::*;
-use nalgebra::{Matrix4, Quaternion, Translation, Translation3, UnitQuaternion, Vector2, Vector3};
-use std::convert::TryInto;
-use std::f32::consts::PI;
+use nalgebra::{Matrix4, Quaternion, Translation3, UnitQuaternion, Vector2, Vector3};
+use std::f64::consts::PI;
 use std::time::Instant;
 use winit::window::Window;
 
 trait Position {
-    fn get_position(&self) -> Vector3<f32>;
-    fn set_position(&mut self, new_position: Vector3<f32>);
+    fn get_position(&self) -> Vector3<f64>;
+    fn set_position(&mut self, new_position: Vector3<f64>);
 }
 trait Rotation {
-    fn get_rotation(&self) -> Quaternion<f32>;
-    fn set_rotation(&mut self, new_rotation: Quaternion<f32>);
+    fn get_rotation(&self) -> Quaternion<f64>;
+    fn set_rotation(&mut self, new_rotation: Quaternion<f64>);
 }
 
 pub(crate) struct GameObject {
-    position: Vector3<f32>,
-    rotation: Quaternion<f32>,
+    position: Vector3<f64>,
+    rotation: Quaternion<f64>,
     render_object: RenderObject,
 }
 impl GameObject {
@@ -27,15 +26,15 @@ impl GameObject {
 }
 
 pub(crate) struct Inputs {
-    pub(crate) forward: f32,
-    pub(crate) backward: f32,
-    pub(crate) left: f32,
-    pub(crate) right: f32,
-    pub(crate) camera_y: f32,
-    pub(crate) camera_x: f32,
-    pub(crate) up: f32,
-    pub(crate) down: f32,
-    pub(crate) sprint: f32,
+    pub(crate) forward: f64,
+    pub(crate) backward: f64,
+    pub(crate) left: f64,
+    pub(crate) right: f64,
+    pub(crate) camera_y: f64,
+    pub(crate) camera_x: f64,
+    pub(crate) up: f64,
+    pub(crate) down: f64,
+    pub(crate) sprint: f64,
 }
 impl Inputs {
     pub(crate) fn new() -> Self {
@@ -54,15 +53,15 @@ impl Inputs {
 }
 
 pub(crate) struct Camera {
-    position: Vector3<f32>,
-    rotation: UnitQuaternion<f32>,
-    target: Vector3<f32>,
-    angle: Vector2<f32>,
+    position: Vector3<f64>,
+    rotation: UnitQuaternion<f64>,
+    target: Vector3<f64>,
+    angle: Vector2<f64>,
 }
 impl Camera {
     fn process(&mut self, delta_time: f64, inputs: &Inputs) {
-        self.angle.x += (inputs.camera_x * 1.0 * delta_time as f32);
-        self.angle.y += (inputs.camera_y * 1.0 * delta_time as f32);
+        self.angle.x += inputs.camera_x * 1.0 * delta_time;
+        self.angle.y += inputs.camera_y * 1.0 * delta_time;
         let radius = 5.0;
 
         self.position = self.target
@@ -72,44 +71,44 @@ impl Camera {
                 self.angle.y.sin() * self.angle.x.sin() * radius,
             );
 
-        let difference: Vector3<f32> = self.target - self.position;
+        let difference = self.target - self.position;
         let horizontal_distance = (difference.z.powf(2.0) + difference.x.powf(2.0)).sqrt();
-        let pitch = ((difference.y).atan2(horizontal_distance) + 0.0 * PI);
-        let yaw = (difference.x.atan2(difference.z) + 1.0 * PI);
+        let pitch = (difference.y).atan2(horizontal_distance) + 0.0 * PI;
+        let yaw = difference.x.atan2(difference.z) + 1.0 * PI;
 
         let yaw_rotation = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), yaw - (0.0 * PI));
         self.rotation = UnitQuaternion::from_axis_angle(&(yaw_rotation * Vector3::x_axis()), pitch)
             * UnitQuaternion::from_axis_angle(&Vector3::y_axis(), yaw);
     }
     pub(crate) fn get_view_matrix_no_translation(&self) -> Matrix4<f32> {
-        let matrix = Matrix4::from(self.rotation);
+        let matrix = Matrix4::from(Matrix4::from(self.rotation)).cast();
         return matrix.try_inverse().unwrap();
     }
 
     pub(crate) fn get_view_matrix(&self) -> Matrix4<f32> {
         let matrix =
             Translation3::from(self.position).to_homogeneous() * Matrix4::from(self.rotation);
-        return matrix.try_inverse().unwrap();
+        return matrix.try_inverse().unwrap().cast();
     }
 }
 
 pub(crate) struct Player {
     pub(crate) model: Option<usize>,
-    movement: Vector3<f32>,
-    position: Vector3<f32>,
-    velocity: Vector3<f32>,
-    rotation: UnitQuaternion<f32>,
-    stamina: f32,
-    move_accel: f32,
+    movement: Vector3<f64>,
+    position: Vector3<f64>,
+    velocity: Vector3<f64>,
+    rotation: UnitQuaternion<f64>,
+    stamina: f64,
+    move_accel: f64,
     touching_ground: bool,
     sprinting: bool,
 }
 
 impl Position for Player {
-    fn get_position(&self) -> Vector3<f32> {
+    fn get_position(&self) -> Vector3<f64> {
         return self.position;
     }
-    fn set_position(&mut self, new_position: Vector3<f32>) {
+    fn set_position(&mut self, new_position: Vector3<f64>) {
         self.position = new_position;
     }
 }
@@ -131,14 +130,14 @@ impl Default for Player {
 }
 
 impl Player {
-    const HEIGHT: f32 = 1.7;
-    const FALL_ACCELERATION: f32 = 9.8;
-    const JUMP_SPEED: f32 = 5.0;
-    const STAMINA_REGEN: f32 = 0.1;
-    const BASE_ACCEL: f32 = 50.0;
-    const SPRINT_MULTIPLIER: f32 = 2.0;
+    const HEIGHT: f64 = 1.7;
+    const FALL_ACCELERATION: f64 = 9.8;
+    const JUMP_SPEED: f64 = 5.0;
+    const STAMINA_REGEN: f64 = 0.1;
+    const BASE_ACCEL: f64 = 50.0;
+    const SPRINT_MULTIPLIER: f64 = 2.0;
 
-    pub(crate) fn process(&mut self, delta_time: f32) {
+    pub(crate) fn process(&mut self, delta_time: f64) {
         self.stamina += Player::STAMINA_REGEN * delta_time;
         if self.touching_ground {
             self.velocity.x += self.movement.x * delta_time;
@@ -175,7 +174,7 @@ impl Player {
         &mut self,
         inputs: &Inputs,
         delta_time: f64,
-        relative_direction: UnitQuaternion<f32>,
+        relative_direction: UnitQuaternion<f64>,
     ) {
         self.movement = relative_direction
             * Vector3::new(
@@ -188,7 +187,7 @@ impl Player {
             self.movement = self.movement.normalize();
             self.rotation = UnitQuaternion::from_axis_angle(
                 &Vector3::y_axis(),
-                (self.movement.x.atan2(self.movement.z) + PI / 1.0),
+                self.movement.x.atan2(self.movement.z) + PI / 1.0,
             );
         }
         self.movement *= self.move_accel;
@@ -227,7 +226,7 @@ impl Game {
             position: Vector3::new(0.0, -5.0, 0.0),
             rotation: UnitQuaternion::identity(),
             target: player.position,
-            angle: Vector2::new((0.0), (0.0)),
+            angle: Vector2::new(0.0, 0.0),
         };
 
         let mut voxels = Octree::new();
@@ -258,7 +257,7 @@ impl Game {
 
         self.player
             .process_inputs(&self.inputs, delta_time, self.camera.rotation);
-        self.player.process(delta_time as f32);
+        self.player.process(delta_time);
 
         self.camera.target = self.player.position - Vector3::new(0.0, Player::HEIGHT, 0.0);
         self.camera.process(delta_time, &self.inputs);
@@ -267,8 +266,8 @@ impl Game {
             self.objects[i].process(delta_time);
         }
         self.vulkan_data.objects[self.player.model.unwrap()].model =
-            Matrix4::from(Translation3::from(self.player.position))
-                * Matrix4::from(self.player.rotation);
+            (Matrix4::from(Translation3::from(self.player.position))
+                * Matrix4::from(self.player.rotation)).cast();
         self.vulkan_data.uniform_buffer_object.mouse_position = Vector2::new(
             (self.mouse_buffer.x
                 / self
