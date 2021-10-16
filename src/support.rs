@@ -1,6 +1,6 @@
-use cgmath::{Vector3, Vector2, Matrix4, Transform, Deg, Matrix3, InnerSpace, Vector4, Quaternion, Point3};
-use ash::vk;
 use crate::octree::Node;
+use erupt::vk;
+use nalgebra::{Matrix4, Vector2, Vector3, Vector4};
 
 pub(crate) const FRAMERATE_TARGET: f64 = 280.0;
 pub(crate) const NUM_RANDOM: usize = 100;
@@ -22,11 +22,10 @@ pub(crate) struct Vertex {
 //     pub(crate) node_indices: [Vector4<u32>;8],
 // }
 
-
 #[derive(Copy, Clone)]
 #[repr(C)]
-pub(crate)struct UniformBufferObject {
-    pub(crate)random: [Vector4<f32>; NUM_RANDOM], //std140 packing so it needs to be 16 bytes wide
+pub(crate) struct UniformBufferObject {
+    pub(crate) random: [Vector4<f32>; NUM_RANDOM], //std140 packing so it needs to be 16 bytes wide
     pub(crate) player_index: u32,
     pub(crate) value2: i32,
     pub(crate) value3: i32,
@@ -35,47 +34,44 @@ pub(crate)struct UniformBufferObject {
 }
 
 #[repr(C)]
-pub(crate)struct PushConstants {
-    pub(crate)model: Matrix4<f32>,
-    pub(crate)view: Matrix4<f32>,
-    pub(crate)proj: Matrix4<f32>,
-    pub(crate)texture_index: u32,
-    pub(crate)constant: f32,
+pub(crate) struct PushConstants {
+    pub(crate) model: Matrix4<f32>,
+    pub(crate) view: Matrix4<f32>,
+    pub(crate) proj: Matrix4<f32>,
+    pub(crate) texture_index: u32,
+    pub(crate) constant: f32,
 }
 
 impl Vertex {
     //noinspection RsSelfConvention
-    pub(crate) fn get_binding_description() -> vk::VertexInputBindingDescription {
-        return vk::VertexInputBindingDescription::builder()
+    pub(crate) fn get_binding_description() -> vk::VertexInputBindingDescriptionBuilder<'static> {
+        return vk::VertexInputBindingDescriptionBuilder::new()
             .binding(0)
             .stride(std::mem::size_of::<Vertex>() as u32)
-            .input_rate(vk::VertexInputRate::VERTEX)
-            .build();
+            .input_rate(vk::VertexInputRate::VERTEX);
     }
-    pub(crate) fn get_attribute_description() -> Vec<vk::VertexInputAttributeDescription> {
+    pub(crate) fn get_attribute_description() -> Vec<vk::VertexInputAttributeDescriptionBuilder<'static>> {
         let attribute_descriptions = vec![
-            vk::VertexInputAttributeDescription::builder()
+            vk::VertexInputAttributeDescriptionBuilder::new()
                 .binding(0)
                 .location(0)
                 .format(vk::Format::R32G32B32_SFLOAT)
                 .offset(0),
-            vk::VertexInputAttributeDescription::builder()
+            vk::VertexInputAttributeDescriptionBuilder::new()
                 .binding(0)
                 .location(1)
                 .format(vk::Format::R32G32B32_SFLOAT)
                 .offset(12), //might be off, could be fun to see what happens when it's off
-            vk::VertexInputAttributeDescription::builder()
+            vk::VertexInputAttributeDescriptionBuilder::new()
                 .binding(0)
                 .location(2)
                 .format(vk::Format::R32G32_SFLOAT)
                 .offset(24),
-
         ];
 
         return attribute_descriptions
             .into_iter()
-            .map(|attribute_description| attribute_description.build())
+            .map(|attribute_description| attribute_description)
             .collect();
     }
 }
-
