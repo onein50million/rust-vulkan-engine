@@ -1,4 +1,3 @@
-use crate::octree::Node;
 use erupt::vk;
 use nalgebra::{Matrix4, Vector2, Vector3, Vector4};
 
@@ -40,6 +39,7 @@ pub(crate) struct PushConstants {
     pub(crate) proj: Matrix4<f32>,
     pub(crate) texture_index: u32,
     pub(crate) constant: f32,
+    pub(crate) bitfield: u32,
 }
 
 impl Vertex {
