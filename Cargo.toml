@@ -8,7 +8,7 @@ edition = "2018"
 
 [dependencies]
 winit = "0.25.0"
-image = "0.23.14"
+image = {version = "0.23.14", default-features = false, features = ["png"]}
 tobj = "3.0.1"
 fastrand = "1.5.0"
 

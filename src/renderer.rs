@@ -4,7 +4,6 @@ use crate::support::*;
 use crate::{main};
 use erupt::vk1_0::{CommandBuffer, Device, Instance, PipelineLayout};
 use erupt::{vk, DeviceLoader, EntryLoader, ExtendableFromConst, InstanceLoader, SmallVec};
-use image::GenericImageView;
 use nalgebra::{Matrix4, Translation3, Vector2, Vector3, Vector4};
 use std::convert::TryInto;
 use std::ffi::{c_void, CStr, CString};
@@ -13,6 +12,7 @@ use std::sync::Arc;
 use winit::window::Window;
 use std::ptr::null;
 use erupt::vk::{ImageView, Sampler};
+use image::GenericImageView;
 
 const BASE_VOXEL_SIZE: f32 = 128.0;
 
@@ -151,9 +151,9 @@ impl RenderObject {
             let sampler_info = vk::SamplerCreateInfoBuilder::new()
                 .mag_filter(vk::Filter::LINEAR)
                 .min_filter(vk::Filter::LINEAR)
-                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_u(vk::SamplerAddressMode::REPEAT)
+                .address_mode_v(vk::SamplerAddressMode::REPEAT)
+                .address_mode_w(vk::SamplerAddressMode::REPEAT)
                 .anisotropy_enable(true)
                 .max_anisotropy(1.0)
                 .border_color(vk::BorderColor::INT_OPAQUE_WHITE)
@@ -1046,7 +1046,11 @@ impl VulkanData {
                         model.mesh.positions[(index * 3 + 1) as usize],
                         model.mesh.positions[(index * 3 + 2) as usize],
                     ),
-                    color: Vector3::new(1.0, 1.0, 1.0),
+                    normal: Vector3::new(
+                        model.mesh.normals[(index * 3 + 0) as usize],
+                        model.mesh.normals[(index * 3 + 1) as usize],
+                        model.mesh.normals[(index * 3 + 2) as usize],
+                    ),
                     texture_coordinate: Vector2::new(
                         model.mesh.texcoords[(index * 2 + 0) as usize],
                         1.0 - model.mesh.texcoords[(index * 2 + 1) as usize],

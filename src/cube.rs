@@ -70,22 +70,22 @@ mod texture_points{
 pub(crate) const POSITIVE_X_VERTICES: [Vertex; 4] = [
     Vertex {
         position: Vector3::new(1.0, -1.0, -1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::x::positive::TOP_RIGHT,
     },
     Vertex {
         position: Vector3::new(1.0, 1.0, -1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::x::positive::BOTTOM_RIGHT,
     },
     Vertex {
         position: Vector3::new(1.0, 1.0, 1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::x::positive::BOTTOM_LEFT,
     },
     Vertex {
         position: Vector3::new(1.0, -1.0, 1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::x::positive::TOP_LEFT,
     },
 ];
@@ -94,22 +94,22 @@ pub(crate) const POSITIVE_X_VERTICES: [Vertex; 4] = [
 pub(crate) const NEGATIVE_X_VERTICES: [Vertex; 4] = [
     Vertex {
         position: Vector3::new(-1.0, -1.0, 1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::x::negative::TOP_RIGHT,
     },
     Vertex {
         position: Vector3::new(-1.0, 1.0, 1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::x::negative::BOTTOM_RIGHT,
     },
     Vertex {
         position: Vector3::new(-1.0, 1.0, -1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::x::negative::BOTTOM_LEFT,
     },
     Vertex {
         position: Vector3::new(-1.0, -1.0, -1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::x::negative::TOP_LEFT,
     },
 ];
@@ -118,22 +118,22 @@ pub(crate) const NEGATIVE_X_VERTICES: [Vertex; 4] = [
 pub(crate) const POSITIVE_Y_VERTICES: [Vertex; 4] = [
     Vertex {
         position: Vector3::new(1.0, 1.0, 1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::y::positive::BOTTOM_LEFT,
     },
     Vertex {
         position: Vector3::new(1.0, 1.0, -1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::y::positive::TOP_LEFT
     },
     Vertex {
         position: Vector3::new(-1.0, 1.0, -1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::y::positive::TOP_RIGHT,
     },
     Vertex {
         position: Vector3::new(-1.0, 1.0, 1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::y::positive::BOTTOM_RIGHT,
     },
 ];
@@ -141,22 +141,22 @@ pub(crate) const POSITIVE_Y_VERTICES: [Vertex; 4] = [
 pub(crate) const NEGATIVE_Y_VERTICES: [Vertex; 4] = [
     Vertex {
         position: Vector3::new(-1.0, -1.0, 1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::y::negative::BOTTOM_LEFT,
     },
     Vertex {
         position: Vector3::new(-1.0, -1.0, -1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::y::negative::TOP_LEFT,
     },
     Vertex {
         position: Vector3::new(1.0, -1.0, -1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::y::negative::TOP_RIGHT,
     },
     Vertex {
         position: Vector3::new(1.0, -1.0, 1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::y::negative::BOTTOM_RIGHT,
     },
 ];
@@ -164,22 +164,22 @@ pub(crate) const NEGATIVE_Y_VERTICES: [Vertex; 4] = [
 pub(crate) const POSITIVE_Z_VERTICES: [Vertex; 4] = [
     Vertex {
         position: Vector3::new(1.0, -1.0, 1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::z::positive::BOTTOM_LEFT,
     },
     Vertex {
         position: Vector3::new(1.0, 1.0, 1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::z::positive::TOP_LEFT,
     },
     Vertex {
         position: Vector3::new(-1.0, 1.0, 1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::z::positive::TOP_RIGHT,
     },
     Vertex {
         position: Vector3::new(-1.0, -1.0, 1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::z::positive::BOTTOM_RIGHT,
     },
 ];
@@ -187,22 +187,22 @@ pub(crate) const POSITIVE_Z_VERTICES: [Vertex; 4] = [
 pub(crate) const NEGATIVE_Z_VERTICES: [Vertex; 4] = [
     Vertex {
         position: Vector3::new(-1.0, -1.0, -1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::z::negative::BOTTOM_LEFT,
     },
     Vertex {
         position: Vector3::new(-1.0, 1.0, -1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::z::negative::TOP_LEFT,
     },
     Vertex {
         position: Vector3::new(1.0, 1.0, -1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::z::negative::TOP_RIGHT,
     },
     Vertex {
         position: Vector3::new(1.0, -1.0, -1.0),
-        color: Vector3::new(1.0, 1.0, 1.0),
+        normal: Vector3::new(1.0, 1.0, 1.0),
         texture_coordinate: texture_points::z::negative::BOTTOM_RIGHT,
     },
 ];
