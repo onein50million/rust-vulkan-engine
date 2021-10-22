@@ -28,9 +28,10 @@ const int CUBEMAP_FLAG = 1;
 layout(binding = 1) uniform sampler2D texSampler[NUM_MODELS];
 layout(binding = 3) uniform samplerCube cubemaps[NUM_MODELS];
 
-layout(location = 0) in vec3 fragColor;
+layout(location = 0) in vec3 fragNormal;
 layout(location = 1) in vec2 fragTexCoord;
 layout(location = 2) in vec3 fragPosition;
+layout(location = 3) in vec3 worldPosition;
 
 layout(location = 0) out vec4 outColor;
 
@@ -38,6 +39,18 @@ void main() {
     if ((pushConstant.bitfield&CUBEMAP_FLAG) > 0) {
         outColor = texture(cubemaps[pushConstant.texture_index], fragPosition) * pushConstant.constant;
     }else{
-        outColor = texture(texSampler[pushConstant.texture_index], fragTexCoord) * pushConstant.constant;
+
+        vec4 albedo = texture(texSampler[pushConstant.texture_index], fragTexCoord) * pushConstant.constant;
+        vec3 camera_location = inverse(pushConstant.view)[3].xyw;
+
+        vec3 light_position = vec3(10.0,-1.0,0.0);
+        float light_distance = length(light_position - worldPosition);
+        vec3 light_color = vec3(100.0) * (1.0 / (light_distance * light_distance));
+        vec3 light_direction = normalize(light_position - worldPosition);
+
+        vec3 diffuse = max(dot(fragNormal,light_direction),0.0)*light_color;
+
+        outColor = vec4((0.1+diffuse)*albedo.rgb,albedo.a);
+
     }
 }

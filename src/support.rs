@@ -10,7 +10,7 @@ pub(crate) const NUM_MODELS: usize = 100;
 #[repr(C)]
 pub(crate) struct Vertex {
     pub(crate) position: Vector3<f32>,
-    pub(crate) color: Vector3<f32>,
+    pub(crate) normal: Vector3<f32>,
     pub(crate) texture_coordinate: Vector2<f32>,
 }
 
