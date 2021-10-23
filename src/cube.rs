@@ -1,5 +1,5 @@
 use crate::support::Vertex;
-use nalgebra::{Vector2, Vector3};
+use nalgebra::{Vector3};
 
 /*
 

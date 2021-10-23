@@ -22,7 +22,9 @@ layout(push_constant) uniform PushConstants{
     int bitfield; //32 bits, LSB is cubemap flag
 } pushConstant;
 
-const int CUBEMAP_FLAG = 1;
+const int IS_CUBEMAP = 1;
+const int IS_HIGHLIGHTED = 2;
+const int IS_VIEWMODEL = 4;
 
 
 layout(binding = 1) uniform sampler2D texSampler[NUM_MODELS];
@@ -36,10 +38,17 @@ layout(location = 3) in vec3 worldPosition;
 layout(location = 0) out vec4 outColor;
 
 void main() {
-    if ((pushConstant.bitfield&CUBEMAP_FLAG) > 0) {
+    if ((pushConstant.bitfield&IS_CUBEMAP) > 0) {
         outColor = texture(cubemaps[pushConstant.texture_index], fragPosition) * pushConstant.constant;
     }else{
-
+        if ((pushConstant.bitfield&IS_HIGHLIGHTED) > 0){
+            outColor = vec4(0.9,0.1,0.1,1.0);
+            return;
+        }
+        if ((pushConstant.bitfield&IS_VIEWMODEL) > 0){
+            outColor = texture(texSampler[pushConstant.texture_index], fragTexCoord) * pushConstant.constant;
+            return;
+        }
         vec4 albedo = texture(texSampler[pushConstant.texture_index], fragTexCoord) * pushConstant.constant;
         vec3 camera_location = inverse(pushConstant.view)[3].xyw;
 
@@ -48,7 +57,12 @@ void main() {
         vec3 light_color = vec3(100.0) * (1.0 / (light_distance * light_distance));
         vec3 light_direction = normalize(light_position - worldPosition);
 
-        vec3 diffuse = max(dot(fragNormal,light_direction),0.0)*light_color;
+        vec3 sun_direction = normalize(vec3(1.0,-1.0,1.0));
+        vec3 sun_color = vec3(1.0,0.6,0.7);
+        vec3 total_light = vec3(0.0);
+        total_light += dot(fragNormal,light_direction)*light_color * 0.0;
+        total_light += dot(fragNormal,sun_direction)*sun_color;
+        vec3 diffuse = total_light;
 
         outColor = vec4((0.1+diffuse)*albedo.rgb,albedo.a);
 

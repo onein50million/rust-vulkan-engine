@@ -1,20 +1,16 @@
 use crate::cube::*;
-use crate::game::*;
 use crate::support::*;
-use crate::{main};
-use erupt::vk1_0::{CommandBuffer, Device, Instance, PipelineLayout};
 use erupt::{vk, DeviceLoader, EntryLoader, ExtendableFromConst, InstanceLoader, SmallVec};
-use nalgebra::{Matrix4, Translation3, Vector2, Vector3, Vector4};
+use nalgebra::{Matrix4, Vector2, Vector3, Vector4};
 use std::convert::TryInto;
 use std::ffi::{c_void, CStr, CString};
-use std::mem::{size_of, size_of_val};
+use std::mem::{size_of};
 use std::sync::Arc;
 use winit::window::Window;
-use std::ptr::null;
-use erupt::vk::{ImageView, Sampler};
 use image::GenericImageView;
 
 const BASE_VOXEL_SIZE: f32 = 128.0;
+const MIP_LEVELS: u32 = 6;
 
 struct CombinedImage {
     image: vk::Image,
@@ -32,6 +28,8 @@ pub(crate) struct RenderObject {
     index_count: u32,
     texture_index: usize,
     texture_type: vk::ImageViewType,
+    is_highlighted: bool,
+    pub(crate) is_viewmodel: bool,
     pub(crate) model: Matrix4<f32>,
     pub(crate) view: Matrix4<f32>,
     pub(crate) proj: Matrix4<f32>,
@@ -54,7 +52,6 @@ impl RenderObject {
             vulkan_data.indices.push(index + vertex_start);
         }
 
-        let mut texture = None;
         let mut texture_index = 0;
         if texture_path.is_some() {
             let dynamic_image = image::io::Reader::open(texture_path.unwrap())
@@ -97,12 +94,12 @@ impl RenderObject {
                     height,
                     depth: 1,
                 })
-                .mip_levels(1)
+                .mip_levels(MIP_LEVELS)
                 .array_layers(layer_count)
                 .format(format)
                 .tiling(vk::ImageTiling::OPTIMAL)
                 .initial_layout(vk::ImageLayout::UNDEFINED)
-                .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+                .usage(vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
                 .samples(vk::SampleCountFlagBits::_1)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE)
                 .flags(
@@ -133,7 +130,7 @@ impl RenderObject {
                 .subresource_range(vk::ImageSubresourceRange {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
                     base_mip_level: 0,
-                    level_count: 1,
+                    level_count: MIP_LEVELS,
                     base_array_layer: 0,
                     layer_count,
                 });
@@ -202,7 +199,7 @@ impl RenderObject {
                 vk::ImageSubresourceRange {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
                     base_mip_level: 0,
-                    level_count: 1,
+                    level_count: MIP_LEVELS,
                     base_array_layer: 0,
                     layer_count,
                 },
@@ -242,26 +239,29 @@ impl RenderObject {
                 )
             };
 
-            vulkan_data.end_single_time_commands(command_buffer);
-            vulkan_data
-                .allocator
-                .as_ref()
-                .unwrap()
-                .destroy_buffer(staging_buffer, &staging_buffer_allocation);
-            vulkan_data.transition_image_layout(
-                image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count,
-                },
-            );
+            vulkan_data.generate_mipmaps(image,width,height, MIP_LEVELS);
 
-            texture = Some(CombinedImage {
+            vulkan_data.end_single_time_commands(command_buffer);
+            // vulkan_data
+            //     .allocator
+            //     .as_ref()
+            //     .unwrap()
+            //     .destroy_buffer(staging_buffer, &staging_buffer_allocation);
+            // vulkan_data.transition_image_layout(
+            //     image,
+            //     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            //     vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            //     vk::ImageSubresourceRange {
+            //         aspect_mask: vk::ImageAspectFlags::COLOR,
+            //         base_mip_level: 0,
+            //         level_count: MIP_LEVELS,
+            //         base_array_layer: 0,
+            //         layer_count,
+            //     },
+            // );
+
+
+            let texture = Some(CombinedImage {
                 image,
                 image_view,
                 sampler,
@@ -289,6 +289,8 @@ impl RenderObject {
             index_count: indices.len() as u32,
             texture_index,
             texture_type: view_type,
+            is_highlighted: false,
+            is_viewmodel: false,
             model: Matrix4::identity(),
             view: Matrix4::identity(),
             proj: Matrix4::identity(),
@@ -307,13 +309,18 @@ impl Drawable for RenderObject {
     ) {
         unsafe {
             let texture_index = self.texture_index as u32;
+            let mut bitfield = 0;
+            bitfield |= if self.texture_type == vk::ImageViewType::CUBE {super::support::flags::IS_CUBEMAP}else {0};
+            bitfield |= if self.is_highlighted {super::support::flags::IS_HIGHLIGHTED}else {0};
+            bitfield |= if self.is_viewmodel {super::support::flags::IS_VIEWMODEL}else {0};
+
             let push_constant = PushConstants {
                 model: self.model,
                 view: self.view,
                 proj: self.proj,
                 texture_index,
                 constant: frag_constant,
-                bitfield: if self.texture_type == vk::ImageViewType::CUBE {1} else {0}
+                bitfield,
             };
             device.cmd_push_constants(
                 command_buffer,
@@ -351,7 +358,7 @@ trait Drawable {
         frag_constant: f32,
     );
 }
-struct Cubemap {
+pub(crate)struct Cubemap {
     render_object: RenderObject,
 }
 
@@ -386,8 +393,8 @@ impl Cubemap {
 }
 
 impl Cubemap {
-    fn process(&mut self, player: &Player, proj: Matrix4<f32>) {
-        self.render_object.view = player.get_view_matrix_no_translation();
+    pub(crate) fn process(&mut self, view_matrix_no_translation: Matrix4<f32>, proj: Matrix4<f32>) {
+        self.render_object.view = view_matrix_no_translation;
         self.render_object.model = Matrix4::identity();
         self.render_object.proj = proj;
     }
@@ -448,7 +455,7 @@ pub(crate) struct VulkanData {
     color_image: Option<vk::Image>,
     color_image_memory: Option<vk::DeviceMemory>,
     color_image_view: Option<vk::ImageView>,
-    cubemap: Option<Cubemap>,
+    pub(crate) cubemap: Option<Cubemap>,
     fullscreen_quads: Vec<RenderObject>,
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
@@ -470,7 +477,6 @@ pub(crate) struct VulkanData {
     pub(crate) objects: Vec<RenderObject>,
     textures: Vec<CombinedImage>,
     cubemaps: Vec<CombinedImage>,
-    pub(crate) player_object_index: usize,
 }
 
 fn get_random_vector(rng: &fastrand::Rng, length: usize) -> Vec<f32> {
@@ -558,7 +564,6 @@ impl VulkanData {
             uniform_buffer_allocations: vec![],
             objects: vec![],
             fullscreen_quads: vec![],
-            player_object_index: 0,
             textures: vec![],
             cubemaps: vec![]
         };
@@ -573,7 +578,7 @@ impl VulkanData {
         // validation_layers.remove(0);
         // println!("{:}", validation_layers[0]);
 
-        self.entry = Some(unsafe { erupt::EntryLoader::new() }.unwrap());
+        self.entry = Some(erupt::EntryLoader::new().unwrap());
 
         unsafe {
             self.entry
@@ -585,11 +590,11 @@ impl VulkanData {
                 .for_each(|extension_property| {
                     println!(
                         "Supported Extension: {:}",
-                        String::from_utf8_lossy(&unsafe {
+                        String::from_utf8_lossy(&
                             std::mem::transmute::<[i8; 256], [u8; 256]>(
                                 extension_property.extension_name,
                             )
-                        })
+                        )
                     );
                 });
         }
@@ -726,12 +731,6 @@ impl VulkanData {
 
         self.create_command_pool();
 
-        // self.load_obj_model(std::path::PathBuf::from("models/viking_room/viking_room.obj"), std::path::PathBuf::from("models/viking_room/viking_room.png"));
-        self.player_object_index = self.load_obj_model(
-            std::path::PathBuf::from("models/person/person.obj"),
-            std::path::PathBuf::from("models/person/person.png"),
-        );
-        self.uniform_buffer_object.player_index = self.player_object_index as u32;
 
         self.create_compute_images();
         for _ in 0..1 {
@@ -1044,7 +1043,7 @@ impl VulkanData {
                     position: Vector3::new(
                         model.mesh.positions[(index * 3 + 0) as usize],
                         model.mesh.positions[(index * 3 + 1) as usize],
-                        model.mesh.positions[(index * 3 + 2) as usize],
+                        model.mesh.positions[(index * 3 + 2) as usize]*-1.0,
                     ),
                     normal: Vector3::new(
                         model.mesh.normals[(index * 3 + 0) as usize],
@@ -2328,7 +2327,7 @@ impl VulkanData {
 
                 let push_constant = PushConstants {
                     model: Matrix4::identity(),
-                    view: self.objects[self.player_object_index].view,
+                    view: self.objects[0].view,
                     proj: Matrix4::identity(),
                     texture_index: 0,
                     constant: 1.0,
@@ -2490,6 +2489,7 @@ impl VulkanData {
                 };
 
                 for object in &self.objects {
+
                     object.draw(
                         self.device.as_ref().unwrap(),
                         *command_buffer,
@@ -2632,12 +2632,12 @@ impl VulkanData {
                 .as_ref()
                 .unwrap()
                 .into_iter()
-                .for_each(|framebuffer| unsafe {
+                .for_each(|framebuffer|
                     self.device
                         .as_ref()
                         .unwrap()
                         .destroy_framebuffer(Some(*framebuffer), None)
-                });
+                );
             self.device
                 .as_ref()
                 .unwrap()
@@ -2764,23 +2764,15 @@ impl VulkanData {
         self.vertex_buffer = None;
         self.vertex_buffer_memory = None;
     }
-    pub(crate) fn process(&mut self, player: &Player) {
+    pub(crate) fn get_projection_matrix(&self) -> Matrix4<f32>{
         let surface_width = self.surface_capabilities.unwrap().current_extent.width as f32;
         let surface_height = self.surface_capabilities.unwrap().current_extent.height as f32;
         let projection =
             nalgebra::Perspective3::new(surface_width / surface_height, 90.0, 0.1, 100.0)
                 .to_homogeneous();
-
-        self.cubemap.as_mut().unwrap().process(player, projection);
-
-        for object in 0..self.objects.len() {
-            self.objects[object].view = player.get_view_matrix();
-            self.objects[object].proj = projection;
-        }
-        for object in 0..self.fullscreen_quads.len() {
-            self.objects[object].view = player.get_view_matrix();
-            self.objects[object].proj = projection;
-        }
+        return projection;
+    }
+    pub(crate) fn transfer_data_to_gpu(&mut self) {
 
         let random: [f32; NUM_RANDOM] =
             get_random_vector(&self.rng, NUM_RANDOM).try_into().unwrap();
@@ -2858,9 +2850,10 @@ impl VulkanData {
 
         let mut i = 1;
         while i < mip_levels && mip_height > 1 && mip_width > 1 {
+            println!("i: {:}", i);
             barriers[0].subresource_range.base_mip_level = i - 1;
-            barriers[0].old_layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
-            barriers[0].new_layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
+            barriers[0].old_layout = vk::ImageLayout::GENERAL;
+            barriers[0].new_layout = vk::ImageLayout::GENERAL;
             barriers[0].src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
             barriers[0].dst_access_mask = vk::AccessFlags::TRANSFER_READ;
 
@@ -2918,7 +2911,7 @@ impl VulkanData {
             };
 
             barriers[0].old_layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
-            barriers[0].new_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+            barriers[0].new_layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
             barriers[0].src_access_mask = vk::AccessFlags::TRANSFER_READ;
             barriers[0].dst_access_mask = vk::AccessFlags::SHADER_READ;
 
@@ -2941,7 +2934,7 @@ impl VulkanData {
         barriers[0].subresource_range.base_mip_level = mip_levels - 1;
         barriers[0].old_layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
         barriers[0].new_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
-        barriers[0].src_access_mask = vk::AccessFlags::TRANSFER_READ;
+        barriers[0].src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
         barriers[0].dst_access_mask = vk::AccessFlags::SHADER_READ;
 
         unsafe {
