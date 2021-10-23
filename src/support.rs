@@ -6,6 +6,13 @@ pub(crate) const NUM_RANDOM: usize = 100;
 pub(crate) const FRAME_SAMPLES: usize = 100;
 pub(crate) const NUM_MODELS: usize = 100;
 
+pub(crate) mod flags{
+    pub(crate) const IS_CUBEMAP: u32 = 0b1;
+    pub(crate) const IS_HIGHLIGHTED: u32 = 0b10;
+    pub(crate) const IS_VIEWMODEL:u32 = 0b100;
+
+}
+
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub(crate) struct Vertex {

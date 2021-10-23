@@ -1,14 +1,22 @@
 use crate::renderer::*;
-use nalgebra::{Matrix4, Translation3, UnitQuaternion, Vector2, Vector3};
+use nalgebra::{Matrix4, Rotation3, Translation3, UnitQuaternion, Vector2, Vector3, zero};
 use std::time::Instant;
 use winit::window::Window;
 
-trait GlobalPosition {
-    fn get_global_position(&self, game: &Game) -> Vector3<f64>;
-}
-trait GlobalRotation {
-    fn get_global_rotation(&self, game: &Game) -> UnitQuaternion<f64>;
-}
+// trait GlobalPosition {
+//     fn get_global_position(&self, game: &Game) -> Vector3<f64>;
+// }
+// trait GlobalRotation {
+//     fn get_global_rotation(&self, game: &Game) -> UnitQuaternion<f64>;
+// }
+//
+// trait UpdateRenderer {
+//     fn update_renderer(&self, renderer: VulkanData);
+// }
+//
+// trait HasModelIndex {
+//     fn get_model_index(&self) -> usize;
+// }
 
 pub(crate) struct GameObject {
     position: Vector3<f64>,
@@ -23,10 +31,11 @@ impl GameObject {
             render_object_index
         }
     }
-    fn process(&mut self, delta_time: f64) {
+    fn process(&mut self, _delta_time: f64) {
         //Do stuff
     }
 }
+
 
 pub(crate) struct Inputs {
     pub(crate) forward: f64,
@@ -71,29 +80,6 @@ pub(crate) struct Player {
     pitch: f64,
     yaw: f64,
 }
-
-impl GlobalPosition for Player {
-    fn get_global_position(&self, game: &Game) -> Vector3<f64> {
-        return match self.ship_index{
-            None => {self.position}
-            Some(index) => {
-                self.position + game.ships[index].position
-            }
-        }
-    }
-}
-
-impl GlobalRotation for Player {
-    fn get_global_rotation(&self, game: &Game) -> UnitQuaternion<f64> {
-        return match self.ship_index{
-            None => {UnitQuaternion::identity()}
-            Some(index) => {
-                game.ships[index].rotation
-            }
-        }* UnitQuaternion::from_axis_angle(&(-Vector3::y_axis()),self.yaw)
-    }
-}
-
 impl Default for Player {
     fn default() -> Self {
         Self {
@@ -162,7 +148,7 @@ impl Player {
     pub(crate) fn process_inputs(
         &mut self,
         inputs: &Inputs,
-        delta_time: f64,
+        _delta_time: f64,
         mouse_buffer: &Vector2<f64>,
     ) {
         self.pitch = (self.pitch + mouse_buffer.y/1000.0) % std::f64::consts::TAU;
@@ -192,25 +178,46 @@ impl Player {
             self.sprinting = false;
         }
     }
+}
 
-    pub(crate) fn get_view_matrix_no_translation(&self) -> Matrix4<f32> {
-        let matrix = Matrix4::from(self.rotation).cast();
-        return matrix.try_inverse().unwrap();
+struct AngularVelocity{
+    axis: Vector3<f64>,
+    magnitude: f64,
+}
+impl AngularVelocity{
+    fn new(x: f64, y: f64, z: f64, magnitude: f64) -> Self{
+        Self{
+            axis: Vector3::new(x,y,z),
+            magnitude
+        }
     }
-
-    pub(crate) fn get_view_matrix(&self) -> Matrix4<f32> {
-        let matrix =
-            Translation3::from(self.position + Self::HEAD_OFFSET).to_homogeneous() * Matrix4::from(self.rotation);
-        return matrix.try_inverse().unwrap().cast();
-    }
-
-
 }
 
 struct Ship{
-    position: Vector3<f64>,
-    rotation: UnitQuaternion<f64>,
+    velocity: Vector3<f64>,
+    angular_velocity: AngularVelocity,
+    game_object: GameObject
 }
+
+impl Ship{
+    fn new(render_object_index: usize) -> Self{
+        Self{
+            velocity:zero(),
+            angular_velocity: AngularVelocity::new(0.0,0.0,0.0,0.0),
+            game_object: GameObject::new(render_object_index)
+        }
+    }
+    fn process(&mut self, delta_time: f64){
+        self.game_object.rotation *= UnitQuaternion::from_euler_angles(1.0*delta_time,0.3*delta_time,0.4*delta_time)
+    }
+    fn ship_space_transform(&self) -> Matrix4<f64>{
+        return Matrix4::from(self.game_object.rotation).append_translation(&self.game_object.position);
+    }
+    fn ship_space_transform_no_translation(&self) -> Matrix4<f64>{
+        return Matrix4::from(self.game_object.rotation);
+    }
+}
+
 
 pub(crate) struct Game {
     objects: Vec<GameObject>,
@@ -221,6 +228,7 @@ pub(crate) struct Game {
     last_frame_instant: Instant,
     pub(crate) vulkan_data: VulkanData,
     ships: Vec<Ship>,
+    viewmodel_index: usize,
 }
 
 impl Game {
@@ -235,31 +243,48 @@ impl Game {
         vulkan_data.init_vulkan(&window);
 
 
-        objects.push(
-            GameObject::new(
+        let mut ships = vec![];
+        player.ship_index = Some(ships.len());
+        ships.push(
+            Ship::new(
                 vulkan_data.load_obj_model(
                     "models/ship/ship.obj".parse().unwrap(),
                     "models/ship/texture.png".parse().unwrap())));
+
+        let planet_index = objects.len();
         objects.push(
             GameObject::new(
                 vulkan_data.load_obj_model(
                     "models/planet/planet.obj".parse().unwrap(),
                     "models/planet/texture.png".parse().unwrap())));
 
+        objects[planet_index].position = Vector3::new(-10.0,0.0,0.0);
+
+        let viewmodel_index = objects.len();
+        objects.push(
+            GameObject::new(
+                vulkan_data.load_obj_model(
+                    "models/hands/hands.obj".parse().unwrap(),
+                    "models/hands/texture.png".parse().unwrap())));
+
+        vulkan_data.objects[objects[viewmodel_index].render_object_index].is_viewmodel = true;
+        objects[viewmodel_index].position = Vector3::new(0.0,0.0,0.5);
+
 
         vulkan_data.update_vertex_buffer();
 
-        player.model = Some(vulkan_data.player_object_index);
+        player.model = None;
 
         let game = Game {
-            objects: vec![],
+            objects,
             player,
             mouse_buffer: Vector2::new(0.0, 0.0),
             inputs: Inputs::new(),
             focused: false,
             last_frame_instant: Instant::now(),
             vulkan_data,
-            ships: vec![]
+            ships,
+            viewmodel_index,
         };
         return game;
     }
@@ -267,34 +292,103 @@ impl Game {
         let delta_time = self.last_frame_instant.elapsed().as_secs_f64();
         self.last_frame_instant = std::time::Instant::now();
 
+        for ship_index in 0..self.ships.len(){
+            self.ships[ship_index].process(delta_time);
+        }
         self.player
             .process_inputs(&self.inputs, delta_time,&self.mouse_buffer);
         self.mouse_buffer = Vector2::zeros();
         self.player.process(delta_time);
 
+        // self.objects[self.viewmodel_index].rotation *= UnitQuaternion::from_euler_angles(0.0,1.0*delta_time,0.0);
+
         for i in 0..self.objects.len() {
             self.objects[i].process(delta_time);
         }
-        self.vulkan_data.objects[self.player.model.unwrap()].model =
-            (Matrix4::from(Translation3::from(self.player.get_global_position(self)))
-                * Matrix4::from(self.player.get_global_rotation(self))).cast();
+
+        self.update_renderer();
+        self.vulkan_data.transfer_data_to_gpu();
+        self.vulkan_data.draw_frame();
+    }
+
+    fn update_renderer(&mut self){
+        let projection = self.vulkan_data.get_projection_matrix();
+
+        let ship_transform = match self.player.ship_index{
+            None => {Matrix4::identity()}
+            Some(ship_index) => {
+                self.ships[ship_index].ship_space_transform()
+            }
+        };
+
+        let ship_transform_no_translation = match self.player.ship_index{
+            None => {Matrix4::identity()}
+            Some(ship_index) => {
+                self.ships[ship_index].ship_space_transform_no_translation()
+            }
+        };
+        let view_matrix = (ship_transform * Translation3::from(self.player.position + Player::HEAD_OFFSET).to_homogeneous()
+            * Matrix4::from(self.player.rotation)).try_inverse().unwrap().cast();
+        let view_matrix_no_translation = (ship_transform_no_translation * Matrix4::from(self.player.rotation)).try_inverse().unwrap().cast();
+
+
+
+
+        for ship_index in 0..self.ships.len(){
+            self.vulkan_data.objects[self.ships[ship_index].game_object.render_object_index].model =
+                (Matrix4::from(Translation3::from(self.ships[ship_index].game_object.position))
+                    * Matrix4::from(self.ships[ship_index].game_object.rotation)).cast();
+
+            self.vulkan_data.objects[self.ships[ship_index].game_object.render_object_index].view = view_matrix;
+            self.vulkan_data.objects[self.ships[ship_index].game_object.render_object_index].proj = projection;
+        }
+
+        self.vulkan_data.cubemap.as_mut().unwrap().process(view_matrix_no_translation, projection);
+
+
+
+        match self.player.model{
+            None => {}
+            Some(model_index) => {
+                self.vulkan_data.objects[self.player.model.unwrap()].model = (ship_transform*
+                    Matrix4::from(Translation3::from(self.player.position))
+                    * Rotation3::from_axis_angle(&(-Vector3::y_axis()), self.player.yaw).to_homogeneous()).cast();
+
+                self.vulkan_data.objects[self.player.model.unwrap()].view = view_matrix;
+                self.vulkan_data.objects[self.player.model.unwrap()].proj = projection;
+
+            }
+        }
+
+
+        for i in 0..self.objects.len() {
+            self.vulkan_data.objects[self.objects[i].render_object_index].model =
+                (Matrix4::from(Translation3::from(self.objects[i].position))
+                    * Matrix4::from(Rotation3::from(self.objects[i].rotation))).cast();
+
+            self.vulkan_data.objects[self.objects[i].render_object_index].view = if i == self.viewmodel_index{
+                Matrix4::identity()
+            }else{
+                view_matrix
+            };
+            self.vulkan_data.objects[self.objects[i].render_object_index].proj = projection;
+        }
+
         self.vulkan_data.uniform_buffer_object.mouse_position = Vector2::new(
             (self.mouse_buffer.x
                 / self
-                    .vulkan_data
-                    .surface_capabilities
-                    .unwrap()
-                    .current_extent
-                    .width as f64) as f32,
+                .vulkan_data
+                .surface_capabilities
+                .unwrap()
+                .current_extent
+                .width as f64) as f32,
             (self.mouse_buffer.y
                 / self
-                    .vulkan_data
-                    .surface_capabilities
-                    .unwrap()
-                    .current_extent
-                    .height as f64) as f32,
+                .vulkan_data
+                .surface_capabilities
+                .unwrap()
+                .current_extent
+                .height as f64) as f32,
         );
-        self.vulkan_data.process(&self.player);
-        self.vulkan_data.draw_frame();
     }
 }
