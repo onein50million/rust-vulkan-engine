@@ -208,7 +208,7 @@ impl Ship{
         }
     }
     fn process(&mut self, delta_time: f64){
-        self.game_object.rotation *= UnitQuaternion::from_euler_angles(1.0*delta_time,0.3*delta_time,0.4*delta_time)
+        // self.game_object.rotation *= UnitQuaternion::from_euler_angles(0.0*delta_time,0.5*delta_time,0.0*delta_time)
     }
     fn ship_space_transform(&self) -> Matrix4<f64>{
         return Matrix4::from(self.game_object.rotation).append_translation(&self.game_object.position);
@@ -245,31 +245,27 @@ impl Game {
 
         let mut ships = vec![];
         player.ship_index = Some(ships.len());
-        ships.push(
-            Ship::new(
-                vulkan_data.load_obj_model(
-                    "models/ship/ship.obj".parse().unwrap(),
-                    "models/ship/texture.png".parse().unwrap())));
+        ships.push(Ship::new(vulkan_data.load_folder("models/ship".parse().unwrap())));
 
         let planet_index = objects.len();
-        objects.push(
-            GameObject::new(
-                vulkan_data.load_obj_model(
-                    "models/planet/planet.obj".parse().unwrap(),
-                    "models/planet/texture.png".parse().unwrap())));
+        objects.push(GameObject::new(vulkan_data.load_folder("models/planet".parse().unwrap())));
 
         objects[planet_index].position = Vector3::new(-10.0,0.0,0.0);
 
         let viewmodel_index = objects.len();
-        objects.push(
-            GameObject::new(
-                vulkan_data.load_obj_model(
-                    "models/hands/hands.obj".parse().unwrap(),
-                    "models/hands/texture.png".parse().unwrap())));
 
+        objects.push(GameObject::new(vulkan_data.load_folder("models/hands".parse().unwrap())));
         vulkan_data.objects[objects[viewmodel_index].render_object_index].is_viewmodel = true;
-        objects[viewmodel_index].position = Vector3::new(0.0,0.0,0.5);
+        objects[viewmodel_index].position = Vector3::new(1.0,1.0,-1.0);
 
+
+        for i in 0..crate::NUM_LIGHTS{
+            let object_index = objects.len();
+            objects.push(GameObject::new(vulkan_data.load_folder("models/light".parse().unwrap())));
+            vulkan_data.objects[objects[object_index].render_object_index].is_viewmodel = true;
+            objects[object_index].position = vulkan_data.uniform_buffer_object.lights[i].position.xyz().cast();
+
+        }
 
         vulkan_data.update_vertex_buffer();
 
@@ -331,9 +327,6 @@ impl Game {
             * Matrix4::from(self.player.rotation)).try_inverse().unwrap().cast();
         let view_matrix_no_translation = (ship_transform_no_translation * Matrix4::from(self.player.rotation)).try_inverse().unwrap().cast();
 
-
-
-
         for ship_index in 0..self.ships.len(){
             self.vulkan_data.objects[self.ships[ship_index].game_object.render_object_index].model =
                 (Matrix4::from(Translation3::from(self.ships[ship_index].game_object.position))
@@ -350,12 +343,12 @@ impl Game {
         match self.player.model{
             None => {}
             Some(model_index) => {
-                self.vulkan_data.objects[self.player.model.unwrap()].model = (ship_transform*
+                self.vulkan_data.objects[model_index].model = (ship_transform*
                     Matrix4::from(Translation3::from(self.player.position))
                     * Rotation3::from_axis_angle(&(-Vector3::y_axis()), self.player.yaw).to_homogeneous()).cast();
 
-                self.vulkan_data.objects[self.player.model.unwrap()].view = view_matrix;
-                self.vulkan_data.objects[self.player.model.unwrap()].proj = projection;
+                self.vulkan_data.objects[model_index].view = view_matrix;
+                self.vulkan_data.objects[model_index].proj = projection;
 
             }
         }

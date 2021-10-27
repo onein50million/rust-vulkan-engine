@@ -4,7 +4,8 @@ use nalgebra::{Matrix4, Vector2, Vector3, Vector4};
 pub(crate) const FRAMERATE_TARGET: f64 = 280.0;
 pub(crate) const NUM_RANDOM: usize = 100;
 pub(crate) const FRAME_SAMPLES: usize = 100;
-pub(crate) const NUM_MODELS: usize = 100;
+pub(crate) const NUM_MODELS: usize = 1000;
+pub(crate) const NUM_LIGHTS: usize = 4;
 
 pub(crate) mod flags{
     pub(crate) const IS_CUBEMAP: u32 = 0b1;
@@ -18,22 +19,40 @@ pub(crate) mod flags{
 pub(crate) struct Vertex {
     pub(crate) position: Vector3<f32>,
     pub(crate) normal: Vector3<f32>,
+    pub(crate) tangent: Vector4<f32>,
     pub(crate) texture_coordinate: Vector2<f32>,
 }
 
-// #[derive(Copy, Clone)]
-// #[repr(C)]
-// pub(crate) struct NodeBuffer{
-//     pub(crate) node_type: Vector4<u32>,
-//     pub(crate) node_indices: [Vector4<u32>;8],
-// }
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub(crate) struct Light {
+    pub(crate) position: Vector4<f32>,
+    pub(crate) color: Vector4<f32>,
+
+}
+impl Light{
+    pub(crate) fn new() -> Self{
+        let rng = fastrand::Rng::new();
+        let distance = 5.0;
+        let power = 5.0;
+        let position = Vector4::new((rng.f32()-0.5)*2.0 * distance, -1.0, (rng.f32()-0.5)*2.0 * distance, 0.0);
+        let color =  Vector4::new(rng.f32() * power, rng.f32() * power, fastrand::f32()* power, 0.0);
+
+        println!("Position: {:}", position);
+        Self{
+            position,
+            color,
+        }
+    }
+}
 
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub(crate) struct UniformBufferObject {
     pub(crate) random: [Vector4<f32>; NUM_RANDOM], //std140 packing so it needs to be 16 bytes wide
+    pub(crate) lights: [Light; NUM_LIGHTS], //std140 packing so it needs to be 16 bytes wide
     pub(crate) player_index: u32,
-    pub(crate) value2: i32,
+    pub(crate) num_lights: i32,
     pub(crate) value3: i32,
     pub(crate) value4: i32,
     pub(crate) mouse_position: Vector2<f32>,
@@ -72,8 +91,13 @@ impl Vertex {
             vk::VertexInputAttributeDescriptionBuilder::new()
                 .binding(0)
                 .location(2)
-                .format(vk::Format::R32G32_SFLOAT)
+                .format(vk::Format::R32G32B32A32_SFLOAT)
                 .offset(24),
+            vk::VertexInputAttributeDescriptionBuilder::new()
+                .binding(0)
+                .location(3)
+                .format(vk::Format::R32G32_SFLOAT)
+                .offset(40),
         ];
 
         return attribute_descriptions
