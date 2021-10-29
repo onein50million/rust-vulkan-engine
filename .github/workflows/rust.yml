@@ -22,11 +22,10 @@ jobs:
       uses: actions/checkout@v2
       with: 
         repository: 'google/shaderc'
+        clean: 'false'
     - name: build glslc
       run: |
         ls
-        ls ../
-        cd ../shaderc
         cmake
         cd ../rust-vulkan-engine
     - name: Build shaders
