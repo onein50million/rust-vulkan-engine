@@ -20,11 +20,8 @@ jobs:
     - uses: actions/checkout@v2
     - name: download and build glslc
       run: |
-        git clone https://github.com/google/shaderc $SOURCE_DIR
-        cd shaderc
+        git clone https://github.com/google/shaderc
         ./utils/git-sync-deps
-        ls
-        cd shaderc
         mkdir cool-build-directory
         cd cool-build-directory
         cmake -GNinja -DCMAKE_BUILD_TYPE={Debug|Release|RelWithDebInfo} $SOURCE_DIR
