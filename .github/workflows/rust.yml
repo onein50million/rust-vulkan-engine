@@ -28,7 +28,7 @@ jobs:
         mkdir cool-build-directory
         cd cool-build-directory
         cmake $SOURCE_DIR -Dgtest_disable_pthreads=ON
-        cmake --build . --config {Release}
+        cmake --build . --config Release
         ls
     - name: Build shaders
       run: |
