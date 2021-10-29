@@ -8,8 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  CMAKE_BUILD_TYPE: Release
-  SHADERC_SKIP_TESTS: true
+  GLSLC_URL: "https://storage.googleapis.com/shaderc/artifacts/prod/graphics_shader_compiler/shaderc/windows/continuous_release_2017/374/20210924-175819/install.zip"
 
 
 
@@ -20,18 +19,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
-    - name: download and build glslc
-      run: |
-        git clone https://github.com/google/shaderc
-        $SOURCE_DIR=Resolve-Path shaderc
-        cd $SOURCE_DIR
-        ./utils/git-sync-deps
-        cd $SOURCE_DIR/
-        mkdir cool-build-directory
-        cd cool-build-directory
-        cmake $SOURCE_DIR -Dgtest_disable_pthreads=ON
-        cmake --build . --config Release
-        ls
+    - name: download glslc
+      run: wget $GLSLC_URL
     - name: Build shaders
       run: |
         ls ../
