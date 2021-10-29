@@ -4,31 +4,7 @@ layout(local_size_x = 8, local_size_y =8, local_size_z = 1) in;
 const bool RAYTRACING_ENABLED = false;
 
 const int NUM_RANDOM = 100;
-const int TREE_DEPTH = 10;
-const float base_voxel_size = 128;
-const float SPECULARITY = 0.5;
 
-const uint TYPE_SPHERE = 0;
-const uint TYPE_BOX = 1;
-
-const uint MAX_BOUNCES = 2;
-
-const uint SAMPLE_WIDTH = 1;
-const uint SAMPLE_COUNT = SAMPLE_WIDTH*SAMPLE_WIDTH;
-
-const int EMPTY = 0;
-const int CHILDREN = 1;
-const int REFLECTIVE = 2;
-
-struct Node{
-    int node_type;
-    int node_indices[8];
-    int next_deeper_node;
-    int next_same_node;
-    int parent_node;
-    int current_depth;
-    int path[TREE_DEPTH];
-};
 
 
 layout(push_constant) uniform PushConstants{

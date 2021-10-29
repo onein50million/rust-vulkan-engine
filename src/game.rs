@@ -229,6 +229,7 @@ pub(crate) struct Game {
     pub(crate) vulkan_data: VulkanData,
     ships: Vec<Ship>,
     viewmodel_index: usize,
+    helmet_index: usize,
 }
 
 impl Game {
@@ -264,8 +265,11 @@ impl Game {
             objects.push(GameObject::new(vulkan_data.load_folder("models/light".parse().unwrap())));
             vulkan_data.objects[objects[object_index].render_object_index].is_viewmodel = true;
             objects[object_index].position = vulkan_data.uniform_buffer_object.lights[i].position.xyz().cast();
-
         }
+
+        let helmet_index = objects.len();
+        objects.push(GameObject::new(vulkan_data.load_folder("models/test_helmet".parse().unwrap())));
+
 
         vulkan_data.update_vertex_buffer();
 
@@ -281,6 +285,7 @@ impl Game {
             vulkan_data,
             ships,
             viewmodel_index,
+            helmet_index,
         };
         return game;
     }
@@ -296,7 +301,8 @@ impl Game {
         self.mouse_buffer = Vector2::zeros();
         self.player.process(delta_time);
 
-        // self.objects[self.viewmodel_index].rotation *= UnitQuaternion::from_euler_angles(0.0,1.0*delta_time,0.0);
+
+        self.objects[self.helmet_index].rotation *= UnitQuaternion::from_euler_angles(0.0,1.0*delta_time,0.0);
 
         for i in 0..self.objects.len() {
             self.objects[i].process(delta_time);

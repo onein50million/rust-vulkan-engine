@@ -41,11 +41,14 @@ layout(location = 4) out vec3 worldPosition;
 
 
 void main() {
+    mat3 transpose_inverse = mat3(transpose(inverse(pushConstant.model)));
 
     gl_Position = pushConstant.proj * pushConstant.view * pushConstant.model * vec4(inPosition, 1.0);
-    fragNormal = mat3(transpose(inverse(pushConstant.model))) * inNormal;
+    fragNormal = transpose_inverse * inNormal;
     fragTexCoord = inTexCoord;
     fragPosition = inPosition;
     worldPosition = (pushConstant.model * vec4(inPosition, 1.0)).xyz;
+//    fragTangent = vec4(transpose_inverse * inTangent.xyz, inTangent.w);
     fragTangent = inTangent;
+
 }
