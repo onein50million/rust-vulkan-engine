@@ -1,6 +1,8 @@
 # rust-vulkan-engine
 Test game engine vaguely following vulkan-tutorial.com
 
+PBR lighting on branch [_untitled-space-game_](https://github.com/onein50million/rust-vulkan-engine/tree/untitled-space-game)
+
 ![image](https://user-images.githubusercontent.com/6622114/126084615-472e39ef-ce39-4d75-a2a0-7a3332a2afe7.png)
 
 <figure>
