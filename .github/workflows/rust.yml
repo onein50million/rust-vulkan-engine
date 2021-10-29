@@ -25,13 +25,13 @@ jobs:
     - name: build glslc
       run: |
         ls
-        ../ls
+        ls ../
         cd ../shaderc
         cmake
         cd ../rust-vulkan-engine
-    - name: Build shaders #shouldn't work
+    - name: Build shaders
       run: |
-        ../ls
+        ls ../
         glslc.exe shader.vert -o vert.spv
         glslc.exe shader.frag -o frag.spv
         glslc.exe shader.comp -o comp.spv
