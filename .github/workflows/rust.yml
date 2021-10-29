@@ -20,7 +20,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: download glslc
-      run: wget $GLSLC_URL
+      run: Invoke-WebRequest $GLSLC_URL
     - name: Build shaders
       run: |
         ls ../
