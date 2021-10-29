@@ -1,18 +1,24 @@
 use crate::cube::*;
 use crate::support::*;
 use erupt::{vk, DeviceLoader, EntryLoader, ExtendableFromConst, InstanceLoader, SmallVec};
-use image::GenericImageView;
-use nalgebra::{Matrix4, Vector2, Vector3, Vector4};
+use image::{GenericImageView, ImageFormat};
+use nalgebra::{Matrix4, Rotation3, Vector2, Vector3, Vector4};
 use std::convert::TryInto;
 use std::ffi::{c_void, CStr, CString};
+use std::fmt::Debug;
+use std::fs::File;
+use std::io::BufReader;
 use std::mem::size_of;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use erupt::vk1_0::{Format, ImageViewType};
+use image::hdr::HdrDecoder;
 use winit::window::Window;
 
 const BASE_VOXEL_SIZE: f32 = 128.0;
 const MIP_LEVELS: u32 = 6;
+
 
 struct CombinedImage {
     image: vk::Image,
@@ -28,17 +34,45 @@ impl CombinedImage {
         path: std::path::PathBuf,
         view_type: vk::ImageViewType,
         image_format: vk::Format,
-    ) -> Self {
+    ) -> Option<Self> {
         println!("Loading image: {:?}", path);
 
         if !path.is_file() {
-            panic!("File not found: {:?}", path);
+            println!("File not found: {:?}", path);
+            return None;
         }
 
-        let dynamic_image = image::io::Reader::open(path).unwrap().decode().unwrap();
-
+        let reader = image::io::Reader::open(path.clone()).unwrap();
+        let format = reader.format().unwrap();
+        let dynamic_image = reader.decode().unwrap();
+        let color = dynamic_image.color();
         let width = dynamic_image.width();
         let height = dynamic_image.height();
+
+        let mut bytes = if format == ImageFormat::Hdr{
+            let image = image::codecs::hdr::HdrDecoder::new(BufReader::new(File::open(path).unwrap())).unwrap();
+
+            let pixels = image.read_image_hdr().unwrap();
+
+            let mut out_bytes = vec![];
+            for pixel in pixels{
+                let mut pixel_bytes = vec![];
+                for channel in pixel.0{
+                    pixel_bytes.extend_from_slice(&channel.to_le_bytes())
+                }
+                pixel_bytes.extend_from_slice(&1.0_f32.to_be_bytes());
+
+                out_bytes.extend_from_slice(&pixel_bytes)
+            }
+            out_bytes
+
+        } else{
+            dynamic_image.into_rgba8().into_raw()
+        };
+
+        let pixel_size = bytes.len() / (width*height) as usize;
+
+        println!("channel count: {:}", color.channel_count());
 
         let width = if view_type == vk::ImageViewType::CUBE {
             height
@@ -46,16 +80,16 @@ impl CombinedImage {
             width
         };
 
+        println!("pixel_size: {:}", pixel_size);
 
-        let mut pixels = dynamic_image.into_rgba8().into_raw();
         let mut faces = vec![vec![]; 6];
         if view_type == vk::ImageViewType::CUBE {
-            for (face, line) in pixels.chunks(4 * 256).enumerate() {
+            for (face, line) in bytes.chunks(pixel_size * width as usize).enumerate() {
                 // println!("face: {:}, line: {:?}",face,line);
                 faces[face % 6].extend(line);
             }
 
-            pixels = faces.concat();
+            bytes = faces.concat();
         }
         let layer_count = if view_type == vk::ImageViewType::CUBE {
             6
@@ -149,7 +183,7 @@ impl CombinedImage {
         };
 
         let buffer_info = vk::BufferCreateInfoBuilder::new()
-            .size(pixels.len() as u64)
+            .size(bytes.len() as u64)
             .usage(vk::BufferUsageFlags::TRANSFER_SRC);
 
         let buffer_allocation_create_info = vk_mem_erupt::AllocationCreateInfo {
@@ -167,7 +201,7 @@ impl CombinedImage {
         unsafe {
             staging_buffer_allocation_info
                 .get_mapped_data()
-                .copy_from_nonoverlapping(pixels.as_ptr(), pixels.len())
+                .copy_from_nonoverlapping(bytes.as_ptr(), bytes.len())
         };
         vulkan_data.transition_image_layout(
             image,
@@ -188,7 +222,7 @@ impl CombinedImage {
         for face in 0..layer_count {
             regions.push(
                 vk::BufferImageCopyBuilder::new()
-                    .buffer_offset((face * width * width * 4) as u64)
+                    .buffer_offset((face * width * width * pixel_size as u32) as u64)
                     .buffer_row_length(0)
                     .buffer_image_height(0)
                     .image_subresource(vk::ImageSubresourceLayers {
@@ -248,14 +282,14 @@ impl CombinedImage {
             height,
         };
 
-        return texture;
+        return Some(texture);
     }
 }
 
 struct TextureSet {
     albedo: Option<CombinedImage>,
     normal: Option<CombinedImage>,
-    roughness: Option<CombinedImage>
+    roughness_metalness_ao: Option<CombinedImage>
 }
 
 pub(crate) struct RenderObject {
@@ -291,12 +325,12 @@ impl RenderObject {
             vulkan_data.indices.push(index + vertex_start);
         }
         let texture_index;
-        match is_cubemap {
+        match (is_cubemap) {
             true => {
                 texture_index = vulkan_data.cubemaps.len();
                 vulkan_data.cubemaps.push(texture.albedo.unwrap());
             }
-            false => {
+            false=> {
                 texture_index = vulkan_data.textures.len();
                 vulkan_data.textures.push(texture);
             }
@@ -412,14 +446,14 @@ impl Cubemap {
         .concat();
 
         let texture = TextureSet {
-            albedo: Some(CombinedImage::new(
+            albedo: CombinedImage::new(
                 vulkan_data,
                 texture_path,
                 vk::ImageViewType::CUBE,
                 vk::Format::R8G8B8A8_SRGB,
-            )),
+            ),
             normal: None,
-            roughness: None,
+            roughness_metalness_ao: None,
         };
 
         let cubemap = Cubemap {
@@ -515,6 +549,7 @@ pub(crate) struct VulkanData {
     pub(crate) objects: Vec<RenderObject>,
     textures: Vec<TextureSet>,
     cubemaps: Vec<CombinedImage>,
+    irradiance_maps: Vec<CombinedImage>,
     fallback_texture: Option<TextureSet>,
 }
 
@@ -613,6 +648,7 @@ impl VulkanData {
             fullscreen_quads: vec![],
             textures: vec![],
             cubemaps: vec![],
+            irradiance_maps: vec![],
             fallback_texture: None,
         };
     }
@@ -778,24 +814,24 @@ impl VulkanData {
         self.create_command_pool();
 
         self.fallback_texture = Some(TextureSet {
-            albedo: Some(CombinedImage::new(
+            albedo: CombinedImage::new(
                 self,
                 "models/fallback/albedo.png".parse().unwrap(),
                 vk::ImageViewType::_2D,
                 vk::Format::R8G8B8A8_SRGB,
-            )),
-            normal: Some(CombinedImage::new(
+            ),
+            normal: CombinedImage::new(
                 self,
                 "models/fallback/normal.png".parse().unwrap(),
                 vk::ImageViewType::_2D,
                 vk::Format::R8G8B8A8_UNORM,
-            )),
-            roughness: Some(CombinedImage::new(
+            ),
+            roughness_metalness_ao: CombinedImage::new(
                 self,
-                "models/fallback/roughness.png".parse().unwrap(),
+                "models/fallback/rough_metal_ao.png".parse().unwrap(),
                 vk::ImageViewType::_2D,
                 vk::Format::R8G8B8A8_UNORM,
-            )),
+            ),
         });
 
         self.create_compute_images();
@@ -814,7 +850,7 @@ impl VulkanData {
                         height: self.surface_capabilities.unwrap().current_extent.height,
                     }),
                     normal: None,
-                    roughness: None,
+                    roughness_metalness_ao: None,
                 },
                 false,
             );
@@ -1080,43 +1116,31 @@ impl VulkanData {
     }
     pub(crate) fn load_folder(&mut self, folder: PathBuf) -> usize {
         let albedo_path = folder.join("albedo.png");
-        let albedo;
-        if albedo_path.is_file() {
-            albedo = Some(CombinedImage::new(
-                self,
-                albedo_path,
-                vk::ImageViewType::_2D,
-                vk::Format::R8G8B8A8_SRGB,
-            ))
-        } else {
-            albedo = None;
-        }
-        let normal_path = folder.join("normal.png");
-        let normal;
-        if normal_path.is_file() {
-            normal = Some(CombinedImage::new(
-                self,
-                normal_path,
-                vk::ImageViewType::_2D,
-                vk::Format::R8G8B8A8_UNORM
-            ))
-        } else {
-            normal = None;
-        }
+        let albedo = CombinedImage::new(
+            self,
+            albedo_path,
+            vk::ImageViewType::_2D,
+            vk::Format::R8G8B8A8_SRGB,
+        );
 
-        let roughness_path = folder.join("roughness.png");
-        let roughness;
-        if roughness_path.is_file() {
-            roughness = Some(CombinedImage::new(
+        let normal_path = folder.join("normal.png");
+        let normal = CombinedImage::new(
+            self,
+            normal_path,
+            vk::ImageViewType::_2D,
+            vk::Format::R8G8B8A8_UNORM
+        );
+
+
+        let roughness_path = folder.join("rough_metal_ao.png");
+        let rough_metal_ao = CombinedImage::new(
                 self,
                 roughness_path,
                 vk::ImageViewType::_2D,
                 vk::Format::R8G8B8A8_UNORM
-            ))
-        } else {
-            roughness = None;
-        }
-        let texture = TextureSet { albedo, normal, roughness };
+            );
+
+        let texture = TextureSet { albedo, normal, roughness_metalness_ao: rough_metal_ao };
 
         let vertices = Self::load_gltf_model(folder.join("model.glb"));
         let indices = vec![];
@@ -1135,7 +1159,8 @@ impl VulkanData {
         let mut vertices = vec![];
         // let mut positions = vec![];
         for node in gltf.nodes(){
-            let transformation_matrix = Matrix4::from(node.transform().matrix());
+            let transformation_matrix = Matrix4::from(node.transform().matrix()) * Matrix4::from_axis_angle(&Vector3::x_axis(), std::f32::consts::PI);
+            let transformation_position = transformation_matrix.column(3).xyz();
             match node.mesh(){
                 None => {}
                 Some(mesh) => {
@@ -1149,10 +1174,13 @@ impl VulkanData {
                         for triangle in indices.chunks(3) {
                             for i in 0..3{
                                 let position = positions[triangle[i] as usize];
-                                let position = Vector3::new(position[0] * -1.0,position[1]*-1.0, position[2] * -1.0);
+                                let position = Vector3::from(position);
+                                let position = transformation_matrix.transform_vector(&position);
 
                                 let normal = normals[triangle[i] as usize];
-                                let normal = Vector3::from(normal).component_mul(&Vector3::new(-1.0,-1.0,-1.0));
+                                let normal = Vector3::from(normal);
+                                let normal = transformation_matrix.transform_vector(&normal) - transformation_position;
+
                                 let texture_coordinate = texture_coordinates[triangle[i] as usize ];
                                 let texture_coordinate = Vector2::from(texture_coordinate);
 
@@ -1160,8 +1188,18 @@ impl VulkanData {
                                 let index2 = triangle[(i+1)%3] as usize;
                                 let index3 = triangle[(i+2)%3] as usize;
 
-                                let edge1 = Vector3::from(positions[index2]) - Vector3::from(positions[index1]);
-                                let edge2 = Vector3::from(positions[index3]) - Vector3::from(positions[index1]);
+                                let position3 = transformation_matrix.transform_vector(&Vector3::from(positions[index3]));
+                                let position1 = transformation_matrix.transform_vector(&Vector3::from(positions[index1]));
+                                let position2 = transformation_matrix.transform_vector(&Vector3::from(positions[index2]));
+
+                                // let position1 = &Vector3::from(positions[index1]);
+                                // let position2 = &Vector3::from(positions[index2]);
+                                // let position3 = &Vector3::from(positions[index3]);
+
+
+
+                                let edge1 = position2 - position1;
+                                let edge2 = position3 - position1; //Clion hush
                                 let delta_uv1 = Vector2::from(texture_coordinates[index2]) - Vector2::from(texture_coordinates[index1]);
                                 let delta_uv2 = Vector2::from(texture_coordinates[index3]) - Vector2::from(texture_coordinates[index1]);
 
@@ -1183,7 +1221,7 @@ impl VulkanData {
                                 );
 
                                 vertices.push(Vertex {
-                                    position: transformation_matrix.transform_vector(&position),
+                                    position,
                                     normal,
                                     tangent,
                                     texture_coordinate,
@@ -1191,26 +1229,12 @@ impl VulkanData {
 
 
                             }
-
-
-
-
-
-                            // vertices.push(Vertex {
-                            //     position: transformation_matrix.transform_vector(&position),
-                            //     normal: Vector3::from(normal).component_mul(&Vector3::new(1.0,1.0,1.0)),
-                            //     tangent: Vector4::from(tangent).component_mul(&Vector4::new(1.0,1.0,1.0,1.0)),
-                            //     texture_coordinate: Vector2::from(texture_coordinate),
-                            // });
-                            // println!("normal: {:}, tangent: {:}", Vector3::from(normal),Vector4::from(tangent), );
                         }
                     }
                 }
             }
         }
-        for mesh in gltf.meshes() {
 
-        }
         return vertices;
     }
 
@@ -1338,6 +1362,11 @@ impl VulkanData {
                 .descriptor_count(NUM_MODELS as u32)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBindingBuilder::new()
+                .binding(6)
+                .descriptor_count(NUM_MODELS as u32)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
 
         ];
 
@@ -1420,11 +1449,11 @@ impl VulkanData {
                             .sampler(normal.sampler)
                             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
                     );
-                    let roughness = texture.roughness.as_ref().unwrap_or(
+                    let roughness = texture.roughness_metalness_ao.as_ref().unwrap_or(
                         self.fallback_texture
                             .as_ref()
                             .unwrap()
-                            .roughness
+                            .roughness_metalness_ao
                             .as_ref()
                             .unwrap(),
                     );
@@ -1461,7 +1490,7 @@ impl VulkanData {
                     let roughness = self.fallback_texture
                             .as_ref()
                             .unwrap()
-                            .roughness
+                            .roughness_metalness_ao
                             .as_ref()
                             .unwrap();
 
@@ -1491,6 +1520,27 @@ impl VulkanData {
                             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                             .image_view(self.cubemaps[0].image_view)
                             .sampler(self.cubemaps[0].sampler),
+                    );
+                }
+
+
+                let mut irradiance_infos = vec![];
+                for cubemap in &self.irradiance_maps {
+                    println!("texture: {:X?}", cubemap.image_view.object_handle());
+                    irradiance_infos.push(
+                        vk::DescriptorImageInfoBuilder::new()
+                            .image_view(cubemap.image_view)
+                            .sampler(cubemap.sampler)
+                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+                    );
+                }
+                let cubemaps_left = NUM_MODELS - irradiance_infos.len();
+                for _ in 0..cubemaps_left {
+                    irradiance_infos.push(
+                        vk::DescriptorImageInfoBuilder::new()
+                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                            .image_view(self.irradiance_maps[0].image_view)
+                            .sampler(self.irradiance_maps[0].sampler),
                     );
                 }
 
@@ -1525,6 +1575,13 @@ impl VulkanData {
                         .dst_array_element(0)
                         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                         .image_info(&roughness_infos),
+                    vk::WriteDescriptorSetBuilder::new()
+                        .dst_set(*descriptor_set)
+                        .dst_binding(6)
+                        .dst_array_element(0)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .image_info(&irradiance_infos),
+
                 ];
 
                 unsafe {
@@ -2812,8 +2869,18 @@ impl VulkanData {
     fn create_cubemap_resources(&mut self) {
         self.cubemap = Some(Cubemap::new(
             self,
-            std::path::PathBuf::from("cubemap_city/StandardCubeMap.png"),
+            std::path::PathBuf::from("cubemap_space/StandardCubeMap.png"),
         ));
+
+
+
+        self.irradiance_maps.push(CombinedImage::new(
+            self,
+            std::path::PathBuf::from("cubemap_space/irradiance.hdr"),
+        vk::ImageViewType::CUBE,
+        vk::Format::R32G32B32A32_SFLOAT,
+        ).unwrap());
+
     }
 
     fn create_command_pool(&mut self) {

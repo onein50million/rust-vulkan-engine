@@ -34,7 +34,7 @@ impl Light{
     pub(crate) fn new() -> Self{
         let rng = fastrand::Rng::new();
         let distance = 5.0;
-        let power = 5.0;
+        let power = 50.0;
         let position = Vector4::new((rng.f32()-0.5)*2.0 * distance, -1.0, (rng.f32()-0.5)*2.0 * distance, 0.0);
         let color =  Vector4::new(rng.f32() * power, rng.f32() * power, fastrand::f32()* power, 0.0);
 
