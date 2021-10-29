@@ -23,6 +23,7 @@ jobs:
         $env:SOURCE_DIR="/cool-source-dir"
         git clone https://github.com/google/shaderc $SOURCE_DIR
         cd $SOURCE_DIR
+        ls
         ./utils/git-sync-deps
         cd $SOURCE_DIR/
         mkdir cool-build-directory
