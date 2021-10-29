@@ -28,8 +28,8 @@ jobs:
         cd $SOURCE_DIR/
         mkdir cool-build-directory
         cd cool-build-directory
-        cmake -GNinja -DCMAKE_BUILD_TYPE={Debug|Release|RelWithDebInfo} $SOURCE_DIR
-        ninja
+        cmake $SOURCE_DIR
+        cmake --build . --config {Release|Debug|MinSizeRel|RelWithDebInfo}
         cd ../rust-vulkan-engine
     - name: Build shaders
       run: |
