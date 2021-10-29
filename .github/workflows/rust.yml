@@ -18,8 +18,20 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
-    - name: Build shaders
-      run: ./shaders/compile.bat
+    - name: download glslc
+      uses: actions/checkout@v2
+      with: 
+        repository: 'google/shaderc'
+    - name: build glslc
+      run: |
+        cd shaderc
+        cmake
+        cd ..
+    - name: Build shaders #shouldn't work
+      run: |
+        glslc.exe shader.vert -o vert.spv
+        glslc.exe shader.frag -o frag.spv
+        glslc.exe shader.comp -o comp.spv
     - name: Build
       run: cargo build --verbose
     - name: Run tests
@@ -28,6 +40,7 @@ jobs:
       uses: actions/upload-artifact@v2.2.4
       with:
         name: executable
-        path: target/debug/rust-vulkan-engine.exe
-        
+        path: |
+          target/debug/rust-vulkan-engine.exe
+          shaders/*.spv
       
