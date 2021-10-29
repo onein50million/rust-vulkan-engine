@@ -20,6 +20,7 @@ jobs:
     - uses: actions/checkout@v2
     - name: download and build glslc
       run: |
+        SOURCE_DIR=/cool-source-dir
         git clone https://github.com/google/shaderc $SOURCE_DIR
         cd $SOURCE_DIR
         ./utils/git-sync-deps
