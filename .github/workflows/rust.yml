@@ -23,14 +23,13 @@ jobs:
         git clone https://github.com/google/shaderc
         $SOURCE_DIR=Resolve-Path shaderc
         cd $SOURCE_DIR
-        ls
         ./utils/git-sync-deps
         cd $SOURCE_DIR/
         mkdir cool-build-directory
         cd cool-build-directory
         cmake $SOURCE_DIR
-        cmake --build . --config {Release|Debug|MinSizeRel|RelWithDebInfo}
-        cd ../rust-vulkan-engine
+        cmake --build . --config {Release}
+        ls
     - name: Build shaders
       run: |
         ls ../
