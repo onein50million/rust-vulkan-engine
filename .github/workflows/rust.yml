@@ -21,7 +21,7 @@ jobs:
     - name: download and build glslc
       run: |
         git clone https://github.com/google/shaderc
-        $SOURCE_DIR=realpath shaderc
+        $SOURCE_DIR=Resolve-Path shaderc
         cd $SOURCE_DIR
         ls
         ./utils/git-sync-deps
