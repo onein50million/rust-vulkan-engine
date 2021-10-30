@@ -44,6 +44,9 @@ layout(binding = 4) uniform sampler2D normal_maps[NUM_MODELS];
 layout(binding = 5) uniform sampler2D rough_metal_ao_maps[NUM_MODELS];
 
 layout(binding = 6) uniform samplerCube irradiance_map[NUM_MODELS];
+layout(binding = 7) uniform sampler2D brdf_lut;
+layout(binding = 8) uniform samplerCube environment_map[NUM_MODELS];
+
 
 layout(location = 0) in vec3 fragPosition;
 layout(location = 1) in vec3 fragNormal;
@@ -161,12 +164,18 @@ void main() {
         }
 
         vec3 irradiance = texture(irradiance_map[0], normal).rgb;
-        vec3 irradiance_reflection = fresnelSchlick(max(dot(normal,view_direction),0.0), normal_incidence   );
+        vec3 irradiance_reflection = fresnelSchlick(max(dot(normal,view_direction),0.0), normal_incidence);
         vec3 irradiance_refraction = 1.0 - irradiance_reflection;
 
+        vec3 reflection = reflect(-view_direction, normal);
+        vec3 prefilteredColor = textureLod(environment_map[0],reflection,roughness*6).rgb; //TODO set max reflection lod smarterly
+        vec2 brdf = texture(brdf_lut,vec2(max(dot(normal,view_direction),0.0),roughness)).rg;
+        vec3 specular = prefilteredColor * (irradiance_reflection * brdf.x + brdf.y);
+
         vec3 diffuse = irradiance * albedo.rgb;
-        vec3 ambient = irradiance_refraction * diffuse * ambient_occlusion * EXPOSURE;
+        vec3 ambient = (irradiance_refraction * diffuse + specular) * ambient_occlusion * EXPOSURE;
         vec3 color = ambient + total_light;
+
 
         outColor = vec4(color, albedo.a);
 
