@@ -550,6 +550,8 @@ pub(crate) struct VulkanData {
     textures: Vec<TextureSet>,
     cubemaps: Vec<CombinedImage>,
     irradiance_maps: Vec<CombinedImage>,
+    environment_maps: Vec<CombinedImage>,
+    brdf_lut: Option<CombinedImage>,
     fallback_texture: Option<TextureSet>,
 }
 
@@ -649,6 +651,8 @@ impl VulkanData {
             textures: vec![],
             cubemaps: vec![],
             irradiance_maps: vec![],
+            environment_maps: vec![],
+            brdf_lut: None,
             fallback_texture: None,
         };
     }
@@ -1367,6 +1371,16 @@ impl VulkanData {
                 .descriptor_count(NUM_MODELS as u32)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBindingBuilder::new()
+                .binding(7)
+                .descriptor_count(1)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBindingBuilder::new()
+                .binding(8)
+                .descriptor_count(NUM_MODELS as u32)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
 
         ];
 
@@ -1544,6 +1558,34 @@ impl VulkanData {
                     );
                 }
 
+
+                let brdf_infos = vec![vk::DescriptorImageInfoBuilder::new()
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image_view(self.brdf_lut.as_ref().unwrap().image_view)
+                    .sampler(self.brdf_lut.as_ref().unwrap().sampler)];
+
+                let mut environment_infos = vec![];
+                for cubemap in &self.environment_maps {
+                    println!("texture: {:X?}", cubemap.image_view.object_handle());
+                    environment_infos.push(
+                        vk::DescriptorImageInfoBuilder::new()
+                            .image_view(cubemap.image_view)
+                            .sampler(cubemap.sampler)
+                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+                    );
+                }
+                let cubemaps_left = NUM_MODELS - environment_infos.len();
+                for _ in 0..cubemaps_left {
+                    environment_infos.push(
+                        vk::DescriptorImageInfoBuilder::new()
+                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                            .image_view(self.environment_maps[0].image_view)
+                            .sampler(self.environment_maps[0].sampler),
+                    );
+                }
+
+
+
                 let descriptor_writes = [
                     vk::WriteDescriptorSetBuilder::new()
                         .dst_set(*descriptor_set)
@@ -1581,6 +1623,18 @@ impl VulkanData {
                         .dst_array_element(0)
                         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                         .image_info(&irradiance_infos),
+                    vk::WriteDescriptorSetBuilder::new()
+                        .dst_set(*descriptor_set)
+                        .dst_binding(7)
+                        .dst_array_element(0)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .image_info(&brdf_infos),
+                    vk::WriteDescriptorSetBuilder::new()
+                        .dst_set(*descriptor_set)
+                        .dst_binding(8)
+                        .dst_array_element(0)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .image_info(&environment_infos),
 
                 ];
 
@@ -2871,14 +2925,26 @@ impl VulkanData {
             self,
             std::path::PathBuf::from("cubemap_space/StandardCubeMap.png"),
         ));
-
-
-
         self.irradiance_maps.push(CombinedImage::new(
             self,
             std::path::PathBuf::from("cubemap_space/irradiance.hdr"),
         vk::ImageViewType::CUBE,
         vk::Format::R32G32B32A32_SFLOAT,
+        ).unwrap());
+
+        self.brdf_lut =
+            CombinedImage::new(
+                self,
+                PathBuf::from("brdf_lut.png"),
+                vk::ImageViewType::_2D,
+                vk::Format::R8G8B8A8_UNORM
+        );
+
+        self.environment_maps.push(CombinedImage::new(
+            self,
+            std::path::PathBuf::from("cubemap_space/environment.hdr"),
+            vk::ImageViewType::CUBE,
+            vk::Format::R32G32B32A32_SFLOAT,
         ).unwrap());
 
     }
