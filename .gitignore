@@ -4,4 +4,5 @@
 *.lock
 *.secret
 *.rdc
-*.blend
+*.blend1
+*.elf

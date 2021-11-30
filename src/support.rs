@@ -21,6 +21,19 @@ pub(crate) struct Vertex {
     pub(crate) normal: Vector3<f32>,
     pub(crate) tangent: Vector4<f32>,
     pub(crate) texture_coordinate: Vector2<f32>,
+    pub(crate) texture_type: u32,
+}
+
+impl Vertex{
+    pub(crate) const fn new(position: Vector3<f32>, normal: Vector3<f32>) -> Self{
+        return Self{
+            position,
+            normal,
+            tangent: Vector4::new(0.0,0.0,0.0,0.0),
+            texture_coordinate: Vector2::new(0.0,0.0),
+            texture_type: 0
+        }
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -98,6 +111,11 @@ impl Vertex {
                 .location(3)
                 .format(vk::Format::R32G32_SFLOAT)
                 .offset(40),
+            vk::VertexInputAttributeDescriptionBuilder::new()
+                .binding(0)
+                .location(4)
+                .format(vk::Format::R32_UINT)
+                .offset(48),
         ];
 
         return attribute_descriptions
