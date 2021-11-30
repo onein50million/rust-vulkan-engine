@@ -2,6 +2,8 @@ mod cube;
 mod game;
 mod renderer;
 mod support;
+mod emulator;
+
 
 use crate::game::*;
 use crate::renderer::*;

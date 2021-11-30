@@ -1,7 +1,12 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use crate::renderer::*;
 use nalgebra::{Matrix4, Rotation3, Translation3, UnitQuaternion, Vector2, Vector3, zero};
 use std::time::Instant;
 use winit::window::Window;
+use crate::emulator::memory::Display;
+use crate::emulator::processor;
+use crate::emulator::processor::ProcessorResult;
 
 // trait GlobalPosition {
 //     fn get_global_position(&self, game: &Game) -> Vector3<f64>;
@@ -219,6 +224,7 @@ impl Ship{
 }
 
 
+
 pub(crate) struct Game {
     objects: Vec<GameObject>,
     pub(crate) player: Player,
@@ -230,6 +236,7 @@ pub(crate) struct Game {
     ships: Vec<Ship>,
     viewmodel_index: usize,
     helmet_index: usize,
+    pub(crate) processor: crate::emulator::processor::Processor,
 }
 
 impl Game {
@@ -270,12 +277,18 @@ impl Game {
         let helmet_index = objects.len();
         objects.push(GameObject::new(vulkan_data.load_folder("models/test_helmet".parse().unwrap())));
 
+        let mut console = GameObject::new(vulkan_data.load_folder("models/console".parse().unwrap()));
+        console.position = Vector3::new(2.0,0.0,2.0);
+        objects.push(console);
 
         vulkan_data.update_vertex_buffer();
 
         player.model = None;
 
-        let game = Game {
+        let code = std::fs::read("starship-os.bin").unwrap();
+        let processor = processor::Processor::new(code);
+
+        let mut game = Game {
             objects,
             player,
             mouse_buffer: Vector2::new(0.0, 0.0),
@@ -286,12 +299,26 @@ impl Game {
             ships,
             viewmodel_index,
             helmet_index,
+            processor,
         };
+        let display =  Display{
+            width: 128,
+            height: 128,
+            cpu_image_index: 0
+        };
+
+        game.processor.memory.set_device(0,crate::emulator::memory::Device::Display(display));
+
         return game;
     }
     pub(crate) fn process(&mut self) {
         let delta_time = self.last_frame_instant.elapsed().as_secs_f64();
         self.last_frame_instant = std::time::Instant::now();
+
+        match self.processor.process(&mut self.vulkan_data){
+            ProcessorResult::Break => {self.processor.program_counter = 0}
+            ProcessorResult::Continue => {}
+        }
 
         for ship_index in 0..self.ships.len(){
             self.ships[ship_index].process(delta_time);

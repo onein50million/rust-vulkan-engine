@@ -46,6 +46,7 @@ layout(binding = 5) uniform sampler2D rough_metal_ao_maps[NUM_MODELS];
 layout(binding = 6) uniform samplerCube irradiance_map[NUM_MODELS];
 layout(binding = 7) uniform sampler2D brdf_lut;
 layout(binding = 8) uniform samplerCube environment_map[NUM_MODELS];
+layout(binding = 9) uniform usampler2D cpu_images[NUM_MODELS];
 
 
 layout(location = 0) in vec3 fragPosition;
@@ -54,10 +55,11 @@ layout(location = 2) in vec4 fragTangent;
 layout(location = 3) in vec2 fragTexCoord;
 
 layout(location = 4) in vec3 worldPosition;
+layout(location = 5) flat in uint textureType;
 
 layout(location = 0) out vec4 outColor;
 
-const float EXPOSURE = 1.0;
+const float EXPOSURE = 1.0/5.0;
 
 vec3 fresnelSchlick(float cos_theta, vec3 normal_incidence){
     return normal_incidence + (1.0 - normal_incidence) * pow(clamp(1.0 - cos_theta, 0.0, 1.0),5.0);
@@ -98,15 +100,21 @@ void main() {
         outColor = vec4(texture(cubemaps[pushConstant.texture_index], fragPosition).rgb,1.0);
 
     }else{
+        vec4 albedo = texture(texSampler[pushConstant.texture_index], fragTexCoord) * pushConstant.constant;
         if ((pushConstant.bitfield&IS_HIGHLIGHTED) > 0){
             outColor = vec4(0.9,0.1,0.1,1.0);
             return;
         }
         if ((pushConstant.bitfield&IS_VIEWMODEL) > 0){
-            outColor = texture(texSampler[pushConstant.texture_index], fragTexCoord) * pushConstant.constant;
+//            uint cpu_image_value = texture(cpu_images[pushConstant.texture_index], fragTexCoord).r;
+//            outColor = vec4(vec3(float(cpu_image_value)/255.0),1.0);
+            outColor = albedo;
             return;
         }
-        vec4 albedo = texture(texSampler[pushConstant.texture_index], fragTexCoord) * pushConstant.constant;
+
+        if (textureType == 1){
+            albedo = vec4(vec3(texture(cpu_images[0], fragTexCoord).r/255.0),1.0);
+        }
         float roughness = texture(rough_metal_ao_maps[pushConstant.texture_index], fragTexCoord).r;
         float metalness = texture(rough_metal_ao_maps[pushConstant.texture_index], fragTexCoord).g;
         float ambient_occlusion = texture(rough_metal_ao_maps[pushConstant.texture_index], fragTexCoord).b;
@@ -178,6 +186,7 @@ void main() {
 
 
         outColor = vec4(color, albedo.a);
+//        outColor = vec4(vec3(textureType), 1.0);
 
     }
 }

@@ -15,3 +15,10 @@ fastrand = "1.5.0"
 erupt = "0.20.0+190"
 vk-mem-erupt = {git = "https://github.com/onein50million/vk-mem-erupt.git"}
 nalgebra = "0.29.0"
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev]
+opt-level = 3
+debug = true

@@ -14,172 +14,48 @@ use nalgebra::{Vector2, Vector3, Vector4};
 */
 
 pub(crate) const POSITIVE_X_VERTICES: [Vertex; 4] = [
-    Vertex {
-        position: Vector3::new(1.0, -1.0, -1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
-    Vertex {
-        position: Vector3::new(1.0, 1.0, -1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
-    Vertex {
-        position: Vector3::new(1.0, 1.0, 1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
-    Vertex {
-        position: Vector3::new(1.0, -1.0, 1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
+    Vertex::new(Vector3::new(1.0, -1.0, -1.0), Vector3::new(1.0, 1.0, 1.0)),
+    Vertex::new(Vector3::new(1.0, 1.0, -1.0), Vector3::new(1.0, 1.0, 1.0)),
+    Vertex::new(Vector3::new(1.0, 1.0, 1.0), Vector3::new(1.0, 1.0, 1.0)),
+    Vertex::new(Vector3::new(1.0, -1.0, 1.0), Vector3::new(1.0, 1.0, 1.0)),
 ];
-
 
 pub(crate) const NEGATIVE_X_VERTICES: [Vertex; 4] = [
-    Vertex {
-        position: Vector3::new(-1.0, -1.0, 1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
-    Vertex {
-        position: Vector3::new(-1.0, 1.0, 1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
-    Vertex {
-        position: Vector3::new(-1.0, 1.0, -1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
-    Vertex {
-        position: Vector3::new(-1.0, -1.0, -1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
+    Vertex::new(Vector3::new(-1.0, -1.0, 1.0), Vector3::new(1.0, 1.0, 1.0)),
+    Vertex::new(Vector3::new(-1.0, 1.0, 1.0), Vector3::new(1.0, 1.0, 1.0)),
+    Vertex::new(Vector3::new(-1.0, 1.0, -1.0), Vector3::new(1.0, 1.0, 1.0)),
+    Vertex::new(Vector3::new(-1.0, -1.0, -1.0), Vector3::new(1.0, 1.0, 1.0)),
 ];
 
-
 pub(crate) const POSITIVE_Y_VERTICES: [Vertex; 4] = [
-    Vertex {
-        position: Vector3::new(1.0, 1.0, 1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
-    Vertex {
-        position: Vector3::new(1.0, 1.0, -1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0)
-    },
-    Vertex {
-        position: Vector3::new(-1.0, 1.0, -1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
-    Vertex {
-        position: Vector3::new(-1.0, 1.0, 1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
+    Vertex::new(Vector3::new(1.0, 1.0, 1.0), Vector3::new(1.0, 1.0, 1.0)),
+    Vertex::new(Vector3::new(1.0, 1.0, -1.0), Vector3::new(1.0, 1.0, 1.0)),
+    Vertex::new(Vector3::new(-1.0, 1.0, -1.0), Vector3::new(1.0, 1.0, 1.0)),
+    Vertex::new(Vector3::new(-1.0, 1.0, 1.0), Vector3::new(1.0, 1.0, 1.0)),
 ];
 
 pub(crate) const NEGATIVE_Y_VERTICES: [Vertex; 4] = [
-    Vertex {
-        position: Vector3::new(-1.0, -1.0, 1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
-    Vertex {
-        position: Vector3::new(-1.0, -1.0, -1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
-    Vertex {
-        position: Vector3::new(1.0, -1.0, -1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
-    Vertex {
-        position: Vector3::new(1.0, -1.0, 1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
+    Vertex::new(Vector3::new(-1.0, -1.0, 1.0), Vector3::new(1.0, 1.0, 1.0)),
+    Vertex::new(Vector3::new(-1.0, -1.0, -1.0), Vector3::new(1.0, 1.0, 1.0)),
+    Vertex::new(Vector3::new(1.0, -1.0, -1.0), Vector3::new(1.0, 1.0, 1.0)),
+    Vertex::new(Vector3::new(1.0, -1.0, 1.0), Vector3::new(1.0, 1.0, 1.0)),
 ];
 
 pub(crate) const POSITIVE_Z_VERTICES: [Vertex; 4] = [
-    Vertex {
-        position: Vector3::new(1.0, -1.0, 1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
-    Vertex {
-        position: Vector3::new(1.0, 1.0, 1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
-    Vertex {
-        position: Vector3::new(-1.0, 1.0, 1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
-    Vertex {
-        position: Vector3::new(-1.0, -1.0, 1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
+    Vertex::new(Vector3::new(1.0, -1.0, 1.0), Vector3::new(1.0, 1.0, 1.0)),
+    Vertex::new(Vector3::new(1.0, 1.0, 1.0), Vector3::new(1.0, 1.0, 1.0)),
+    Vertex::new(Vector3::new(-1.0, 1.0, 1.0), Vector3::new(1.0, 1.0, 1.0)),
+    Vertex::new(Vector3::new(-1.0, -1.0, 1.0), Vector3::new(1.0, 1.0, 1.0)),
 ];
 
 pub(crate) const NEGATIVE_Z_VERTICES: [Vertex; 4] = [
-    Vertex {
-        position: Vector3::new(-1.0, -1.0, -1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
-    Vertex {
-        position: Vector3::new(-1.0, 1.0, -1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
-    Vertex {
-        position: Vector3::new(1.0, 1.0, -1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
-    Vertex {
-        position: Vector3::new(1.0, -1.0, -1.0),
-        normal: Vector3::new(1.0, 1.0, 1.0),
-        tangent: Vector4::new(0.0,0.0,0.0,0.0),
-        texture_coordinate: Vector2::new(0.0,0.0),
-    },
+    Vertex::new(Vector3::new(-1.0, -1.0, -1.0), Vector3::new(1.0, 1.0, 1.0)),
+    Vertex::new(Vector3::new(-1.0, 1.0, -1.0), Vector3::new(1.0, 1.0, 1.0)),
+    Vertex::new(Vector3::new(1.0, 1.0, -1.0), Vector3::new(1.0, 1.0, 1.0)),
+    Vertex::new(Vector3::new(1.0, -1.0, -1.0), Vector3::new(1.0, 1.0, 1.0)),
 ];
 
-
 pub(crate) const QUAD_INDICES: [u32; 6] = [0, 1, 2, 2, 3, 0];
-
 
 pub(crate) const CUBEMAP_INDICES: [u32; 36] = [
     //front face
