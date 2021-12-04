@@ -12,9 +12,15 @@ image = {version = "0.23.14", default-features = false, features = ["png", "hdr"
 gltf = "0.16.0"
 fastrand = "1.5.0"
 
-erupt = "0.20.0+190"
-vk-mem-erupt = {git = "https://github.com/onein50million/vk-mem-erupt.git"}
+erupt = "0.20.0"
+vk-mem-erupt = {git = "https://github.com/onein50million/vk-mem-erupt.git", rev = "0888bf9f0903b12b638f8498316e473301a18689"}
+#vk-mem-erupt = {path = "../vk-mem-erupt"}
 nalgebra = "0.29.0"
+
+gdal = {git = "https://github.com/onein50million/gdal.git"}
+gdal-sys = {git = "https://github.com/onein50million/gdal.git"}
+bincode = "2.0.0-alpha.1"
+
 
 [profile.dev.package."*"]
 opt-level = 3

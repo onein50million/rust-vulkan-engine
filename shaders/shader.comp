@@ -1,15 +1,26 @@
 #version 450
 layout(local_size_x = 8, local_size_y =8, local_size_z = 1) in;
 
-const bool RAYTRACING_ENABLED = false;
-
 const int NUM_RANDOM = 100;
+const int NUM_LIGHTS = 4;
 
+struct Light{
+    vec4 position;
+    vec4 color;
+};
+layout(binding = 0, std140) uniform UniformBufferObject {
+    vec4 random[NUM_RANDOM];
+    Light lights[NUM_LIGHTS];
+    int player_index;
+    int num_lights;
+    int value3;
+    int value4;
+    vec2 mouse_position;
+} ubos;
 
-
-layout(push_constant) uniform PushConstants{
-    mat4 model;
-    mat4 view;
+layout(push_constant) uniform PushConstants{ //Co-opting some of the push constants
+    mat4 model; //This is actually the cubemap's view matrix
+    mat4 view_inverse; //I'm actually sending the inverse of the view transform to the compute shader instead
     mat4 proj;
     int texture_index;
     float constant;
@@ -17,13 +28,91 @@ layout(push_constant) uniform PushConstants{
 
 layout(set = 0, binding = 2, rgba8) uniform image2D outImage;
 
+struct Ray{
+    vec3 origin;
+    vec3 direction;
+};
+
+//Gets how far a ray is inside a sphere
+//vec2(close_hit, far_hit)
+vec2 ray_sphere_depth(vec3 center, float radius, Ray ray){
+
+    vec3 origin_center = ray.origin - center;
+    float a = dot(ray.direction, ray.direction);
+    float b = 2.0 * dot(origin_center, ray.direction);
+    float c = dot(origin_center,origin_center) - radius*radius;
+    float discriminant = b*b - 4*a*c;
+    if(discriminant < 0){
+        return vec2(-1.0);
+    }else{
+        return vec2(
+            (-b - sqrt(discriminant) ) / (2.0*a),
+            (-b + sqrt(discriminant) ) / (2.0*a)
+        );
+    }
+}
+
+vec3 unproject_point(vec3 point){
+    float inverse_denom = pushConstant.proj[2][3] / (point.z + pushConstant.proj[2][2]);
+    return vec3(point.x * inverse_denom / pushConstant.proj[0][0],point.y * inverse_denom / pushConstant.proj[1][1],-inverse_denom);
+}
 
 void main()
 {
+    vec4 out_color = vec4(0.0);
+//    vec2 screen_ratio = vec2(vec2(gl_GlobalInvocationID.xy)/vec2(gl_NumWorkGroups.xy));
 
-    if(!RAYTRACING_ENABLED){
-        imageStore(outImage, ivec2(gl_GlobalInvocationID.xy),vec4(0.0));
-        return;
+    float mouse_distance = distance(vec2(gl_GlobalInvocationID.xy), ubos.mouse_position);
+    if (mouse_distance < 2.0){
+//        out_color = vec4(vec3(1.0,0.2,0.2),1.0 - clamp(mouse_distance/0.01, 0.0,1.0));
+        out_color = vec4(1.0);
     }
 
+//    //atmosphere
+//
+//    vec3 resolution = gl_NumWorkGroups * gl_WorkGroupSize;
+////    float aspect_ratio = resolution.x/resolution.y;
+////
+////    float viewport_height = 1.0;
+////    vec2 viewport_size = vec2(viewport_height * aspect_ratio, viewport_height);
+////    float focal_length = 1.0;
+////
+//    vec2 screen_ratio = (gl_GlobalInvocationID.xy)/resolution.xy;
+////
+////    vec3 horizontal = (vec3(viewport_size.x,0.0,0.0));
+////    vec3 vertical = (vec3(0.0,viewport_size.y,0.0));
+////    vec3 origin = (vec3(0.0,0.0,0.0));
+////    vec3 upper_left_corner = (-horizontal/2.0 - vertical/2.0 - vec3(0.0,0.0,focal_length));
+////
+////    origin = (pushConstant.view_inverse * (vec4(origin,1.0))).xyz;
+//
+//    vec3 origin = (pushConstant.view_inverse * vec4(vec3(0.0),1.0)).xyz;
+//
+//
+//
+//
+//
+//    vec4 screen_space_target = vec4(screen_ratio.x * 2.0 - 1.0,screen_ratio.y * 2.0 - 1.0, 1.0,1.0);
+////    vec4 world_position_target = ((pushConstant.model * pushConstant.proj) * screen_space_target)/(pushConstant.proj * screen_space_target).z;
+//
+////    vec4 scaled_target = pushConstant.model * (pushConstant.proj * screen_space_target);
+////    vec3 target = normalize((scaled_target.xyz / scaled_target.w) - origin);
+//
+//    vec3 target = (pushConstant.model * vec4(unproject_point(screen_space_target.xyz),1.0)).xyz ;
+//
+//    //    vec3 target = (pushConstant.model * vec4(upper_left_corner + screen_ratio.x * horizontal + screen_ratio.y * vertical,1.0)).xyz;
+//
+//    Ray ray = Ray(origin, target);
+//
+//    float atmosphere_size = 6371000.0 + 120000.0;
+////    float atmosphere_size = 1000000.0;
+//
+//    vec2 ray_result = ray_sphere_depth(vec3(0.0),atmosphere_size, ray);
+//    if (ray_result.x > 0.0){
+//        out_color.rgb = vec3(0.05,0.3,0.9);
+////        out_color.a = abs(ray_result.y - ray_result.x) / (atmosphere_size * 2.0)*0.5;
+//        out_color.a = 0.9;
+//    }
+////    out_color = vec4(target, 1.0);
+    imageStore(outImage, ivec2(gl_GlobalInvocationID.xy),out_color);
 }

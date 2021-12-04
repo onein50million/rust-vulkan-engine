@@ -2,8 +2,8 @@ use crate::cube::*;
 use crate::support::*;
 use erupt::{vk, DeviceLoader, EntryLoader, ExtendableFromConst, InstanceLoader, SmallVec};
 use image::{GenericImageView, ImageFormat};
-use nalgebra::{Matrix4, Rotation3, Vector2, Vector3, Vector4};
-use std::convert::TryInto;
+use nalgebra::{Matrix3x2, Matrix4, Rotation3, Transform3, Vector2, Vector3, Vector4};
+use std::convert::{TryFrom, TryInto};
 use std::ffi::{c_void, CStr, CString};
 use std::fmt::Debug;
 use std::fs::File;
@@ -14,6 +14,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use erupt::vk1_0::{Format, ImageViewType};
+use fastrand::f32;
+use gdal::Metadata;
 use image::codecs::hdr::HdrDecoder;
 use winit::window::Window;
 
@@ -176,69 +178,81 @@ impl CombinedImage {
         path: std::path::PathBuf,
         view_type: vk::ImageViewType,
         image_format: vk::Format,
+        generate_new_image: bool,
     ) -> Option<Self> {
-        println!("Loading image: {:?}", path);
+        let mut width;
+        let mut height;
+        let layer_count;
+        let mut bytes;
+        let pixel_size;
+        if !generate_new_image{
+            println!("Loading image: {:?}", path);
 
-        if !path.is_file() {
-            println!("File not found: {:?}", path);
-            return None;
-        }
+            if !path.is_file() {
+                println!("File not found: {:?}", path);
+                return None;
+            }
+            let reader = image::io::Reader::open(path.clone()).unwrap();
+            let format = reader.format().unwrap();
+            let dynamic_image = reader.decode().unwrap();
+            let color = dynamic_image.color();
+            width = dynamic_image.width();
+            height = dynamic_image.height();
 
-        let reader = image::io::Reader::open(path.clone()).unwrap();
-        let format = reader.format().unwrap();
-        let dynamic_image = reader.decode().unwrap();
-        let color = dynamic_image.color();
-        let width = dynamic_image.width();
-        let height = dynamic_image.height();
+            bytes = if format == ImageFormat::Hdr {
+                let image = image::codecs::hdr::HdrDecoder::new(BufReader::new(File::open(path).unwrap())).unwrap();
 
-        let mut bytes = if format == ImageFormat::Hdr{
-            let image = image::codecs::hdr::HdrDecoder::new(BufReader::new(File::open(path).unwrap())).unwrap();
+                let pixels = image.read_image_hdr().unwrap();
 
-            let pixels = image.read_image_hdr().unwrap();
+                let mut out_bytes = vec![];
+                for pixel in pixels {
+                    let mut pixel_bytes = vec![];
+                    for channel in pixel.0 {
+                        pixel_bytes.extend_from_slice(&channel.to_le_bytes())
+                    }
+                    pixel_bytes.extend_from_slice(&1.0_f32.to_be_bytes());
 
-            let mut out_bytes = vec![];
-            for pixel in pixels{
-                let mut pixel_bytes = vec![];
-                for channel in pixel.0{
-                    pixel_bytes.extend_from_slice(&channel.to_le_bytes())
+                    out_bytes.extend_from_slice(&pixel_bytes)
                 }
-                pixel_bytes.extend_from_slice(&1.0_f32.to_be_bytes());
+                out_bytes
+            } else {
+                dynamic_image.into_rgba8().into_raw()
+            };
 
-                out_bytes.extend_from_slice(&pixel_bytes)
+            pixel_size = bytes.len() / (width * height) as usize;
+
+            println!("channel count: {:}", color.channel_count());
+
+            width = if view_type == vk::ImageViewType::CUBE {
+                height
+            } else {
+                width
+            };
+
+            println!("pixel_size: {:}", pixel_size);
+
+            let mut faces = vec![vec![]; 6];
+            if view_type == vk::ImageViewType::CUBE {
+                for (face, line) in bytes.chunks(pixel_size * width as usize).enumerate() {
+                    // println!("face: {:}, line: {:?}",face,line);
+                    faces[face % 6].extend(line);
+                }
+
+                bytes = faces.concat();
             }
-            out_bytes
-
-        } else{
-            dynamic_image.into_rgba8().into_raw()
-        };
-
-        let pixel_size = bytes.len() / (width*height) as usize;
-
-        println!("channel count: {:}", color.channel_count());
-
-        let width = if view_type == vk::ImageViewType::CUBE {
-            height
-        } else {
-            width
-        };
-
-        println!("pixel_size: {:}", pixel_size);
-
-        let mut faces = vec![vec![]; 6];
-        if view_type == vk::ImageViewType::CUBE {
-            for (face, line) in bytes.chunks(pixel_size * width as usize).enumerate() {
-                // println!("face: {:}, line: {:?}",face,line);
-                faces[face % 6].extend(line);
-            }
-
-            bytes = faces.concat();
+            layer_count = if view_type == vk::ImageViewType::CUBE {
+                6
+            } else {
+                1
+            };
         }
-        let layer_count = if view_type == vk::ImageViewType::CUBE {
-            6
-        } else {
-            1
-        };
-
+        else{
+            width = 256;
+            height = 256;
+            layer_count = 1;
+            pixel_size = 4;
+            bytes = vec![69; (width * height * 4) as usize];
+        }
         let image_info = vk::ImageCreateInfoBuilder::new()
             .image_type(vk::ImageType::_2D)
             .extent(vk::Extent3D {
@@ -435,13 +449,15 @@ struct TextureSet {
 }
 
 pub(crate) struct RenderObject {
-    vertex_start: u32,
-    vertex_count: u32,
-    index_start: u32,
-    index_count: u32,
+    pub(crate) vertex_start: u32,
+    pub(crate) vertex_count: u32,
+    pub(crate) index_start: u32,
+    pub(crate) index_count: u32,
     texture_index: usize,
     texture_type: vk::ImageViewType,
     is_highlighted: bool,
+    is_fullscreen_quad: bool,
+    pub(crate) is_globe: bool,
     pub(crate) is_viewmodel: bool,
     pub(crate) model: Matrix4<f32>,
     pub(crate) view: Matrix4<f32>,
@@ -467,7 +483,7 @@ impl RenderObject {
             vulkan_data.indices.push(index + vertex_start);
         }
         let texture_index;
-        match (is_cubemap) {
+        match is_cubemap {
             true => {
                 texture_index = vulkan_data.cubemaps.len();
                 vulkan_data.cubemaps.push(texture.albedo.unwrap());
@@ -491,6 +507,8 @@ impl RenderObject {
             },
             is_highlighted: false,
             is_viewmodel: false,
+            is_globe: false,
+            is_fullscreen_quad: false,
             model: Matrix4::identity(),
             view: Matrix4::identity(),
             proj: Matrix4::identity(),
@@ -522,6 +540,16 @@ impl Drawable for RenderObject {
             };
             bitfield |= if self.is_viewmodel {
                 super::support::flags::IS_VIEWMODEL
+            } else {
+                0
+            };
+            bitfield |= if self.is_globe {
+                super::support::flags::IS_GLOBE
+            } else {
+                0
+            };
+            bitfield |= if self.is_fullscreen_quad {
+                super::support::flags::IS_FULLSCREEN_QUAD
             } else {
                 0
             };
@@ -593,6 +621,7 @@ impl Cubemap {
                 texture_path,
                 vk::ImageViewType::CUBE,
                 vk::Format::R8G8B8A8_SRGB,
+                false,
             ),
             normal: None,
             roughness_metalness_ao: None,
@@ -670,8 +699,9 @@ pub(crate) struct VulkanData {
     color_image_memory: Option<vk::DeviceMemory>,
     color_image_view: Option<vk::ImageView>,
     pub(crate) cubemap: Option<Cubemap>,
+    pub(crate) fullscreen_fragment_quads: Vec<RenderObject>,
     fullscreen_quads: Vec<RenderObject>,
-    vertices: Vec<Vertex>,
+    pub(crate) vertices: Vec<Vertex>,
     indices: Vec<u32>,
     uniform_buffer_pointers: Vec<*mut u8>,
     uniform_buffers: Vec<vk::Buffer>,
@@ -798,9 +828,11 @@ impl VulkanData {
             brdf_lut: None,
             fallback_texture: None,
             cpu_images: vec![],
+            fullscreen_fragment_quads: vec![]
         };
     }
     pub(crate) fn init_vulkan(&mut self, window: &Window) {
+
         let mut validation_layer_names =
             vec![];
 
@@ -962,18 +994,21 @@ impl VulkanData {
                 "models/fallback/albedo.png".parse().unwrap(),
                 vk::ImageViewType::_2D,
                 vk::Format::R8G8B8A8_SRGB,
+                false,
             ),
             normal: CombinedImage::new(
                 self,
                 "models/fallback/normal.png".parse().unwrap(),
                 vk::ImageViewType::_2D,
                 vk::Format::R8G8B8A8_UNORM,
+                false,
             ),
             roughness_metalness_ao: CombinedImage::new(
                 self,
                 "models/fallback/rough_metal_ao.png".parse().unwrap(),
                 vk::ImageViewType::_2D,
                 vk::Format::R8G8B8A8_UNORM,
+                false,
             ),
         });
 
@@ -985,7 +1020,7 @@ impl VulkanData {
         for _ in 0..1 {
             let mut quad = RenderObject::new(
                 self,
-                POSITIVE_Z_VERTICES.to_vec(),
+                FULLSCREEN_QUAD_VERTICES.to_vec(),
                 QUAD_INDICES.to_vec(),
                 TextureSet {
                     albedo: Some(CombinedImage {
@@ -1001,8 +1036,34 @@ impl VulkanData {
                 },
                 false,
             );
+            quad.is_viewmodel = true;
             self.fullscreen_quads.push(quad);
         }
+        for _ in 0..1 {
+
+            let new_image = CombinedImage::new(
+                self,
+                PathBuf::new(), //TODO: Replace with option so it's less gross, right now we are just passing an invalid path because it isn't used
+                vk::ImageViewType::_2D,
+                vk::Format::R8G8B8A8_SRGB,
+                true
+            );
+
+            let mut quad = RenderObject::new(
+                self,
+                FULLSCREEN_QUAD_VERTICES.to_vec(),
+                QUAD_INDICES.to_vec(),
+                TextureSet {
+                    albedo: new_image,
+                    normal: None,
+                    roughness_metalness_ao: None,
+                },
+                false,
+            );
+            quad.is_fullscreen_quad = true;
+            self.fullscreen_fragment_quads.push(quad);
+        }
+
         self.create_color_resources();
         self.create_depth_resources();
         self.create_cubemap_resources();
@@ -1268,6 +1329,7 @@ impl VulkanData {
             albedo_path,
             vk::ImageViewType::_2D,
             vk::Format::R8G8B8A8_SRGB,
+            false,
         );
 
         let normal_path = folder.join("normal.png");
@@ -1275,17 +1337,19 @@ impl VulkanData {
             self,
             normal_path,
             vk::ImageViewType::_2D,
-            vk::Format::R8G8B8A8_UNORM
+            vk::Format::R8G8B8A8_UNORM,
+            false
         );
 
 
         let roughness_path = folder.join("rough_metal_ao.png");
         let rough_metal_ao = CombinedImage::new(
-                self,
-                roughness_path,
-                vk::ImageViewType::_2D,
-                vk::Format::R8G8B8A8_UNORM
-            );
+            self,
+            roughness_path,
+            vk::ImageViewType::_2D,
+            vk::Format::R8G8B8A8_UNORM,
+            false
+        );
 
         let texture = TextureSet { albedo, normal, roughness_metalness_ao: rough_metal_ao };
 
@@ -1296,6 +1360,8 @@ impl VulkanData {
         self.objects.push(render_object);
         return output;
     }
+
+
 
     pub(crate) fn load_gltf_model(path: std::path::PathBuf) -> Vec<Vertex> {
         println!("loading {:}", path.to_str().unwrap());
@@ -1374,7 +1440,8 @@ impl VulkanData {
                                     normal,
                                     tangent,
                                     texture_coordinate,
-                                    texture_type
+                                    texture_type,
+                                    elevation: 0.0
                                 });
 
 
@@ -1985,6 +2052,14 @@ impl VulkanData {
         // };
         // self.cleanup_swapchain();
         // self.recreate_swapchain();
+
+        unsafe{
+            self.device.as_ref().unwrap().reset_descriptor_pool(
+                self.descriptor_pool.unwrap(),
+                None,
+            ).unwrap();
+        }
+
         self.create_descriptor_sets();
     }
 
@@ -2491,7 +2566,7 @@ impl VulkanData {
                 .offset(0)
                 .range((std::mem::size_of::<UniformBufferObject>()) as vk::DeviceSize)];
 
-            let mut image_infos = vec![]; //TODO makes this into a function so it stays up to date with main image_infos
+            let mut image_infos = vec![]; //TODO: make this into a function so it stays up to date with main image_infos
             for texture in &self.textures {
                 let albedo = texture.albedo.as_ref().unwrap_or(
                     self.fallback_texture
@@ -2854,9 +2929,9 @@ impl VulkanData {
                 }
 
                 let push_constant = PushConstants {
-                    model: Matrix4::identity(),
-                    view: self.objects[0].view,
-                    proj: Matrix4::identity(),
+                    model: self.cubemap.as_ref().unwrap().render_object.view.try_inverse().unwrap(),
+                    view: self.objects[0].view.try_inverse().unwrap(),
+                    proj: self.objects[0].proj,
                     texture_index: 0,
                     constant: 1.0,
                     bitfield: 0,
@@ -3001,14 +3076,6 @@ impl VulkanData {
                     self.pipeline_layout.unwrap(),
                     1.0,
                 );
-                for object in &self.fullscreen_quads {
-                    object.draw(
-                        self.device.as_ref().unwrap(),
-                        *command_buffer,
-                        self.pipeline_layout.unwrap(),
-                        1.0,
-                    );
-                }
                 unsafe {
                     self.device
                         .as_ref()
@@ -3024,6 +3091,36 @@ impl VulkanData {
                         1.0,
                     );
                 }
+
+                for object in &self.fullscreen_fragment_quads {
+                    object.draw(
+                        self.device.as_ref().unwrap(),
+                        *command_buffer,
+                        self.pipeline_layout.unwrap(),
+                        1.0,
+                    );
+                }
+
+                unsafe {
+                    self.device
+                        .as_ref()
+                        .unwrap()
+                        .cmd_set_depth_test_enable_ext(*command_buffer, false)
+                };
+                for object in &self.fullscreen_quads {
+                    object.draw(
+                        self.device.as_ref().unwrap(),
+                        *command_buffer,
+                        self.pipeline_layout.unwrap(),
+                        1.0,
+                    );
+                }
+                unsafe {
+                    self.device
+                        .as_ref()
+                        .unwrap()
+                        .cmd_set_depth_test_enable_ext(*command_buffer, true)
+                };
 
                 unsafe {
                     self.device
@@ -3101,22 +3198,25 @@ impl VulkanData {
         self.irradiance_maps.push(CombinedImage::new(
             self,
             cubemap_folder.join("irradiance.hdr"),
-        vk::ImageViewType::CUBE,
-        vk::Format::R32G32B32A32_SFLOAT,
-        ).unwrap());
-                self.environment_maps.push(CombinedImage::new(
-            self,
-            cubemap_folder.join("environment.hdr"),
             vk::ImageViewType::CUBE,
             vk::Format::R32G32B32A32_SFLOAT,
+            false,
         ).unwrap());
+                self.environment_maps.push(CombinedImage::new(
+                    self,
+                    cubemap_folder.join("environment.hdr"),
+                    vk::ImageViewType::CUBE,
+                    vk::Format::R32G32B32A32_SFLOAT,
+                    false,
+                ).unwrap());
 
         self.brdf_lut =
             CombinedImage::new(
                 self,
                 PathBuf::from("brdf_lut.png"),
                 vk::ImageViewType::_2D,
-                vk::Format::R8G8B8A8_UNORM
+                vk::Format::R8G8B8A8_UNORM,
+                false
             );
 
     }
@@ -3329,7 +3429,15 @@ impl VulkanData {
         let surface_width = self.surface_capabilities.unwrap().current_extent.width as f32;
         let surface_height = self.surface_capabilities.unwrap().current_extent.height as f32;
         let projection =
-            nalgebra::Perspective3::new(surface_width / surface_height, 90.0, 0.1, 100.0)
+            nalgebra::Perspective3::new(surface_width / surface_height, 90.0, 100.0, 100_000_000.0)
+                .to_homogeneous();
+        return projection;
+    }
+    pub(crate) fn get_cubemap_projection_matrix(&self) -> Matrix4<f32> {
+        let surface_width = self.surface_capabilities.unwrap().current_extent.width as f32;
+        let surface_height = self.surface_capabilities.unwrap().current_extent.height as f32;
+        let projection =
+            nalgebra::Perspective3::new(surface_width / surface_height, 90.0, 0.01, 10.0)
                 .to_homogeneous();
         return projection;
     }

@@ -11,6 +11,8 @@ pub(crate) mod flags{
     pub(crate) const IS_CUBEMAP: u32 = 0b1;
     pub(crate) const IS_HIGHLIGHTED: u32 = 0b10;
     pub(crate) const IS_VIEWMODEL:u32 = 0b100;
+    pub(crate) const IS_GLOBE:u32 = 0b1000;
+    pub(crate) const IS_FULLSCREEN_QUAD:u32 = 0b10000;
 
 }
 
@@ -21,17 +23,19 @@ pub(crate) struct Vertex {
     pub(crate) normal: Vector3<f32>,
     pub(crate) tangent: Vector4<f32>,
     pub(crate) texture_coordinate: Vector2<f32>,
-    pub(crate) texture_type: u32,
+    pub(crate) texture_type: u32, //Texture index for multiple textures I think
+    pub(crate) elevation: f32,
 }
 
 impl Vertex{
-    pub(crate) const fn new(position: Vector3<f32>, normal: Vector3<f32>) -> Self{
+    pub(crate) const fn new(position: Vector3<f32>, normal: Vector3<f32>, texture_coordinate: Vector2<f32>) -> Self{
         return Self{
             position,
             normal,
             tangent: Vector4::new(0.0,0.0,0.0,0.0),
-            texture_coordinate: Vector2::new(0.0,0.0),
-            texture_type: 0
+            texture_coordinate,
+            texture_type: 0,
+            elevation: 0.0
         }
     }
 }
@@ -70,7 +74,7 @@ pub(crate) struct UniformBufferObject {
     pub(crate) value4: i32,
     pub(crate) mouse_position: Vector2<f32>,
 }
-
+#[derive(Debug)]
 #[repr(C)]
 pub(crate) struct PushConstants {
     pub(crate) model: Matrix4<f32>,
@@ -116,6 +120,12 @@ impl Vertex {
                 .location(4)
                 .format(vk::Format::R32_UINT)
                 .offset(48),
+            vk::VertexInputAttributeDescriptionBuilder::new()
+                .binding(0)
+                .location(5)
+                .format(vk::Format::R32_SFLOAT)
+                .offset(52),
+
         ];
 
         return attribute_descriptions

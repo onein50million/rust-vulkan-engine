@@ -2,8 +2,6 @@ mod cube;
 mod game;
 mod renderer;
 mod support;
-mod emulator;
-
 
 use crate::game::*;
 use crate::renderer::*;
@@ -12,6 +10,7 @@ use std::env;
 use winit::event::{DeviceEvent, ElementState, Event, VirtualKeyCode, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
+use gdal::Metadata;
 
 //Coordinate system for future reference:
 //from starting location
