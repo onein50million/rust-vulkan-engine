@@ -5,14 +5,13 @@ pub(crate) const FRAMERATE_TARGET: f64 = 280.0;
 pub(crate) const NUM_RANDOM: usize = 100;
 pub(crate) const FRAME_SAMPLES: usize = 100;
 pub(crate) const NUM_MODELS: usize = 1000;
-pub(crate) const NUM_LIGHTS: usize = 4;
+pub(crate) const NUM_LIGHTS: usize = 1;
 
 pub(crate) mod flags{
     pub(crate) const IS_CUBEMAP: u32 = 0b1;
     pub(crate) const IS_HIGHLIGHTED: u32 = 0b10;
     pub(crate) const IS_VIEWMODEL:u32 = 0b100;
     pub(crate) const IS_GLOBE:u32 = 0b1000;
-    pub(crate) const IS_FULLSCREEN_QUAD:u32 = 0b10000;
 
 }
 
@@ -25,6 +24,10 @@ pub(crate) struct Vertex {
     pub(crate) texture_coordinate: Vector2<f32>,
     pub(crate) texture_type: u32, //Texture index for multiple textures I think
     pub(crate) elevation: f32,
+    pub(crate) aridity: f32,
+    pub(crate) population: f32,
+    pub(crate) warmest_temperature: f32,
+    pub(crate) coldest_temperature: f32,
 }
 
 impl Vertex{
@@ -35,7 +38,11 @@ impl Vertex{
             tangent: Vector4::new(0.0,0.0,0.0,0.0),
             texture_coordinate,
             texture_type: 0,
-            elevation: 0.0
+            elevation: 0.0,
+            aridity: 0.0,
+            population: 0.0,
+            warmest_temperature: 0.0,
+            coldest_temperature: 0.0
         }
     }
 }
@@ -51,9 +58,9 @@ impl Light{
     pub(crate) fn new() -> Self{
         let rng = fastrand::Rng::new();
         let distance = 5.0;
-        let power = 50.0;
-        let position = Vector4::new((rng.f32()-0.5)*2.0 * distance, -1.0, (rng.f32()-0.5)*2.0 * distance, 0.0);
-        let color =  Vector4::new(rng.f32() * power, rng.f32() * power, fastrand::f32()* power, 0.0);
+        let power = 10.0;
+        let position = Vector4::new(0.0,0.0, 0.0, 0.0);
+        let color =  Vector4::new(1.0,0.9,0.2, 0.0) * power;
 
         println!("Position: {:}", position);
         Self{
@@ -63,6 +70,14 @@ impl Light{
     }
 }
 
+pub(crate) mod map_modes {
+    pub(crate) const SATELITE: u8 = 0;
+    pub(crate) const ELEVATION: u8 = 1;
+    pub(crate) const ARIDITY: u8 = 2;
+    pub(crate) const POPULATION: u8 = 3;
+    pub(crate) const TEMPERATURE: u8 = 4;
+}
+
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub(crate) struct UniformBufferObject {
@@ -70,9 +85,13 @@ pub(crate) struct UniformBufferObject {
     pub(crate) lights: [Light; NUM_LIGHTS], //std140 packing so it needs to be 16 bytes wide
     pub(crate) player_index: u32,
     pub(crate) num_lights: i32,
-    pub(crate) value3: i32,
+    pub(crate) map_mode: u32,
     pub(crate) value4: i32,
     pub(crate) mouse_position: Vector2<f32>,
+    pub(crate) time: f32,
+    pub(crate) b: f32,
+    pub(crate) c: f32,
+    pub(crate) d: f32,
 }
 #[derive(Debug)]
 #[repr(C)]
@@ -86,7 +105,6 @@ pub(crate) struct PushConstants {
 }
 
 impl Vertex {
-    //noinspection RsSelfConvention
     pub(crate) fn get_binding_description() -> vk::VertexInputBindingDescriptionBuilder<'static> {
         return vk::VertexInputBindingDescriptionBuilder::new()
             .binding(0)
@@ -125,6 +143,26 @@ impl Vertex {
                 .location(5)
                 .format(vk::Format::R32_SFLOAT)
                 .offset(52),
+            vk::VertexInputAttributeDescriptionBuilder::new()
+                .binding(0)
+                .location(6)
+                .format(vk::Format::R32_SFLOAT)
+                .offset(56),
+            vk::VertexInputAttributeDescriptionBuilder::new()
+                .binding(0)
+                .location(7)
+                .format(vk::Format::R32_SFLOAT)
+                .offset(60),
+            vk::VertexInputAttributeDescriptionBuilder::new()
+                .binding(0)
+                .location(8)
+                .format(vk::Format::R32_SFLOAT)
+                .offset(64),
+            vk::VertexInputAttributeDescriptionBuilder::new()
+                .binding(0)
+                .location(9)
+                .format(vk::Format::R32_SFLOAT)
+                .offset(68),
 
         ];
 

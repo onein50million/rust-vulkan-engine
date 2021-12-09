@@ -1,8 +1,14 @@
 #version 450
+#extension GL_EXT_debug_printf : enable
+
 layout(local_size_x = 8, local_size_y =8, local_size_z = 1) in;
 
 const int NUM_RANDOM = 100;
-const int NUM_LIGHTS = 4;
+const int NUM_LIGHTS = 1;
+const float ATMOSPHERE_ELEVATION = 120000.0;
+const float PLANET_SIZE = 6371000.0;
+
+const float ATMOSPHERE_SIZE = PLANET_SIZE + ATMOSPHERE_ELEVATION;
 
 struct Light{
     vec4 position;
@@ -13,9 +19,13 @@ layout(binding = 0, std140) uniform UniformBufferObject {
     Light lights[NUM_LIGHTS];
     int player_index;
     int num_lights;
-    int value3;
+    int map_mode;
     int value4;
     vec2 mouse_position;
+    float time;
+    float b;
+    float c;
+    float d;
 } ubos;
 
 layout(push_constant) uniform PushConstants{ //Co-opting some of the push constants
@@ -27,11 +37,29 @@ layout(push_constant) uniform PushConstants{ //Co-opting some of the push consta
 } pushConstant;
 
 layout(set = 0, binding = 2, rgba8) uniform image2D outImage;
+layout(binding = 4) uniform sampler2D depth_buffer;
 
 struct Ray{
     vec3 origin;
     vec3 direction;
 };
+vec3 rayAt(Ray ray, float ratio){
+    return ray.origin + ray.direction*ratio;
+}
+float map_range_linear(float value,
+float fromMin,
+float fromMax,
+float toMin,
+float toMax )
+{
+    float result = clamp(toMin + ((value - fromMin) / (fromMax - fromMin)) * (toMax - toMin), min(toMin,toMax), max(toMax,toMin));
+    return result;
+}
+
+float linearize_depth(float d,float zNear,float zFar)
+{
+    return zNear * zFar / (zFar + d * (zNear - zFar));
+}
 
 //Gets how far a ray is inside a sphere
 //vec2(close_hit, far_hit)
@@ -57,6 +85,15 @@ vec3 unproject_point(vec3 point){
     return vec3(point.x * inverse_denom / pushConstant.proj[0][0],point.y * inverse_denom / pushConstant.proj[1][1],-inverse_denom);
 }
 
+float altitude_ratio(vec3 point){
+    return length((point - PLANET_SIZE * normalize(point)) / ATMOSPHERE_ELEVATION);
+}
+
+float density_at(vec3 point){
+    float altitude_ratio = altitude_ratio(point);
+    return pow(100.0, -altitude_ratio);
+}
+
 void main()
 {
     vec4 out_color = vec4(0.0);
@@ -68,51 +105,74 @@ void main()
         out_color = vec4(1.0);
     }
 
-//    //atmosphere
-//
-//    vec3 resolution = gl_NumWorkGroups * gl_WorkGroupSize;
-////    float aspect_ratio = resolution.x/resolution.y;
-////
-////    float viewport_height = 1.0;
-////    vec2 viewport_size = vec2(viewport_height * aspect_ratio, viewport_height);
-////    float focal_length = 1.0;
-////
-//    vec2 screen_ratio = (gl_GlobalInvocationID.xy)/resolution.xy;
-////
-////    vec3 horizontal = (vec3(viewport_size.x,0.0,0.0));
-////    vec3 vertical = (vec3(0.0,viewport_size.y,0.0));
-////    vec3 origin = (vec3(0.0,0.0,0.0));
-////    vec3 upper_left_corner = (-horizontal/2.0 - vertical/2.0 - vec3(0.0,0.0,focal_length));
-////
-////    origin = (pushConstant.view_inverse * (vec4(origin,1.0))).xyz;
-//
-//    vec3 origin = (pushConstant.view_inverse * vec4(vec3(0.0),1.0)).xyz;
-//
-//
-//
-//
-//
-//    vec4 screen_space_target = vec4(screen_ratio.x * 2.0 - 1.0,screen_ratio.y * 2.0 - 1.0, 1.0,1.0);
-////    vec4 world_position_target = ((pushConstant.model * pushConstant.proj) * screen_space_target)/(pushConstant.proj * screen_space_target).z;
-//
-////    vec4 scaled_target = pushConstant.model * (pushConstant.proj * screen_space_target);
-////    vec3 target = normalize((scaled_target.xyz / scaled_target.w) - origin);
-//
-//    vec3 target = (pushConstant.model * vec4(unproject_point(screen_space_target.xyz),1.0)).xyz ;
-//
-//    //    vec3 target = (pushConstant.model * vec4(upper_left_corner + screen_ratio.x * horizontal + screen_ratio.y * vertical,1.0)).xyz;
-//
-//    Ray ray = Ray(origin, target);
-//
-//    float atmosphere_size = 6371000.0 + 120000.0;
-////    float atmosphere_size = 1000000.0;
-//
-//    vec2 ray_result = ray_sphere_depth(vec3(0.0),atmosphere_size, ray);
-//    if (ray_result.x > 0.0){
-//        out_color.rgb = vec3(0.05,0.3,0.9);
-////        out_color.a = abs(ray_result.y - ray_result.x) / (atmosphere_size * 2.0)*0.5;
-//        out_color.a = 0.9;
-//    }
-////    out_color = vec4(target, 1.0);
+    //atmosphere
+
+    vec2 resolution = imageSize(outImage);
+    vec2 screen_ratio = (gl_GlobalInvocationID.xy)/resolution.xy;
+    vec3 origin = (pushConstant.view_inverse * vec4(vec3(0.0),1.0)).xyz;
+
+    vec4 screen_space_target = vec4(screen_ratio.x * 2.0 - 1.0,screen_ratio.y * 2.0 - 1.0, 1.0,1.0);
+
+    vec3 target = normalize(pushConstant.model * vec4(unproject_point(screen_space_target.xyz),0.0)).xyz ;
+
+    Ray ray = Ray(origin, target);
+
+    float near = 1000000.0;
+    float far = 20000000.0;
+    vec3 sun_color = vec3(1.0,0.9,0.2);
+    vec3 sun_direction = vec3(sin(ubos.time),0.0,cos(ubos.time));
+
+    //    float screen_depth = linearize_depth(texture(depth_buffer,screen_ratio).r, near, far);
+
+    vec2 planet_hit = ray_sphere_depth(vec3(0.0),PLANET_SIZE, ray);
+    float sun_dot_product = dot(sun_direction, target);
+    float sun_angle = acos(sun_dot_product);
+//    float sun_brightness = pow(map_range_linear(sun_dot_product,1.0, 0.99, 1.1,0.0),1.0);
+    float sun_brightness = pow(map_range_linear(sun_angle,0.0,0.1, 1.0,0.0),10.0);
+
+
+    float atmosphere_cutoff = planet_hit.x;
+    if (planet_hit.x < 0.0){
+        atmosphere_cutoff = 1.0/0.0; //Infinity
+
+        out_color.rgb += sun_color*100.0 * sun_brightness;
+        out_color.a += 1.0 * sun_brightness;
+
+    }
+    vec2 ray_result = ray_sphere_depth(vec3(0.0),ATMOSPHERE_SIZE, ray);
+    float atmosphere_intersection_thickness = min(ray_result.y - ray_result.x,atmosphere_cutoff - ray_result.x);
+    if (atmosphere_intersection_thickness > 0.0){
+
+        float sun_hits = 0.0;
+        const int SAMPLES = 100;
+
+        float total_particles = 0.0;
+
+        for(int i = 0; i < SAMPLES; i++){
+            vec3 hit_position = rayAt(ray, ray_result.x + (atmosphere_intersection_thickness / float(SAMPLES)) * i);
+            total_particles += density_at(hit_position);
+            Ray atmosphere_ray = Ray(hit_position, sun_direction);
+            vec2 atmosphere_planet_hit = ray_sphere_depth(vec3(0.0),PLANET_SIZE, atmosphere_ray);
+            sun_hits += float(atmosphere_planet_hit.x < 0.0);
+        }
+        float average_particles = total_particles / float(SAMPLES);
+
+
+//        vec3 atmosphere_color = vec3(int(atmosphere_planet_hit.x < 0.0));
+//        vec3 atmosphere_color = vec3(0.05, 0.01, 0.5);
+//        vec3 atmosphere_color = mix(vec3(0.9,0.9,1.0), vec3(0.05,0.01, 0.5), );
+        vec3 atmosphere_color = mix(vec3(1.0,1.0,1.0), vec3(0.00,50.0/255.0, 255.0/255.0), altitude_ratio(rayAt(ray, ray_result.x)) + 0.1);
+        float sun_mix = float((planet_hit.x < 0.0)) * pow(clamp(dot(target,sun_direction),0.0,1.0),20.0);
+        atmosphere_color = mix(atmosphere_color, sun_color, sun_mix);
+        out_color.rgb += atmosphere_color;
+
+//        out_color.a = atmosphere_thickness * int(atmosphere_planet_hit.x < 0.0);
+//        out_color.a = (atmosphere_intersection_thickness / (ATMOSPHERE_SIZE * 2.0)) * (sun_hits / float(SAMPLES)) * 0.9;
+        out_color.a += average_particles * (sun_hits / float(SAMPLES));
+
+    }
+
+//    out_color = vec4(vec3(sin(ubos.time)),1.0);
+    out_color.rgb = normalize(out_color.rgb);
     imageStore(outImage, ivec2(gl_GlobalInvocationID.xy),out_color);
 }

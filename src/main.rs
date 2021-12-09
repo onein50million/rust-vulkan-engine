@@ -22,6 +22,7 @@ use gdal::Metadata;
 //right: positive x
 
 fn main() {
+
     let mut frametime: std::time::Instant = std::time::Instant::now();
     let mut time_since_last_frame: f64 = 0.0; //seconds
 
@@ -159,6 +160,66 @@ fn main() {
                                 game.inputs.camera_x = match key.state {
                                     ElementState::Released => 0.0,
                                     ElementState::Pressed => 1.0,
+                                };
+                            }
+                            if keycode == VirtualKeyCode::Key1 {
+                                 match key.state {
+                                    ElementState::Released => game.inputs.map_mode = support::map_modes::SATELITE,
+                                    _ => {},
+                                };
+                            }
+                            if keycode == VirtualKeyCode::Key2 {
+                                 match key.state {
+                                    ElementState::Released => game.inputs.map_mode = support::map_modes::ELEVATION,
+                                    _ => {},
+                                };
+                            }
+                            if keycode == VirtualKeyCode::Key3 {
+                                 match key.state {
+                                    ElementState::Released => game.inputs.map_mode = support::map_modes::ARIDITY,
+                                    _ => {},
+                                };
+                            }
+                            if keycode == VirtualKeyCode::Key4 {
+                                 match key.state {
+                                    ElementState::Released => game.inputs.map_mode = support::map_modes::POPULATION,
+                                    _ => {},
+                                };
+                            }
+                            if keycode == VirtualKeyCode::Key5 {
+                                 match key.state {
+                                    ElementState::Released => game.inputs.map_mode = 4,
+                                    _ => {},
+                                };
+                            }
+                            if keycode == VirtualKeyCode::Key6 {
+                                 match key.state {
+                                    ElementState::Released => game.inputs.map_mode = 5,
+                                    _ => {},
+                                };
+                            }
+                            if keycode == VirtualKeyCode::Key7 {
+                                 match key.state {
+                                    ElementState::Released => game.inputs.map_mode = 6,
+                                    _ => {},
+                                };
+                            }
+                            if keycode == VirtualKeyCode::Key8 {
+                                 match key.state {
+                                    ElementState::Released => game.inputs.map_mode = 7,
+                                    _ => {},
+                                };
+                            }
+                            if keycode == VirtualKeyCode::Key9 {
+                                 match key.state {
+                                    ElementState::Released => game.inputs.map_mode = 8,
+                                    _ => {},
+                                };
+                            }
+                            if keycode == VirtualKeyCode::Key0 {
+                                 match key.state {
+                                    ElementState::Released => game.inputs.map_mode = 9,
+                                    _ => {},
                                 };
                             }
                         }

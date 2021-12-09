@@ -4,8 +4,6 @@ const int NUM_MODELS = 1000;
 const int NUM_RANDOM = 100;
 const int NUM_LIGHTS = 100;
 
-const int IS_FULLSCREEN_QUAD = 16;
-
 struct Light{
     vec4 position;
     vec4 color;
@@ -37,6 +35,10 @@ layout(location = 2) in vec4 inTangent;
 layout(location = 3) in vec2 inTexCoord;
 layout(location = 4) in uint inTextureType;
 layout(location = 5) in float inElevation;
+layout(location = 6) in float inAridity;
+layout(location = 7) in float inPopulation;
+layout(location = 8) in float inWarmTemp;
+layout(location = 9) in float inColdTemp;
 
 layout(location = 0) out vec3 fragPosition;
 layout(location = 1) out vec3 fragNormal;
@@ -46,31 +48,29 @@ layout(location = 3) out vec2 fragTexCoord;
 layout(location = 4) out vec3 worldPosition;
 layout(location = 5) out uint textureType;
 layout(location = 6) out float fragElevation;
+layout(location = 7) out float fragAridity;
+layout(location = 8) out float fragPopulation;
+layout(location = 9) out float fragWarmTemp;
+layout(location = 10) out float fragColdTemp;
 
 
 void main() {
+
+    mat3 transpose_inverse = mat3(transpose(inverse(pushConstant.model)));
+    vec4 out_position = pushConstant.proj * pushConstant.view * pushConstant.model * vec4(inPosition, 1.0);
+    gl_Position = out_position;
+    fragNormal = transpose_inverse * inNormal;
+
+    worldPosition = (pushConstant.model * vec4(inPosition, 1.0)).xyz;
+    fragPosition = inPosition;
     fragTexCoord = inTexCoord;
     fragTangent = inTangent;
     textureType = inTextureType;
     fragElevation = inElevation;
-    fragPosition = inPosition;
-
-    if ((pushConstant.bitfield&IS_FULLSCREEN_QUAD) > 0){
-//        gl_Position = vec4(inPosition,1.0);
-        gl_Position = vec4(inPosition,1.0);
-        fragNormal = normalize(vec3(1.0));
-        worldPosition = inPosition;
-    }else{
-        mat3 transpose_inverse = mat3(transpose(inverse(pushConstant.model)));
-
-        gl_Position = pushConstant.proj * pushConstant.view * pushConstant.model * vec4(inPosition + inNormal * inElevation, 1.0);
-        //    gl_Position = pushConstant.proj * pushConstant.view * pushConstant.model * vec4(inPosition, 1.0);
-        fragNormal = transpose_inverse * inNormal;
-        worldPosition = (pushConstant.model * vec4(inPosition, 1.0)).xyz;
-        //    fragTangent = vec4(transpose_inverse * inTangent.xyz, inTangent.w);
-
-
-    }
+    fragAridity = inAridity;
+    fragPopulation = inPopulation;
+    fragColdTemp = inColdTemp;
+    fragWarmTemp = inWarmTemp;
 
 
 }
