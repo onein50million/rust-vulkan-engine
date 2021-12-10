@@ -37,8 +37,8 @@ fn main() {
     let window = WindowBuilder::new()
         .build(&event_loop)
         .expect("Failed to build window");
-    window.set_cursor_grab(true).unwrap();
-    window.set_cursor_visible(false);
+    window.set_cursor_grab(false).unwrap();
+    window.set_cursor_visible(true);
 
     let mut game = Game::new(&window);
 
@@ -219,6 +219,18 @@ fn main() {
                             if keycode == VirtualKeyCode::Key0 {
                                  match key.state {
                                     ElementState::Released => game.inputs.map_mode = 9,
+                                    _ => {},
+                                };
+                            }
+                            if keycode == VirtualKeyCode::Equals {
+                                match key.state {
+                                    ElementState::Released => game.inputs.zoom *= 1.1,
+                                    _ => {},
+                                };
+                            }
+                            if keycode == VirtualKeyCode::Minus {
+                                match key.state {
+                                    ElementState::Released => game.inputs.zoom *= 0.9,
                                     _ => {},
                                 };
                             }

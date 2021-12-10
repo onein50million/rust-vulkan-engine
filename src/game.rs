@@ -75,6 +75,7 @@ pub(crate) struct Inputs {
     pub(crate) down: f64,
     pub(crate) sprint: f64,
     pub(crate) map_mode: u8,
+    pub(crate) zoom: f64,
 }
 impl Inputs {
     pub(crate) fn new() -> Self {
@@ -88,7 +89,8 @@ impl Inputs {
             up: 0.0,
             down: 0.0,
             sprint: 0.0,
-            map_mode: 0
+            map_mode: 0,
+            zoom: 1.0
         };
     }
 }
@@ -509,8 +511,8 @@ impl Game {
     }
 
     fn get_year(&self) -> f64{
-        self.game_start.elapsed().as_secs_f64() / 6000.0
-        // self.game_start.elapsed().as_secs_f64() / 1.0
+        // self.game_start.elapsed().as_secs_f64() / 36000.0
+        self.game_start.elapsed().as_secs_f64() / 4.0
     }
 
     pub(crate) fn process(&mut self) {
@@ -520,7 +522,7 @@ impl Game {
         for i in 0..self.objects.len() {
             self.objects[i].process(delta_time);
         }
-        self.objects[self.planet_index].rotation = UnitQuaternion::from_euler_angles(23.43644f64.to_radians(),0.0 ,0.0) * UnitQuaternion::from_euler_angles(0.0,-std::f64::consts::PI * 2.0 * 365.25 * self.get_year() ,0.0);
+        // self.objects[self.planet_index].rotation = UnitQuaternion::from_euler_angles(23.43644f64.to_radians(),0.0 ,0.0) * UnitQuaternion::from_euler_angles(0.0,-std::f64::consts::PI * 2.0 * 365.25 * self.get_year() ,0.0);
         self.camera.position += Vector3::new(0.0,self.inputs.camera_y * 2_000_000.0 * delta_time,0.0);
         self.camera.position = UnitQuaternion::from_euler_angles(0.0, -self.inputs.camera_x * 0.3 * delta_time,0.0) * self.camera.position;
         self.camera.rotation = UnitQuaternion::face_towards(&(self.camera.position), &Vector3::new(0.0,-1.0,0.0));
@@ -531,9 +533,9 @@ impl Game {
     }
 
     fn update_renderer(&mut self){
-        let projection = self.vulkan_data.get_projection_matrix();
+        let projection = self.vulkan_data.get_projection_matrix(self.inputs.zoom);
 
-        let cubemap_projection = self.vulkan_data.get_cubemap_projection_matrix();
+        let cubemap_projection = self.vulkan_data.get_cubemap_projection_matrix(self.inputs.zoom);
         let view_matrix = (Translation3::from(self.camera.position) * Rotation3::from(self.camera.rotation)).inverse().to_homogeneous().cast::<f64>();
         let view_matrix_no_translation = (Matrix4::from(self.camera.rotation)).try_inverse().unwrap().cast();
 

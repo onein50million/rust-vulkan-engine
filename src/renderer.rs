@@ -676,6 +676,7 @@ pub(crate) struct VulkanData {
     graphics_pipelines: SmallVec<vk::Pipeline>,
     compute_pipelines: SmallVec<vk::Pipeline>,
     swapchain_framebuffers: Option<Vec<vk::Framebuffer>>,
+    first_pass_framebuffers: Vec<vk::Framebuffer>,
     command_pool: Option<vk::CommandPool>,
     command_buffers: Option<SmallVec<vk::CommandBuffer>>,
     image_available_semaphore: Option<vk::Semaphore>,
@@ -784,6 +785,7 @@ impl VulkanData {
             graphics_pipelines: SmallVec::new(),
             compute_pipelines: SmallVec::new(),
             swapchain_framebuffers: None,
+            first_pass_framebuffers: vec![],
             command_pool: None,
             command_buffers: None,
             image_available_semaphore: None,
@@ -2272,7 +2274,7 @@ impl VulkanData {
             .image_extent(self.surface_capabilities.unwrap().current_extent)
             .image_array_layers(1)
             .image_usage(
-                vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::INPUT_ATTACHMENT,
+                vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::INPUT_ATTACHMENT
             )
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
             .pre_transform(self.surface_capabilities.unwrap().current_transform)
@@ -2384,47 +2386,12 @@ impl VulkanData {
             .attachment(1)
             .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
-
-        let color_attachment_resolve = vk::AttachmentDescriptionBuilder::new()
-            .format(self.surface_format.unwrap().format)
-            .samples(vk::SampleCountFlagBits::_1)
-            .load_op(if self.msaa_samples != vk::SampleCountFlagBits::_1 {
-                vk::AttachmentLoadOp::DONT_CARE
-            } else {
-                vk::AttachmentLoadOp::CLEAR
-            })
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
-
-        let color_attachment_resolve_reference = vk::AttachmentReferenceBuilder::new()
-            .attachment(if self.msaa_samples != vk::SampleCountFlagBits::_1 {
-                2
-            } else {
-                0
-            })
-            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
-
-        let color_attachment_references;
-        let color_attachment_resolve_references;
-
-        if self.msaa_samples != vk::SampleCountFlagBits::_1 {
-            color_attachment_resolve_references = vec![color_attachment_resolve_reference];
-            color_attachment_references = vec![color_attachment_reference];
-        } else {
-            color_attachment_resolve_references = vec![];
-            color_attachment_references = vec![color_attachment_resolve_reference];
-        };
+        let color_attachment_references = vec![color_attachment_reference];
 
         let mut main_subpass = vk::SubpassDescriptionBuilder::new()
             .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
             .color_attachments(&color_attachment_references)
             .depth_stencil_attachment(&depth_attachment_reference);
-        if self.msaa_samples != vk::SampleCountFlagBits::_1 {
-            main_subpass = main_subpass.resolve_attachments(&color_attachment_resolve_references);
-        }
 
         let dependencies = [vk::SubpassDependencyBuilder::new()
             .src_subpass(vk::SUBPASS_EXTERNAL)
@@ -2442,11 +2409,8 @@ impl VulkanData {
                 vk::AccessFlags::COLOR_ATTACHMENT_WRITE
                     | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
             )];
-        let attachments = if self.msaa_samples != vk::SampleCountFlagBits::_1 {
-            vec![color_attachment, depth_attachment, color_attachment_resolve]
-        } else {
-            vec![color_attachment_resolve, depth_attachment]
-        };
+        let attachments = vec![color_attachment, depth_attachment];
+
         let subpasses = [main_subpass];
 
         let render_pass_info = vk::RenderPassCreateInfoBuilder::new()
@@ -2496,11 +2460,11 @@ impl VulkanData {
         let color_attachment_resolve = vk::AttachmentDescriptionBuilder::new()
             .format(self.surface_format.unwrap().format)
             .samples(vk::SampleCountFlagBits::_1)
-            .load_op(vk::AttachmentLoadOp::LOAD)
+            .load_op(vk::AttachmentLoadOp::DONT_CARE)
             .store_op(vk::AttachmentStoreOp::STORE)
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .initial_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
             .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
 
         let color_attachment_resolve_reference = vk::AttachmentReferenceBuilder::new()
@@ -2899,6 +2863,32 @@ impl VulkanData {
     }
 
     fn create_framebuffers(&mut self) {
+        for image_view in self.swapchain_image_views.as_ref().unwrap(){
+            // let attachments = vec![self.color_image_view.unwrap(), self.depth_image_view.unwrap()];
+
+            let attachments = if self.msaa_samples != vk::SampleCountFlagBits::_1 {
+                vec![
+                    self.color_image_view.unwrap(),
+                    self.depth_image_view.unwrap(),
+                ]
+            } else {
+                vec![*image_view, self.depth_image_view.unwrap()]
+            };
+
+            let framebuffer_create_info = vk::FramebufferCreateInfoBuilder::new()
+                .render_pass(self.render_pass.unwrap())
+                .attachments(&attachments)
+                .width(self.surface_capabilities.unwrap().current_extent.width)
+                .height(self.surface_capabilities.unwrap().current_extent.height)
+                .layers(1);
+            self.first_pass_framebuffers.push(unsafe {
+                self.device
+                    .as_ref()
+                    .unwrap()
+                    .create_framebuffer(&framebuffer_create_info, None)
+            }
+                .unwrap());
+        }
         self.swapchain_framebuffers = Some(
             self.swapchain_image_views
                 .as_ref()
@@ -2915,7 +2905,7 @@ impl VulkanData {
                         vec![*image_view, self.depth_image_view.unwrap()]
                     };
                     let framebuffer_create_info = vk::FramebufferCreateInfoBuilder::new()
-                        .render_pass(self.render_pass.unwrap())
+                        .render_pass(self.post_process_render_pass.unwrap())
                         .attachments(&attachments)
                         .width(self.surface_capabilities.unwrap().current_extent.width)
                         .height(self.surface_capabilities.unwrap().current_extent.height)
@@ -2986,7 +2976,7 @@ impl VulkanData {
 
                 let render_pass_info = vk::RenderPassBeginInfoBuilder::new()
                     .render_pass(self.render_pass.unwrap())
-                    .framebuffer(self.swapchain_framebuffers.as_ref().unwrap()[i])
+                    .framebuffer(self.first_pass_framebuffers[i])
                     .render_area(vk::Rect2D {
                         offset: vk::Offset2D { x: 0, y: 0 },
                         extent: self.surface_capabilities.unwrap().current_extent,
@@ -3303,7 +3293,7 @@ impl VulkanData {
             self.msaa_samples,
             color_format,
             vk::ImageTiling::OPTIMAL,
-            vk::ImageUsageFlags::TRANSIENT_ATTACHMENT | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         );
         self.color_image = Some(color_image);
@@ -3423,6 +3413,15 @@ impl VulkanData {
                         .unwrap()
                         .destroy_framebuffer(Some(*framebuffer), None)
                 });
+            self.first_pass_framebuffers
+                .iter()
+                .for_each(|framebuffer| {
+                    self.device
+                        .as_ref()
+                        .unwrap()
+                        .destroy_framebuffer(Some(*framebuffer), None)
+                });
+            self.first_pass_framebuffers = vec![];
             self.device
                 .as_ref()
                 .unwrap()
@@ -3563,19 +3562,19 @@ impl VulkanData {
         self.index_buffer = None;
         self.index_buffer_memory = None;
     }
-    pub(crate) fn get_projection_matrix(&self) -> Matrix4<f32> {
+    pub(crate) fn get_projection_matrix(&self, zoom: f64) -> Matrix4<f32> {
         let surface_width = self.surface_capabilities.unwrap().current_extent.width as f32;
         let surface_height = self.surface_capabilities.unwrap().current_extent.height as f32;
         let projection =
-            nalgebra::Perspective3::new(surface_width / surface_height,90f32.to_radians() , 1_000_000.0, 20_000_000.0)
+            nalgebra::Perspective3::new(surface_width / surface_height, (90f64.to_radians() * (1.0 / zoom)) as f32, 1_000_000.0, 20_000_000.0)
                 .to_homogeneous();
         return projection;
     }
-    pub(crate) fn get_cubemap_projection_matrix(&self) -> Matrix4<f32> {
+    pub(crate) fn get_cubemap_projection_matrix(&self, zoom: f64) -> Matrix4<f32> {
         let surface_width = self.surface_capabilities.unwrap().current_extent.width as f32;
         let surface_height = self.surface_capabilities.unwrap().current_extent.height as f32;
         let projection =
-            nalgebra::Perspective3::new(surface_width / surface_height, 90f32.to_radians(), 0.01, 10.0)
+            nalgebra::Perspective3::new(surface_width / surface_height, (90f64.to_radians() * (1.0 / zoom)) as f32, 0.01, 10.0)
                 .to_homogeneous();
         return projection;
     }
