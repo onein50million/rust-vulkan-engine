@@ -117,8 +117,6 @@ void main()
 
     Ray ray = Ray(origin, target);
 
-    float near = 1000000.0;
-    float far = 20000000.0;
     vec3 sun_color = vec3(1.0,0.9,0.2);
     vec3 sun_direction = vec3(sin(ubos.time),0.0,cos(ubos.time));
 

@@ -135,6 +135,7 @@ pub(crate) struct Game {
     pub(crate) vulkan_data: VulkanData,
     camera: Camera,
     planet_index:usize,
+    planet_data:Vec<VertexData>
 }
 
 impl Game {
@@ -169,7 +170,8 @@ impl Game {
             last_frame_instant: Instant::now(),
             vulkan_data,
             camera: Camera::new(),
-            planet_index
+            planet_index,
+            planet_data: vec![]
         };
         game.load_elevation_data();
         return game;
@@ -448,6 +450,7 @@ impl Game {
             self.vulkan_data.vertices[vertex_start + i].normal = self.vulkan_data.vertices[vertex_start + i].normal.normalize();
         }
         self.vulkan_data.update_vertex_and_index_buffers();
+        self.planet_data = vertex_data;
     }
 
     fn load_raster_file<F>(&self, path: &Path, vertex_start: usize, vertex_count: usize, additional_processing: F) -> Vec<RawVertexData>
