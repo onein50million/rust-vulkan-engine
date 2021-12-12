@@ -88,10 +88,12 @@ pub(crate) struct UniformBufferObject {
     pub(crate) map_mode: u32,
     pub(crate) value4: i32,
     pub(crate) mouse_position: Vector2<f32>,
+    pub(crate) _padding: Vector2<f32>,
     pub(crate) time: f32,
     pub(crate) b: f32,
     pub(crate) c: f32,
     pub(crate) d: f32,
+    pub(crate) planet_model_matrix: Matrix4<f32>,
 }
 #[derive(Debug)]
 #[repr(C)]

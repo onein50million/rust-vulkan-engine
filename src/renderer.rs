@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use erupt::vk1_0::{Format, ImageViewType};
 use fastrand::f32;
-use gdal::Metadata;
 use image::codecs::hdr::HdrDecoder;
 use winit::window::Window;
 
@@ -746,10 +745,12 @@ impl VulkanData {
             map_mode: 0,
             value4: 0,
             mouse_position: Vector2::new(0.0, 0.0),
+            _padding: Vector2::zeros(),
             time: 0.0,
             b: 0.0,
             c: 0.0,
-            d: 0.0
+            d: 0.0,
+            planet_model_matrix: Matrix4::identity(),
         };
 
         let indices = vec![];

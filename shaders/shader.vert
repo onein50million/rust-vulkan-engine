@@ -1,8 +1,8 @@
 #version 450
 
-const int NUM_MODELS = 1000;
+const int NUM_MODELS = 100;
 const int NUM_RANDOM = 100;
-const int NUM_LIGHTS = 100;
+const int NUM_LIGHTS = 1;
 
 struct Light{
     vec4 position;
@@ -14,9 +14,11 @@ layout(binding = 0, std140) uniform UniformBufferObject {
     Light lights[NUM_LIGHTS];
     int player_index;
     int num_lights;
-    int value3;
+    int map_mode;
     int value4;
-    vec2 mouse_ratio;
+    vec4 mouse_position;
+    vec4 time;
+    mat4 planet_model_matrix;
 } ubos;
 
 layout(push_constant) uniform PushConstants{
@@ -71,6 +73,5 @@ void main() {
     fragPopulation = inPopulation;
     fragColdTemp = inColdTemp;
     fragWarmTemp = inWarmTemp;
-
 
 }

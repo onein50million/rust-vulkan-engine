@@ -1,14 +1,6 @@
 #version 450
+#include "extras.glsl"
 
-const int NUM_MODELS = 1000;
-const int NUM_RANDOM = 100;
-const int NUM_LIGHTS = 1;
-
-
-struct Light{
-    vec4 position;
-    vec4 color;
-};
 struct SampleSet{ //set of samples
     vec4 albedo;
     float roughness;
@@ -16,21 +8,6 @@ struct SampleSet{ //set of samples
     float ambient_occlusion;
     vec3 normal;
 };
-
-
-layout(binding = 0, std140) uniform UniformBufferObject {
-    vec4 random[NUM_RANDOM];
-    Light lights[NUM_LIGHTS];
-    int player_index;
-    int num_lights;
-    int map_mode;
-    int value4;
-    vec2 mouse_ratio;
-    float time;
-    float b;
-    float c;
-    float d;
-} ubos;
 
 layout(push_constant) uniform PushConstants{
     mat4 model;
@@ -52,14 +29,6 @@ const int FOLIAGE_OFFSET = 3;
 const int DESERT_OFFSET = 4;
 const int MOUNTAIN_OFFSET = 5;
 const int SNOW_OFFSET = 6;
-
-
-const float PI = 3.14159;
-
-struct Ray{
-    vec3 origin;
-    vec3 direction;
-};
 
 
 layout(binding = 1) uniform sampler2D texSampler[NUM_MODELS];
@@ -96,6 +65,35 @@ const float EXPOSURE = 1.0/0.5;
 //    float clamped_value = clamp(value, min(target_min,target_max), max(target_max,target_min));
 //    return clamp(target_min + (clamped_value - value_min) * (target_max - target_min) / (value_max - value_min), min(target_min,target_max), max(target_max,target_min));
 //}
+
+
+struct Ray{
+    vec3 origin;
+    vec3 direction;
+};
+vec3 rayAt(Ray ray, float ratio){
+    return ray.origin + ray.direction*ratio;
+}
+
+//Gets how far a ray is inside a sphere
+//vec2(close_hit, far_hit)
+vec2 ray_sphere_depth(vec3 center, float radius, Ray ray){
+
+    vec3 origin_center = ray.origin - center;
+    float a = dot(ray.direction, ray.direction);
+    float b = 2.0 * dot(origin_center, ray.direction);
+    float c = dot(origin_center,origin_center) - radius*radius;
+    float discriminant = b*b - 4*a*c;
+    if(discriminant < 0){
+        return vec2(-1.0);
+    }else{
+        return vec2(
+        (-b - sqrt(discriminant) ) / (2.0*a),
+        (-b + sqrt(discriminant) ) / (2.0*a)
+        );
+    }
+}
+
 
 //from https://github.com/blender/blender/blob/594f47ecd2d5367ca936cf6fc6ec8168c2b360d0/source/blender/gpu/shaders/material/gpu_shader_material_map_range.glsl#L7
 float map_range_linear(float value,
@@ -207,8 +205,10 @@ void main() {
         vec3 bitangent;
         mat3 TBN;
 
+        vec3 sun_direction = normalize(vec3(sin(ubos.time.x),0.0,cos(ubos.time.x)));
+        float shadow_amount = 0.0;
         if ((pushConstant.bitfield&IS_GLOBE) > 0){ //triplanar mapping
-            float current_temperature = mix(fragColdTemp,fragWarmTemp, sin(ubos.time));
+            float current_temperature = mix(fragColdTemp,fragWarmTemp, sin(ubos.time.x));
             current_temperature -= 30.0 * map_range_linear(fragElevation, 500.0,2000.0,0.0,1.0);
             if(ubos.map_mode == 0){
 //                vec3 water_shift = vec3(ubos.time * 0.001, sin(ubos.time)*0.00001, cos(ubos.time*0.0001));
@@ -240,9 +240,9 @@ void main() {
 
                 }else{
                     float grass_ratio = map_range_linear(fragElevation,0.0, 2000.0,1.0, 0.0);
-                    foliage_weight = map_range_linear(fragAridity, 0.0, 0.5, 0.0, 1.0) * grass_ratio;
-                    desert_weight = 1.0 - foliage_weight;
-                    mountain_weight = map_range_linear(fragElevation,1500.0, 2000.0,0.0, 1.0);
+                    mountain_weight = map_range_linear(fragElevation,1500.0, 3000.0,0.0, 1.0);
+                    foliage_weight = map_range_linear(fragAridity, 0.0, 0.6, 0.0, 1.0) * grass_ratio;
+                    desert_weight = clamp(1.0 - foliage_weight - mountain_weight,0.0,1.0);
 
                     float coldness = map_range_linear(current_temperature, -5.0, 3.0, 1.0, 0.0); //How far below zero
                     snow_weight = map_range_linear(steepness, 0.0, 0.001, 0.0, 10.0)*fragAridity * coldness;
@@ -310,6 +310,20 @@ void main() {
                 }
 //                outColor = albedo;
 //                return;
+
+//                Ray ground_sun_ray = Ray(fragPosition, ((pushConstant.model) * (vec4(-sun_direction,1.0))).xyz);
+                Ray ground_sun_ray = Ray(worldPosition,-sun_direction);
+                vec2 ground_cloud_hit = ray_sphere_depth(vec3(0.0), CLOUD_SIZE, ground_sun_ray);
+                vec3 cloud_hit_position = rayAt(ground_sun_ray,ground_cloud_hit.x);
+//                float cloud_density = cloudAt((((pushConstant.model)) * vec4(cloud_hit_position,1.0)).xyz);
+                float cloud_density = cloudAt((inverse(pushConstant.model) * (vec4(cloud_hit_position,1.0))).xyz);
+//                float cloud_density = cloudAt(cloud_hit_position);
+                if (ground_cloud_hit.x < 0.0){
+                    shadow_amount = cloud_density;
+                }
+//                outColor = vec4(vec3(cloud_density),1.0);
+//                return;
+
             }
             else if(ubos.map_mode == 1){ //Elevation
                 outColor = vec4(vec3(fragElevation/10000.0),1.0);
@@ -392,8 +406,9 @@ void main() {
             vec3 light_direction = normalize(light_position - worldPosition);
             if (i == 0){ //sun
                 radiance = ubos.lights[i].color.rgb;
-                light_direction = normalize(vec3(sin(ubos.time),0.0,cos(ubos.time)));
+                light_direction = sun_direction;
             }
+            radiance *= 1.0 - shadow_amount;
 
             vec3 halfway_direction = normalize(view_direction + light_direction);
 

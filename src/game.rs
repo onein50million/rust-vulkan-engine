@@ -11,6 +11,8 @@ const EARTH_SURFACE_AREA: f64 = 510_000_000_000.0;
 const GLOBAL_TEMPERATURE_CHANGE: f64 = 10.0; //degrees K
 const POLAR_AMPLIFICATION_FACTOR: f64 = 3.0;
 
+const SIMULATION_DELAY: f64 = 1.0;
+
 //Name ideas:
 //Greenhouse Earth
 //76 Below
@@ -126,7 +128,7 @@ struct VertexData {
 }
 
 pub(crate) struct Game {
-    game_start: std::time::Instant,
+    game_start: Instant,
     objects: Vec<GameObject>,
     pub(crate) mouse_buffer: Vector2<f64>,
     pub(crate) inputs: Inputs,
@@ -135,7 +137,8 @@ pub(crate) struct Game {
     pub(crate) vulkan_data: VulkanData,
     camera: Camera,
     planet_index:usize,
-    planet_data:Vec<VertexData>
+    planet_data:Vec<VertexData>,
+    last_sim_tick: Instant
 }
 
 impl Game {
@@ -171,7 +174,8 @@ impl Game {
             vulkan_data,
             camera: Camera::new(),
             planet_index,
-            planet_data: vec![]
+            planet_data: vec![],
+            last_sim_tick: Instant::now()
         };
         game.load_elevation_data();
         return game;
@@ -262,8 +266,8 @@ impl Game {
                         }else{
                             (latitude, longitude)
                         };
-                        let x= (inv_transform[0] + transformed_coords.1 * inv_transform[1] + transformed_coords.0 * inv_transform[2]);
-                        let y= (inv_transform[3] + transformed_coords.1 * inv_transform[4] + transformed_coords.0 * inv_transform[5]);
+                        let x= inv_transform[0] + transformed_coords.1 * inv_transform[1] + transformed_coords.0 * inv_transform[2];
+                        let y= inv_transform[3] + transformed_coords.1 * inv_transform[4] + transformed_coords.0 * inv_transform[5];
 
                         if x >= 0.0 && x < rasterband.size().0 as f64 && y >= 0.0 && y < rasterband.size().1 as f64 {
                             let mut slice = [0f64];
@@ -514,8 +518,8 @@ impl Game {
     }
 
     fn get_year(&self) -> f64{
-        // self.game_start.elapsed().as_secs_f64() / 36000.0
-        self.game_start.elapsed().as_secs_f64() / 4.0
+        self.game_start.elapsed().as_secs_f64() / 36000.0
+        // self.game_start.elapsed().as_secs_f64() / 4.0
     }
 
     pub(crate) fn process(&mut self) {
@@ -525,7 +529,7 @@ impl Game {
         for i in 0..self.objects.len() {
             self.objects[i].process(delta_time);
         }
-        // self.objects[self.planet_index].rotation = UnitQuaternion::from_euler_angles(23.43644f64.to_radians(),0.0 ,0.0) * UnitQuaternion::from_euler_angles(0.0,-std::f64::consts::PI * 2.0 * 365.25 * self.get_year() ,0.0);
+        self.objects[self.planet_index].rotation = UnitQuaternion::from_euler_angles(23.43644f64.to_radians(),0.0 ,0.0) * UnitQuaternion::from_euler_angles(0.0,-std::f64::consts::PI * 2.0 * 365.25 * self.get_year() ,0.0);
         self.camera.position += Vector3::new(0.0,self.inputs.camera_y * 2_000_000.0 * delta_time,0.0);
         self.camera.position = UnitQuaternion::from_euler_angles(0.0, -self.inputs.camera_x * 0.3 * delta_time,0.0) * self.camera.position;
         self.camera.rotation = UnitQuaternion::face_towards(&(self.camera.position), &Vector3::new(0.0,-1.0,0.0));
@@ -533,12 +537,37 @@ impl Game {
         self.update_renderer();
         self.vulkan_data.transfer_data_to_gpu();
         self.vulkan_data.draw_frame();
+
+
+        if self.last_sim_tick.elapsed().as_secs_f64() > SIMULATION_DELAY{
+            self.last_sim_tick = Instant::now();
+            let instance= Instant::now();
+
+            for vertex in self.planet_data.iter_mut(){
+                vertex.population += vertex.population.asin() * 0.1 * delta_time;
+            }
+            let simulation_duration = instance.elapsed().as_secs_f64();
+
+            if self.inputs.sprint > 0.0{
+                println!("Simulation duration: {:}", simulation_duration);
+            }
+        }
+
+
     }
 
     fn update_renderer(&mut self){
-        let projection = self.vulkan_data.get_projection_matrix(self.inputs.zoom);
 
-        let cubemap_projection = self.vulkan_data.get_cubemap_projection_matrix(self.inputs.zoom);
+        // let clip = Matrix4::new(
+        //                         1.0,  0.0, 0.0, 0.0,
+        //                         0.0, -1.0, 0.0, 0.0,
+        //                         0.0,  0.0, 0.5, 0.0,
+        //                         0.0,  0.0, 0.5, 1.0);
+        let clip = Matrix4::<f32>::identity();
+
+        let projection = clip * self.vulkan_data.get_projection_matrix(self.inputs.zoom);
+
+        let cubemap_projection = clip * self.vulkan_data.get_cubemap_projection_matrix(self.inputs.zoom);
         let view_matrix = (Translation3::from(self.camera.position) * Rotation3::from(self.camera.rotation)).inverse().to_homogeneous().cast::<f64>();
         let view_matrix_no_translation = (Matrix4::from(self.camera.rotation)).try_inverse().unwrap().cast();
 
@@ -547,10 +576,33 @@ impl Game {
 
 
         for i in 0..self.objects.len() {
-            self.vulkan_data.objects[self.objects[i].render_object_index].model =
-                (Matrix4::from(Translation3::from(self.objects[i].position))
-                    * Matrix4::from(Rotation3::from(self.objects[i].rotation))).cast();
+            let model_matrix = (Matrix4::from(Translation3::from(self.objects[i].position))
+                * Matrix4::from(Rotation3::from(self.objects[i].rotation))).cast();
+            self.vulkan_data.objects[self.objects[i].render_object_index].model = model_matrix;
+            if i == self.planet_index{
+                self.vulkan_data.uniform_buffer_object.planet_model_matrix = model_matrix;
+                // self.vulkan_data.uniform_buffer_object.planet_model_matrix = Matrix4::new(
+                //     1.0,2.0,3.0,4.0,
+                //     5.0,6.0,7.0,8.0,
+                //     9.0,10.0,11.0,12.0,
+                //     13.0,14.0,15.0,16.0,
+                // );
 
+                // let test_array = unsafe{
+                //     std::mem::transmute::<_,[f32;16]>(self.vulkan_data.uniform_buffer_object.planet_model_matrix)
+                // };
+                // println!("Test:{:?}", test_array);
+                self.vulkan_data.uniform_buffer_object.b = 69.0;
+                self.vulkan_data.uniform_buffer_object.c = 42.0;
+                self.vulkan_data.uniform_buffer_object.d = 122.0;
+                // let test_angle = self.game_start.elapsed().as_secs_f64();
+                // self.vulkan_data.uniform_buffer_object.planet_model_matrix = Matrix4::new(
+                //     test_angle.cos(),0.0,-test_angle.sin(),0.0,
+                //     0.0,1.0,0.0,0.0,
+                //     test_angle.sin(),0.0,test_angle.cos(),0.0,
+                //     0.0,0.0,0.0,1.0).cast();
+                // println!("Matrix: {:}", self.objects[self.planet_index].rotation.to_homogeneous());
+            }
             self.vulkan_data.objects[self.objects[i].render_object_index].view = view_matrix.cast();
             self.vulkan_data.objects[self.objects[i].render_object_index].proj = projection;
         }

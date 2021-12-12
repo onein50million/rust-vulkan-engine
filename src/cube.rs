@@ -1,5 +1,5 @@
 use crate::support::Vertex;
-use nalgebra::{Vector2, Vector3, Vector4};
+use nalgebra::{Vector2, Vector3};
 
 
 pub(crate) const FULLSCREEN_QUAD_VERTICES: [Vertex; 4] = [
