@@ -1,10 +1,9 @@
 #version 450
-#extension GL_EXT_debug_printf : enable
 #include "extras.glsl"
 layout(local_size_x = 8, local_size_y =8, local_size_z = 1) in;
 
 layout(push_constant) uniform PushConstants{ //Co-opting some of the push constants
-    mat4 cubemap_view; //This is actually the cubemap's view matrix
+    mat4 cubemap_view; //This is actually the cubemap's inverse view matrix
     mat4 view_inverse; //I'm actually sending the inverse of the view transform to the compute shader instead
     mat4 proj;
     int texture_index;
@@ -12,7 +11,6 @@ layout(push_constant) uniform PushConstants{ //Co-opting some of the push consta
 } pushConstant;
 
 layout(set = 0, binding = 2, rgba8) uniform image2D outImage;
-layout(binding = 4) uniform sampler2D depth_buffer;
 
 struct Ray{
     vec3 origin;
@@ -20,16 +18,6 @@ struct Ray{
 };
 vec3 rayAt(Ray ray, float ratio){
     return ray.origin + ray.direction*ratio;
-}
-
-float map_range_linear(float value,
-float fromMin,
-float fromMax,
-float toMin,
-float toMax )
-{
-    float result = clamp(toMin + ((value - fromMin) / (fromMax - fromMin)) * (toMax - toMin), min(toMin,toMax), max(toMax,toMin));
-    return result;
 }
 
 float linearize_depth(float d,float zNear,float zFar)
@@ -58,18 +46,9 @@ vec2 ray_sphere_depth(vec3 center, float radius, Ray ray){
 
 
 vec3 unproject_point(vec3 point){
-
-//    mat4 new_transform = mat4(
-//    1.0f,  0.0f, 0.0f, 0.0f,
-//    0.0f, -1.0f, 0.0f, 0.0f,
-//    0.0f,  0.0f, 0.5f, 0.0f,
-//    0.0f,  0.0f, 0.5f, 1.0f);
-//    new_transform = new_transform * pushConstant.proj;
-
-    mat4 new_transform = pushConstant.proj;
-
-    float inverse_denom = new_transform[2][3] / (point.z + new_transform[2][2]);
-    return vec3(point.x * inverse_denom / new_transform[0][0],point.y * inverse_denom / new_transform[1][1],-inverse_denom);
+    mat4 transform = pushConstant.proj;
+    float inverse_denom = transform[2][3] / (point.z + transform[2][2]);
+    return vec3(point.x * inverse_denom / transform[0][0],point.y * inverse_denom / transform[1][1],-inverse_denom);
 //    float inverse_denom = pushConstant.proj[2][3] / (point.z + pushConstant.proj[2][2]);
 //    return vec3(point.x * inverse_denom / pushConstant.proj[0][0],point.y * inverse_denom / pushConstant.proj[1][1],-inverse_denom);
 }
@@ -97,7 +76,6 @@ void main()
 
 //    float mouse_distance = distance(vec2(gl_GlobalInvocationID.xy), ubos.mouse_position);
 //    if (mouse_distance < 2.0){
-////        out_color = vec4(vec3(1.0,0.2,0.2),1.0 - clamp(mouse_distance/0.01, 0.0,1.0));
 //        out_color = vec4(1.0);
 //    }
 
@@ -111,7 +89,7 @@ void main()
 
         vec3 screen_space_target = vec3(screen_ratio.x * 2.0 - 1.0, screen_ratio.y * 2.0 - 1.0, 1.0);
 
-        vec4 v4_target = pushConstant.cubemap_view * vec4(unproject_point(screen_space_target.xyz), 0.0);
+        vec4 v4_target = pushConstant.cubemap_view * vec4(unproject_point(screen_space_target.xyz), 1.0);
         //    v4_target.z *= -1.0;
         //    target.x *    = -1.0;
         //    v4_target.z = (v4_target.z + v4_target.w) / 2.0;

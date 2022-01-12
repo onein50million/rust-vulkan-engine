@@ -1,10 +1,17 @@
 //https://www.shadertoy.com/view/3d2GDW
 //https://github.com/blender/blender/blob/master/source/blender/gpu/shaders/material/gpu_shader_material_tex_noise.glsl
 //https://www.shadertoy.com/view/4djSRW
+//https://github.com/blender/blender/blob/master/source/blender/gpu/shaders/material/gpu_shader_material_fractal_noise.glsl
+
 const int NUM_RANDOM = 100;
 const int NUM_LIGHTS = 1;
 const int NUM_MODELS = 100;
 const float PI = 3.14159;
+
+const int IS_CUBEMAP = 1;
+const int IS_HIGHLIGHTED = 2;
+const int IS_VIEWMODEL = 4;
+const int IS_GLOBE = 8;
 
 const float PLANET_SIZE = 6371000.0;
 const float ATMOSPHERE_ELEVATION = 120000.0;
@@ -18,14 +25,26 @@ struct Light{
 layout(binding = 0, std140) uniform UniformBufferObject {
     vec4 random[NUM_RANDOM];
     Light lights[NUM_LIGHTS];
-    int player_index;
-    int num_lights;
-    int map_mode;
-    int value4;
-    vec4 mouse_position;
+    uint player_index;
+    uint num_lights;
+    uint map_mode;
+    uint selected_province;
+    vec2 mouse_position;
+    vec2 screen_size;
     vec4 time;
     mat4 planet_model_matrix;
 } ubos;
+
+//from https://github.com/blender/blender/blob/594f47ecd2d5367ca936cf6fc6ec8168c2b360d0/source/blender/gpu/shaders/material/gpu_shader_material_map_range.glsl#L7
+float map_range_linear(float value,
+float fromMin,
+float fromMax,
+float toMin,
+float toMax )
+{
+    float result = clamp(toMin + ((value - fromMin) / (fromMax - fromMin)) * (toMax - toMin), min(toMin,toMax), max(toMax,toMin));
+    return result;
+}
 
 
 vec4 random_vec4_offset(float p)
@@ -75,7 +94,7 @@ vec4 grad4(float j, vec4 ip)
     // (sqrt(5) - 1)/4 = F4, used once below
     #define F4 0.309016994374947451
 
-float snoise(vec4 sample_point, float distortion)
+float snoise(vec4 sample_point)
 {
     const vec4  C = vec4( 0.138196601125011,  // (5 - sqrt(5))/20  G4
     0.276393202250021,  // 2 * G4
@@ -157,24 +176,61 @@ float snoise(vec4 sample_point, float distortion)
     + dot(m12*m12, vec2( dot( p3, x3 ), dot( p4, x4 ) ) ) ) ;
 
 }
+float noise(vec4 p)
+{
+    return 0.5 * snoise(p) + 0.5;
+}
+
+/* The fractal_noise functions are all exactly the same except for the input type. */
+float fractal_noise(vec4 p, float octaves, float roughness)
+{
+    float fscale = 1.0;
+    float amp = 1.0;
+    float maxamp = 0.0;
+    float sum = 0.0;
+    octaves = clamp(octaves, 0.0, 15.0);
+    int n = int(octaves);
+    for (int i = 0; i <= n; i++) {
+        float t = noise(fscale * p);
+        sum += t * amp;
+        maxamp += amp;
+        amp *= clamp(roughness, 0.0, 1.0);
+        fscale *= 2.0;
+    }
+    float rmd = octaves - floor(octaves);
+    if (rmd != 0.0) {
+        float t = noise(fscale * p);
+        float sum2 = sum + t * amp;
+        sum /= maxamp;
+        sum2 /= maxamp + amp;
+        return (1.0 - rmd) * sum + rmd * sum2;
+    }
+    else {
+        return sum / maxamp;
+    }
+}
 
 float get_noise(vec4 sample_point, float distortion){
     vec4 distorted_point = sample_point;
     if (distortion != 0.0) {
-        distorted_point += vec4(snoise(distorted_point + random_vec4_offset(0.0), 0.0) * distortion,
-        snoise(distorted_point + random_vec4_offset(1.0), 0.0) * distortion,
-        snoise(distorted_point + random_vec4_offset(2.0), 0.0) * distortion,
-        snoise(distorted_point + random_vec4_offset(3.0), 0.0) * distortion);
+        distorted_point += vec4(snoise(distorted_point + random_vec4_offset(0.0)) * distortion,
+        snoise(distorted_point + random_vec4_offset(1.0)) * distortion,
+        snoise(distorted_point + random_vec4_offset(2.0)) * distortion,
+        snoise(distorted_point + random_vec4_offset(3.0)) * distortion);
     }
 
-    return snoise(distorted_point, 0.0);
+    return fractal_noise(distorted_point,16.0,0.8);
 }
 
 //TODO: put this into a texture rather than sampling it twice(once in frag shader, once in compute shader)
 //TODO: maybe even compute it less frequently
+
+//Could maybe instead just get a bunch of cloud textures and interpolate between them
 float cloudAt(vec3 point){
-    vec4 sample_point = vec4(point/PLANET_SIZE,ubos.time.x*100.0)*1.0;
-    float noise = smoothstep(0.1, 0.5,get_noise(sample_point, 10.5));
-//    noise += smoothstep(0.4, 0.9,get_noise(sample_point*0.1 + random_vec4_offset(69.0), 10.5));
+    vec4 sample_point = vec4(point/PLANET_SIZE,ubos.time.x*100.0);
+    float noise = smoothstep(0.5, 0.6,get_noise(sample_point, 2.5*sin(ubos.time.x*100.0 + 500.0)));
+
+//    float noise = smoothstep(0.5, 0.6,fractal_noise(sample_point*10.0, 16.0, 0.8));
+
     return clamp(noise,0.0,1.0);
 }

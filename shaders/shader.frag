@@ -18,10 +18,7 @@ layout(push_constant) uniform PushConstants{
     int bitfield; //32 bits, LSB is cubemap flag
 } pushConstant;
 
-const int IS_CUBEMAP = 1;
-const int IS_HIGHLIGHTED = 2;
-const int IS_VIEWMODEL = 4;
-const int IS_GLOBE = 8;
+
 
 const int DEEP_WATER_OFFSET = 1;
 const int SHALLOW_WATER_OFFSET = 2;
@@ -55,6 +52,7 @@ layout(location = 7) in float fragAridity;
 layout(location = 8) in float fragPopulation;
 layout(location = 9) in float fragWarmTemp;
 layout(location = 10) in float fragColdTemp;
+layout(location = 11) flat in uint fragProvinceId;
 
 layout(location = 0) out vec4 outColor;
 
@@ -95,16 +93,6 @@ vec2 ray_sphere_depth(vec3 center, float radius, Ray ray){
 }
 
 
-//from https://github.com/blender/blender/blob/594f47ecd2d5367ca936cf6fc6ec8168c2b360d0/source/blender/gpu/shaders/material/gpu_shader_material_map_range.glsl#L7
-float map_range_linear(float value,
-float fromMin,
-float fromMax,
-float toMin,
-float toMax )
-{
-    float result = clamp(toMin + ((value - fromMin) / (fromMax - fromMin)) * (toMax - toMin), min(toMin,toMax), max(toMax,toMin));
-    return result;
-}
 
 vec3 fresnelSchlick(float cos_theta, vec3 normal_incidence){
     return normal_incidence + (1.0 - normal_incidence) * pow(clamp(1.0 - cos_theta, 0.0, 1.0),5.0);
@@ -186,6 +174,7 @@ SampleSet load_sample_set(int texture_offset, vec3 offset){
 
 
 void main() {
+
     if ((pushConstant.bitfield&IS_CUBEMAP) > 0) {
         //        if(gl_FragCoord.x > 200){
         //            outColor = vec4(texture(cubemaps[pushConstant.texture_index], fragPosition).rgb,1.0);
@@ -208,6 +197,13 @@ void main() {
         vec3 sun_direction = normalize(vec3(sin(ubos.time.x),0.0,cos(ubos.time.x)));
         float shadow_amount = 0.0;
         if ((pushConstant.bitfield&IS_GLOBE) > 0){ //triplanar mapping
+
+            if(fragProvinceId == ubos.selected_province && ubos.selected_province != 4294967295){
+                outColor = vec4(1.0,0.1,0.1,1.0);
+                return;
+            }
+
+
             float current_temperature = mix(fragColdTemp,fragWarmTemp, sin(ubos.time.x));
             current_temperature -= 30.0 * map_range_linear(fragElevation, 500.0,2000.0,0.0,1.0);
             if(ubos.map_mode == 0){
@@ -229,7 +225,8 @@ void main() {
                 float mountain_weight = 0.0;
                 float snow_weight = 0.0;
 
-                float steepness = clamp(1.0 - dot(fragNormal, normalize(fragPosition)),0.0, 1.0);
+                float steepness = 1.0 - clamp(dot(fragNormal, normalize(worldPosition)),0.0, 1.0);
+                steepness = map_range_linear(steepness, 0.0, 0.001, 0.0, 1.0);
                 if (fragElevation < 0.0){
                     if (current_temperature > -5.0){
                         deep_water_weight = map_range_linear(fragElevation, 0.0, -100.0, 0.0,1.0);
@@ -239,15 +236,16 @@ void main() {
                     }
 
                 }else{
-                    float grass_ratio = map_range_linear(fragElevation,0.0, 2000.0,1.0, 0.0);
+                float grass_ratio = map_range_linear(fragElevation,0.0, 1500.0,1.0 , 0.2);
                     mountain_weight = map_range_linear(fragElevation,1500.0, 3000.0,0.0, 1.0);
-                    foliage_weight = map_range_linear(fragAridity, 0.0, 0.6, 0.0, 1.0) * grass_ratio;
+//                    mountain_weight = steepness;
+                    foliage_weight = clamp((1.0 - steepness*0.01) *  map_range_linear(fragAridity, 0.0, 0.02, 0.2, 1.0) * grass_ratio - mountain_weight,0.0,1.0);
                     desert_weight = clamp(1.0 - foliage_weight - mountain_weight,0.0,1.0);
 
                     float coldness = map_range_linear(current_temperature, -5.0, 3.0, 1.0, 0.0); //How far below zero
-                    snow_weight = map_range_linear(steepness, 0.0, 0.001, 0.0, 10.0)*fragAridity * coldness;
+//                    snow_weight = map_range_linear(steepness, 0.0, 0.001, 0.0, 10.0)*fragAridity * coldness * 1.0;
+                    snow_weight = (1.0 - steepness)*fragAridity * coldness * 1.0;
                 }
-//                float coldness = map(current_temperature, -1.0, 0.0, 1.0, 0.0); //How far below zero
 
 
 
@@ -286,12 +284,12 @@ void main() {
 
 
                 float blends[] = {
-                deep_water_weight/weight_sum,
-                shallow_water_weight/weight_sum,
-                foliage_weight/weight_sum,
-                desert_weight/weight_sum,
-                mountain_weight/weight_sum,
-                snow_weight/weight_sum
+                clamp(deep_water_weight/weight_sum,0.0,1.0),
+                clamp(shallow_water_weight/weight_sum,0.0,1.0),
+                clamp(foliage_weight/weight_sum,0.0,1.0),
+                clamp(desert_weight/weight_sum,0.0,1.0),
+                clamp(mountain_weight/weight_sum,0.0,1.0),
+                clamp(snow_weight/weight_sum,0.0,1.0)
                 };
 
 
@@ -308,6 +306,7 @@ void main() {
                     ambient_occlusion += sample_sets[i].ambient_occlusion * blends[i];
                     normal += sample_sets[i].normal * blends[i];
                 }
+                albedo.rgb *= map_range_linear(fragElevation, 1500.0, 5000.0, 1.0, 0.8);
 //                outColor = albedo;
 //                return;
 
@@ -336,6 +335,9 @@ void main() {
                 return;
             }else if(ubos.map_mode == 4){ //Temperature
                 outColor = vec4(vec3(current_temperature / 60.0),1.0);
+                return;
+            }else if(ubos.map_mode == 5){
+                outColor = vec4(mod(random_vec4_offset(float(fragProvinceId)*4.0).rgb, vec3(1.0)),1.0);
                 return;
             }
 
@@ -366,8 +368,6 @@ void main() {
             return;
         }
         if ((pushConstant.bitfield&IS_VIEWMODEL) > 0){
-//            uint cpu_image_value = texture(cpu_images[pushConstant.texture_index], fragTexCoord).r;
-//            outColor = vec4(vec3(float(cpu_image_value)/255.0),1.0);
             outColor = albedo;
             return;
         }

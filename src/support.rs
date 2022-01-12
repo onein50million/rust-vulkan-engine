@@ -1,5 +1,9 @@
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::ops::Index;
 use erupt::vk;
 use nalgebra::{Matrix4, Vector2, Vector3, Vector4};
+use strum::{EnumCount, IntoEnumIterator};
 
 pub(crate) const FRAMERATE_TARGET: f64 = 280.0;
 pub(crate) const NUM_RANDOM: usize = 100;
@@ -7,12 +11,11 @@ pub(crate) const FRAME_SAMPLES: usize = 100;
 pub(crate) const NUM_MODELS: usize = 1000;
 pub(crate) const NUM_LIGHTS: usize = 1;
 
-pub(crate) mod flags{
+pub(crate) mod flags {
     pub(crate) const IS_CUBEMAP: u32 = 0b1;
     pub(crate) const IS_HIGHLIGHTED: u32 = 0b10;
-    pub(crate) const IS_VIEWMODEL:u32 = 0b100;
-    pub(crate) const IS_GLOBE:u32 = 0b1000;
-
+    pub(crate) const IS_VIEWMODEL: u32 = 0b100;
+    pub(crate) const IS_GLOBE: u32 = 0b1000;
 }
 
 #[derive(Copy, Clone)]
@@ -28,22 +31,28 @@ pub(crate) struct Vertex {
     pub(crate) population: f32,
     pub(crate) warmest_temperature: f32,
     pub(crate) coldest_temperature: f32,
+    pub(crate) province_id: u32,
 }
 
-impl Vertex{
-    pub(crate) const fn new(position: Vector3<f32>, normal: Vector3<f32>, texture_coordinate: Vector2<f32>) -> Self{
-        return Self{
+impl Vertex {
+    pub(crate) const fn new(
+        position: Vector3<f32>,
+        normal: Vector3<f32>,
+        texture_coordinate: Vector2<f32>,
+    ) -> Self {
+        return Self {
             position,
             normal,
-            tangent: Vector4::new(0.0,0.0,0.0,0.0),
+            tangent: Vector4::new(0.0, 0.0, 0.0, 0.0),
             texture_coordinate,
             texture_type: 0,
             elevation: 0.0,
             aridity: 0.0,
             population: 0.0,
             warmest_temperature: 0.0,
-            coldest_temperature: 0.0
-        }
+            coldest_temperature: 0.0,
+            province_id: 0,
+        };
     }
 }
 
@@ -52,21 +61,17 @@ impl Vertex{
 pub(crate) struct Light {
     pub(crate) position: Vector4<f32>,
     pub(crate) color: Vector4<f32>,
-
 }
-impl Light{
-    pub(crate) fn new() -> Self{
+impl Light {
+    pub(crate) fn new() -> Self {
         let rng = fastrand::Rng::new();
         let distance = 5.0;
         let power = 10.0;
-        let position = Vector4::new(0.0,0.0, 0.0, 0.0);
-        let color =  Vector4::new(1.0,0.9,0.2, 0.0) * power;
+        let position = Vector4::new(0.0, 0.0, 0.0, 0.0);
+        let color = Vector4::new(1.0, 0.9, 0.9, 0.0) * power;
 
         println!("Position: {:}", position);
-        Self{
-            position,
-            color,
-        }
+        Self { position, color }
     }
 }
 
@@ -82,13 +87,13 @@ pub(crate) mod map_modes {
 #[repr(C)]
 pub(crate) struct UniformBufferObject {
     pub(crate) random: [Vector4<f32>; NUM_RANDOM], //std140 packing so it needs to be 16 bytes wide
-    pub(crate) lights: [Light; NUM_LIGHTS], //std140 packing so it needs to be 16 bytes wide
+    pub(crate) lights: [Light; NUM_LIGHTS],        //std140 packing so it needs to be 16 bytes wide
     pub(crate) player_index: u32,
-    pub(crate) num_lights: i32,
+    pub(crate) num_lights: u32,
     pub(crate) map_mode: u32,
-    pub(crate) value4: i32,
+    pub(crate) selected_province: u32,
     pub(crate) mouse_position: Vector2<f32>,
-    pub(crate) _padding: Vector2<f32>,
+    pub(crate) screen_size: Vector2<f32>,
     pub(crate) time: f32,
     pub(crate) b: f32,
     pub(crate) c: f32,
@@ -113,7 +118,8 @@ impl Vertex {
             .stride(std::mem::size_of::<Vertex>() as u32)
             .input_rate(vk::VertexInputRate::VERTEX);
     }
-    pub(crate) fn get_attribute_description() -> Vec<vk::VertexInputAttributeDescriptionBuilder<'static>> {
+    pub(crate) fn get_attribute_description(
+    ) -> Vec<vk::VertexInputAttributeDescriptionBuilder<'static>> {
         let attribute_descriptions = vec![
             vk::VertexInputAttributeDescriptionBuilder::new()
                 .binding(0)
@@ -165,7 +171,11 @@ impl Vertex {
                 .location(9)
                 .format(vk::Format::R32_SFLOAT)
                 .offset(68),
-
+            vk::VertexInputAttributeDescriptionBuilder::new()
+                .binding(0)
+                .location(10)
+                .format(vk::Format::R32_UINT)
+                .offset(72),
         ];
 
         return attribute_descriptions
@@ -173,4 +183,24 @@ impl Vertex {
             .map(|attribute_description| attribute_description)
             .collect();
     }
+}
+
+#[derive(Debug)]
+pub(crate) struct RatioMap<Key>{
+    ratios: HashMap<Key, f64>,
+}
+
+impl<Key: Hash + Eq> RatioMap<Key> {
+     pub(crate) fn new() -> Self{
+         Self{
+             ratios: HashMap::new()
+         }
+     }
+
+    pub(crate) fn get(&self, index: &Key) -> f64{
+        *self.ratios.get(index).unwrap()
+    }
+    // pub(crate) fn set(&self, index: Key, new_ratio: f64) -> f64{
+    //     self.ratios[index]
+    // }
 }
