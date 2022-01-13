@@ -479,10 +479,20 @@ impl CombinedImage {
     }
 }
 
-struct TextureSet {
+pub(crate) struct TextureSet {
     albedo: Option<CombinedImage>,
     normal: Option<CombinedImage>,
     roughness_metalness_ao: Option<CombinedImage>,
+}
+
+impl TextureSet{
+    pub(crate) fn new_empty() -> Self{
+        Self{
+            albedo: None,
+            normal: None,
+            roughness_metalness_ao: None,
+        }
+    }
 }
 
 pub(crate) struct RenderObject {
@@ -501,7 +511,7 @@ pub(crate) struct RenderObject {
 }
 
 impl RenderObject {
-    fn new(
+    pub(crate) fn new(
         vulkan_data: &mut VulkanData,
         vertices: Vec<Vertex>,
         indices: Vec<u32>,
@@ -780,15 +790,14 @@ impl VulkanData {
             lights,
             player_index: 0,
             num_lights: 100,
-            map_mode: 0,
-            selected_province: 0,
+            _map_mode: 0,
+            _selected_province: 0,
             mouse_position: Vector2::new(0.0, 0.0),
             screen_size: Vector2::zeros(),
             time: 0.0,
             b: 0.0,
             c: 0.0,
             d: 0.0,
-            planet_model_matrix: Matrix4::identity(),
         };
 
         let indices = vec![];
@@ -1450,12 +1459,6 @@ impl VulkanData {
                                 tangent: Vector4::zeros(),
                                 texture_coordinate: Vector2::zeros(),
                                 texture_type,
-                                elevation: 0.0,
-                                aridity: 0.0,
-                                population: 0.0,
-                                warmest_temperature: 0.0,
-                                coldest_temperature: 0.0,
-                                province_id: 0,
                             });
                         }
 
@@ -4058,8 +4061,8 @@ impl VulkanData {
         let projection = nalgebra::Perspective3::new(
             surface_width / surface_height,
             (90f64.to_radians() * (1.0 / zoom)),
-            1_000_000.0,
-            20_000_000.0,
+            0.01,
+            1_000.0,
         );
         return projection;
     }

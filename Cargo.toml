@@ -17,17 +17,10 @@ vk-mem-erupt = {git = "https://github.com/onein50million/vk-mem-erupt.git", rev 
 #vk-mem-erupt = {path = "../vk-mem-erupt"}
 nalgebra = "0.29.0"
 
-gdal = {git = "https://github.com/onein50million/gdal.git"}
-gdal-sys = {git = "https://github.com/onein50million/gdal.git"}
 bincode = "2.0.0-alpha.1"
 
 egui = "0.15.0"
 egui-winit = "0.15.0"
-
-strum = { version = "0.23", features = ["derive"] }
-strum_macros = "0.23"
-
-num_enum = "0.5.5"
 
 [profile.dev.package."*"]
 opt-level = 3

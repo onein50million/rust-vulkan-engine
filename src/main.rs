@@ -2,9 +2,8 @@ mod cube;
 mod game;
 mod renderer;
 mod support;
-mod pop;
-mod organization;
-mod market;
+mod marching_cubes;
+mod edge_triangulation;
 
 use crate::game::*;
 use crate::renderer::*;
@@ -14,7 +13,6 @@ use egui_winit::winit::event_loop::{ControlFlow, EventLoop};
 use egui_winit::winit::window::WindowBuilder;
 use std::env;
 use winit::event::{MouseButton, MouseScrollDelta, ScanCode};
-use crate::market::Good;
 
 //Coordinate system for future reference:
 //from starting location
@@ -60,16 +58,8 @@ fn main() {
             game.vulkan_data.update_ui_texture(ctx.texture());
         }
 
-        egui::SidePanel::left("my_left_panel").show(&ctx, |ui| {
-            match game.selected_province{
-                None => {}
-                Some(province_id) => {
-                    ui.add(egui::Label::new(format!("Population: {:.0}", game.provinces[province_id].get_population())));
-                    let food = game.provinces[province_id].market[Good::Food];
-                    ui.add(egui::Label::new(format!("Food:\nSupply: {:.2}\nDemand: {:.2}\nPrice: {:.2}",food.supply, food.demand, food.price )));
-                }
-            }
-        });
+        // egui::SidePanel::left("my_left_panel").show(&ctx, |ui| {
+        // });
         // println!("egui texture version: {:?}", ctx.texture().version);
 
         let (output, shapes) = ctx.end_frame();
@@ -159,86 +149,6 @@ fn main() {
                                 game.inputs.right = match input.state {
                                     ElementState::Released => 0.0,
                                     ElementState::Pressed => 1.0,
-                                };
-                            }
-                            if input.virtual_keycode == Some(VirtualKeyCode::Key1) {
-                                match input.state {
-                                    ElementState::Released => {
-                                        game.inputs.map_mode = support::map_modes::SATELITE
-                                    }
-                                    _ => {}
-                                };
-                            }
-                            if input.virtual_keycode == Some(VirtualKeyCode::Key2) {
-                                match input.state {
-                                    ElementState::Released => {
-                                        game.inputs.map_mode = support::map_modes::ELEVATION
-                                    }
-                                    _ => {}
-                                };
-                            }
-                            if input.virtual_keycode == Some(VirtualKeyCode::Key3) {
-                                match input.state {
-                                    ElementState::Released => {
-                                        game.inputs.map_mode = support::map_modes::ARIDITY
-                                    }
-                                    _ => {}
-                                };
-                            }
-                            if input.virtual_keycode == Some(VirtualKeyCode::Key4) {
-                                match input.state {
-                                    ElementState::Released => {
-                                        game.inputs.map_mode = support::map_modes::POPULATION
-                                    }
-                                    _ => {}
-                                };
-                            }
-                            if input.virtual_keycode == Some(VirtualKeyCode::Key5) {
-                                match input.state {
-                                    ElementState::Released => game.inputs.map_mode = 4,
-                                    _ => {}
-                                };
-                            }
-                            if input.virtual_keycode == Some(VirtualKeyCode::Key6) {
-                                match input.state {
-                                    ElementState::Released => game.inputs.map_mode = 5,
-                                    _ => {}
-                                };
-                            }
-                            if input.virtual_keycode == Some(VirtualKeyCode::Key7) {
-                                match input.state {
-                                    ElementState::Released => game.inputs.map_mode = 6,
-                                    _ => {}
-                                };
-                            }
-                            if input.virtual_keycode == Some(VirtualKeyCode::Key8) {
-                                match input.state {
-                                    ElementState::Released => game.inputs.map_mode = 7,
-                                    _ => {}
-                                };
-                            }
-                            if input.virtual_keycode == Some(VirtualKeyCode::Key9) {
-                                match input.state {
-                                    ElementState::Released => game.inputs.map_mode = 8,
-                                    _ => {}
-                                };
-                            }
-                            if input.virtual_keycode == Some(VirtualKeyCode::Key0) {
-                                match input.state {
-                                    ElementState::Released => game.inputs.map_mode = 9,
-                                    _ => {}
-                                };
-                            }
-                            if input.virtual_keycode == Some(VirtualKeyCode::Equals) {
-                                match input.state {
-                                    ElementState::Released => game.inputs.zoom *= 1.1,
-                                    _ => {}
-                                };
-                            }
-                            if input.virtual_keycode == Some(VirtualKeyCode::Minus) {
-                                match input.state {
-                                    ElementState::Released => game.inputs.zoom *= 0.9,
-                                    _ => {}
                                 };
                             }
                         }
