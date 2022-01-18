@@ -5,7 +5,7 @@
 
 const int NUM_RANDOM = 100;
 const int NUM_LIGHTS = 1;
-const int NUM_MODELS = 100;
+const int NUM_MODELS = 1000;
 const float PI = 3.14159;
 
 const int IS_CUBEMAP = 1;
@@ -25,7 +25,10 @@ layout(binding = 0, std140) uniform UniformBufferObject {
     uint selected_province;
     vec2 mouse_position;
     vec2 screen_size;
-    vec4 time;
+    float time;
+    float player_position_x;
+    float player_position_y;
+    float player_position_z;
 } ubos;
 
 //from https://github.com/blender/blender/blob/594f47ecd2d5367ca936cf6fc6ec8168c2b360d0/source/blender/gpu/shaders/material/gpu_shader_material_map_range.glsl#L7

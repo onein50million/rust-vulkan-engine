@@ -13,7 +13,6 @@ use egui_winit::winit::event_loop::{ControlFlow, EventLoop};
 use egui_winit::winit::window::WindowBuilder;
 use std::env;
 use winit::event::{MouseButton, MouseScrollDelta, ScanCode};
-
 //Coordinate system for future reference:
 //from starting location
 //up: negative y
@@ -127,25 +126,25 @@ fn main() {
                             {
                                 close_app(&mut game.vulkan_data, control_flow);
                             }
-                            if input.virtual_keycode == Some(VirtualKeyCode::Up) {
+                            if input.virtual_keycode == Some(VirtualKeyCode::W) {
                                 game.inputs.up = match input.state {
                                     ElementState::Released => 0.0,
                                     ElementState::Pressed => 1.0,
                                 };
                             }
-                            if input.virtual_keycode == Some(VirtualKeyCode::Down) {
+                            if input.virtual_keycode == Some(VirtualKeyCode::S) {
                                 game.inputs.down = match input.state {
                                     ElementState::Released => 0.0,
                                     ElementState::Pressed => 1.0,
                                 };
                             }
-                            if input.virtual_keycode == Some(VirtualKeyCode::Left) {
+                            if input.virtual_keycode == Some(VirtualKeyCode::A) {
                                 game.inputs.left = match input.state {
                                     ElementState::Released => 0.0,
                                     ElementState::Pressed => 1.0,
                                 };
                             }
-                            if input.virtual_keycode == Some(VirtualKeyCode::Right) {
+                            if input.virtual_keycode == Some(VirtualKeyCode::D) {
                                 game.inputs.right = match input.state {
                                     ElementState::Released => 0.0,
                                     ElementState::Pressed => 1.0,

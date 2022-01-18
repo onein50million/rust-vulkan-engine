@@ -1,9 +1,11 @@
 use crate::cube::*;
 use crate::support::*;
+use erupt::vk::{DescriptorBufferInfoBuilder, DescriptorImageInfoBuilder, ShaderModule};
+use erupt::vk1_0::Sampler;
 use erupt::{vk, DeviceLoader, EntryLoader, ExtendableFromConst, InstanceLoader, SmallVec};
 use image::{GenericImageView, ImageFormat};
-use nalgebra::{Matrix4, Perspective3, Vector2, Vector3, Vector4};
-use std::convert::{TryInto};
+use nalgebra::{Matrix4, Orthographic3, Perspective3, Vector2, Vector3, Vector4};
+use std::convert::TryInto;
 use std::default::Default;
 use std::ffi::{c_void, CStr, CString};
 use std::fs::File;
@@ -18,6 +20,25 @@ const BASE_VOXEL_SIZE: f32 = 128.0;
 const MIP_LEVELS: u32 = 6;
 const MSAA_ENABLED: bool = false;
 const UI_BUFFER_LENGTH: usize = 8192;
+
+enum DescriptorInfoData {
+    Image {
+        image_view: vk::ImageView,
+        sampler: Option<vk::Sampler>,
+        layout: vk::ImageLayout,
+    },
+    Buffer {
+        buffer: vk::Buffer,
+        range: vk::DeviceSize,
+    },
+}
+
+struct CombinedDescriptor {
+    //combines info needed for DescriptorSetLayout and WriteDescriptorSet in one time compute shader
+    descriptor_type: vk::DescriptorType,
+    descriptor_count: u32,
+    descriptor_info: DescriptorInfoData,
+}
 
 pub(crate) struct UiData {
     vertex_buffer: Option<vk::Buffer>,
@@ -485,9 +506,9 @@ pub(crate) struct TextureSet {
     roughness_metalness_ao: Option<CombinedImage>,
 }
 
-impl TextureSet{
-    pub(crate) fn new_empty() -> Self{
-        Self{
+impl TextureSet {
+    pub(crate) fn new_empty() -> Self {
+        Self {
             albedo: None,
             normal: None,
             roughness_metalness_ao: None,
@@ -795,9 +816,7 @@ impl VulkanData {
             mouse_position: Vector2::new(0.0, 0.0),
             screen_size: Vector2::zeros(),
             time: 0.0,
-            b: 0.0,
-            c: 0.0,
-            d: 0.0,
+            player_position: Vector3::zeros(),
         };
 
         let indices = vec![];
@@ -1079,7 +1098,6 @@ impl VulkanData {
         for _ in 0..NUM_MODELS {
             self.cpu_images.push(CpuImage::new(self, 128, 128))
         }
-
         self.create_compute_images();
         for _ in 0..1 {
             let mut quad = RenderObject::new(
@@ -1119,6 +1137,10 @@ impl VulkanData {
 
         println!("Creating Descriptor pools");
         self.create_descriptor_pool();
+
+        println!("Running test compute shader");
+        self.run_test_shader();
+
         println!("Creating compute pipeline");
         self.create_compute_descriptors();
         self.create_compute_pipelines();
@@ -3797,7 +3819,7 @@ impl VulkanData {
     }
 
     fn create_cubemap_resources(&mut self) {
-        let cubemap_folder = PathBuf::from("cubemap_space");
+        let cubemap_folder = PathBuf::from("cubemap_forest");
 
         self.cubemap = Some(Cubemap::new(
             self,
@@ -3894,6 +3916,154 @@ impl VulkanData {
     fn create_shader_module(device: &DeviceLoader, spv_code: Vec<u32>) -> vk::ShaderModule {
         let shader_module_create_info = vk::ShaderModuleCreateInfoBuilder::new().code(&spv_code);
         unsafe { device.create_shader_module(&shader_module_create_info, None) }.unwrap()
+    }
+
+    fn run_arbitrary_compute_shader<PushConstantType>(
+        &self,
+        shader_module: vk::ShaderModule,
+        push_constants: PushConstantType,
+        combined_descriptors: &[CombinedDescriptor],
+        group_count: (u32, u32, u32),
+    ) {
+        let device = self.device.as_ref().unwrap();
+
+        let descriptor_set_layout_bindings: Vec<_> = combined_descriptors
+            .iter()
+            .enumerate()
+            .map(|(index, combined_descriptor)| {
+                vk::DescriptorSetLayoutBindingBuilder::new()
+                    .binding(index as u32)
+                    .descriptor_count(combined_descriptor.descriptor_count)
+                    .descriptor_type(combined_descriptor.descriptor_type)
+                    .stage_flags(vk::ShaderStageFlags::COMPUTE)
+            })
+            .collect();
+
+        let descriptor_set_layout_info = vk::DescriptorSetLayoutCreateInfoBuilder::new()
+            .bindings(&descriptor_set_layout_bindings);
+
+        let descriptor_set_layout =
+            unsafe { device.create_descriptor_set_layout(&descriptor_set_layout_info, None) }
+                .unwrap();
+
+        let descriptor_set_layouts = [descriptor_set_layout];
+        let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfoBuilder::new()
+            .descriptor_pool(self.compute_descriptor_pool.unwrap())
+            .set_layouts(&descriptor_set_layouts);
+
+        let descriptor_set =
+            unsafe { device.allocate_descriptor_sets(&descriptor_set_allocate_info) }.unwrap()[0];
+
+        enum DescriptorInfoBuilders<'a> {
+            Image(Vec<DescriptorImageInfoBuilder<'a>>),
+            Buffer(Vec<DescriptorBufferInfoBuilder<'a>>),
+        }
+
+        let info_builders: Vec<_> = combined_descriptors
+            .iter()
+            .enumerate()
+            .map(
+                |(index, combined_descriptor)| match combined_descriptor.descriptor_info {
+                    DescriptorInfoData::Image {
+                        image_view,
+                        sampler,
+                        layout,
+                    } => {
+                        let mut image_info = vk::DescriptorImageInfoBuilder::new()
+                            .image_view(image_view)
+                            .image_layout(layout);
+                        match sampler {
+                            None => {}
+                            Some(sampler) => image_info = image_info.sampler(sampler),
+                        }
+                        DescriptorInfoBuilders::Image(vec![image_info])
+                    }
+                    DescriptorInfoData::Buffer { buffer, range } => {
+                        DescriptorInfoBuilders::Buffer(vec![vk::DescriptorBufferInfoBuilder::new()
+                            .buffer(buffer)
+                            .range(range)])
+                    }
+                },
+            )
+            .collect();
+
+        let descriptor_writes: Vec<_> = info_builders
+            .iter()
+            .enumerate()
+            .map(|(index, info_builder)| match info_builder {
+                DescriptorInfoBuilders::Image(builder) => vk::WriteDescriptorSetBuilder::new()
+                    .dst_set(descriptor_set)
+                    .dst_binding(index as u32)
+                    .dst_array_element(0)
+                    .descriptor_type(descriptor_set_layout_bindings[index].descriptor_type)
+                    .image_info(&builder),
+                DescriptorInfoBuilders::Buffer(builder) => vk::WriteDescriptorSetBuilder::new()
+                    .dst_set(descriptor_set)
+                    .dst_binding(index as u32)
+                    .dst_array_element(0)
+                    .descriptor_type(descriptor_set_layout_bindings[index].descriptor_type)
+                    .buffer_info(&builder),
+            })
+            .collect();
+
+        unsafe {
+            device.update_descriptor_sets(&descriptor_writes, &[]);
+        }
+        let push_constant_range = vk::PushConstantRangeBuilder::new()
+            .offset(0)
+            .size(size_of::<PushConstantType>() as u32)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE);
+        let push_constant_ranges = [push_constant_range];
+        let descriptor_set_layouts = [descriptor_set_layout];
+        let pipeline_layout_info = vk::PipelineLayoutCreateInfoBuilder::new()
+            .push_constant_ranges(&push_constant_ranges)
+            .set_layouts(&descriptor_set_layouts);
+
+        let pipeline_layout =
+            unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }.unwrap();
+
+        let main_string = CString::new("main").unwrap();
+        let pipeline_stage_info = vk::PipelineShaderStageCreateInfoBuilder::new()
+            .stage(vk::ShaderStageFlagBits::COMPUTE)
+            .module(shader_module)
+            .name(&main_string);
+
+        let pipeline_infos = [vk::ComputePipelineCreateInfoBuilder::new()
+            .stage(*pipeline_stage_info)
+            .layout(pipeline_layout)];
+
+        let pipeline =
+            unsafe { device.create_compute_pipelines(None, &pipeline_infos, None) }.unwrap()[0];
+
+        let command_buffer = self.begin_single_time_commands();
+        unsafe {
+            device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::COMPUTE, pipeline)
+        };
+
+        unsafe {
+            device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::COMPUTE,
+                pipeline_layout,
+                0,
+                &[descriptor_set],
+                &[],
+            )
+        };
+
+        unsafe {
+            self.device.as_ref().unwrap().cmd_push_constants(
+                command_buffer,
+                pipeline_layout,
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                size_of::<PushConstantType>() as u32,
+                &push_constants as *const _ as *const _,
+            );
+        };
+
+        unsafe { device.cmd_dispatch(command_buffer, group_count.0, group_count.1, group_count.2) };
+        self.end_single_time_commands(command_buffer);
     }
 
     fn cleanup_swapchain(&mut self) {
@@ -4055,27 +4225,37 @@ impl VulkanData {
         self.index_buffer = None;
         self.index_buffer_memory = None;
     }
-    pub(crate) fn get_projection(&self, zoom: f64) -> nalgebra::Perspective3<f64> {
+
+    pub(crate) fn get_projection(&self, zoom: f64) -> nalgebra::Orthographic3<f64> {
         let surface_width = self.surface_capabilities.unwrap().current_extent.width as f64;
         let surface_height = self.surface_capabilities.unwrap().current_extent.height as f64;
-        let projection = nalgebra::Perspective3::new(
-            surface_width / surface_height,
-            (90f64.to_radians() * (1.0 / zoom)),
-            0.01,
+        let aspect_ratio = surface_width / surface_height;
+        const TILE_HEIGHT: f64 = 10.0;
+        let tile_height = TILE_HEIGHT / zoom;
+
+        let mut projection = nalgebra::Orthographic3::new(
+            -tile_height * aspect_ratio,
+            tile_height * aspect_ratio,
+            tile_height,
+            -tile_height,
             1_000.0,
+            0.01,
         );
+
+        // projection.set_bottom_and_top(projection.top(), projection.bottom());
+
         return projection;
     }
-    pub(crate) fn get_cubemap_projection(&self, zoom: f64) -> Perspective3<f64> {
-        let surface_width = self.surface_capabilities.unwrap().current_extent.width as f64;
-        let surface_height = self.surface_capabilities.unwrap().current_extent.height as f64;
-        let projection = nalgebra::Perspective3::new(
-            surface_width / surface_height,
-            (90f64.to_radians() * (1.0 / zoom)),
-            0.01,
-            10.0,
-        );
-        return projection;
+    pub(crate) fn get_cubemap_projection(&self, zoom: f64) -> Orthographic3<f64> {
+        // let surface_width = self.surface_capabilities.unwrap().current_extent.width as f64;
+        // let surface_height = self.surface_capabilities.unwrap().current_extent.height as f64;
+        // let projection = nalgebra::Orthographic3::from_fov(
+        //     surface_width / surface_height,
+        //     (90f64.to_radians() * (1.0 / zoom)),
+        //     100.0,
+        //     0.1,
+        // );
+        return self.get_projection(zoom);
     }
     pub(crate) fn transfer_data_to_gpu(&mut self) {
         let random: [f32; NUM_RANDOM] =
@@ -4518,5 +4698,151 @@ impl VulkanData {
         }
         .unwrap();
         return (image, image_memory);
+    }
+    fn run_test_shader(&self) {
+        #[repr(C)]
+        struct TestPushConstant(f32);
+        let test_constant = TestPushConstant(0.0);
+
+        let image_info = vk::ImageCreateInfoBuilder::new()
+            .image_type(vk::ImageType::_2D)
+            .extent(vk::Extent3D {
+                width: 1024,
+                height: 1024,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .format(vk::Format::R8G8B8A8_UNORM)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC)
+            .samples(vk::SampleCountFlagBits::_1)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        let allocation_info = vk_mem_erupt::AllocationCreateInfo {
+            usage: vk_mem_erupt::MemoryUsage::GpuOnly,
+            ..Default::default()
+        };
+
+        let (image, allocation, _) = self
+            .allocator
+            .as_ref()
+            .unwrap()
+            .create_image(&image_info, &allocation_info)
+            .unwrap();
+
+        let image_view =
+            self.create_image_view(image, image_info.format, vk::ImageAspectFlags::COLOR, 1);
+
+        let subresource_range = vk::ImageSubresourceRangeBuilder::new()
+            .level_count(1)
+            .layer_count(1)
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .base_mip_level(0)
+            .base_array_layer(0);
+        let barrier = vk::ImageMemoryBarrierBuilder::new()
+            .old_layout(vk::ImageLayout::UNDEFINED)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(image)
+            .subresource_range(*subresource_range);
+
+        let command_buffer = self.begin_single_time_commands();
+        unsafe {
+            self.device.as_ref().unwrap().cmd_pipeline_barrier(
+                command_buffer,
+                Some(vk::PipelineStageFlags::ALL_COMMANDS),
+                Some(vk::PipelineStageFlags::ALL_COMMANDS),
+                None,
+                &[],
+                &[],
+                &[barrier],
+            )
+        };
+
+        self.end_single_time_commands(command_buffer);
+
+        let descriptor_infos = vec![CombinedDescriptor {
+            descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+            descriptor_count: 1,
+            descriptor_info: DescriptorInfoData::Image {
+                image_view,
+                sampler: None,
+                layout: vk::ImageLayout::GENERAL,
+            },
+        }];
+
+        self.run_arbitrary_compute_shader(
+            self.load_shader("shaders/test_comp.spv".parse().unwrap()),
+            test_constant,
+            &descriptor_infos,
+            (1024 / 8, 1024 / 8, 1),
+        );
+
+        let buffer_info = vk::BufferCreateInfoBuilder::new()
+            .size(1024 * 1024 * 4)
+            .usage(vk::BufferUsageFlags::TRANSFER_DST);
+
+        let allocation_info = vk_mem_erupt::AllocationCreateInfo {
+            usage: vk_mem_erupt::MemoryUsage::GpuToCpu,
+            ..Default::default()
+        };
+
+        let (buffer, buffer_allocation, _) = self
+            .allocator
+            .as_ref()
+            .unwrap()
+            .create_buffer(&buffer_info, &allocation_info)
+            .unwrap();
+
+        let command_buffer = self.begin_single_time_commands();
+
+        // let subresource_layers = vk::ImageSubresourceLayersBuilder::new()
+        //     .aspect_mask(vk::ImageAspectFlags::COLOR)
+        //     .base_array_layer(0)
+        //     .mip_level(0)
+        //     .layer_count(1);
+        let buffer_region = vk::BufferImageCopyBuilder::new()
+            .buffer_offset(0)
+            .buffer_row_length(1024)
+            .image_subresource(
+                *vk::ImageSubresourceLayersBuilder::new()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .base_array_layer(0)
+                    .mip_level(0)
+                    .layer_count(1),
+            )
+            .image_extent(*vk::Extent3DBuilder::new().width(1024).height(1024).depth(1));
+        unsafe {
+            self.device.as_ref().unwrap().cmd_copy_image_to_buffer(
+                command_buffer,
+                image,
+                vk::ImageLayout::GENERAL,
+                buffer,
+                &[buffer_region],
+            )
+        };
+        self.end_single_time_commands(command_buffer);
+
+        let mut bytes: Vec<u8> = Vec::with_capacity(1024 * 1024 * 4);
+
+        unsafe {
+            self.allocator
+                .as_ref()
+                .unwrap()
+                .map_memory(&buffer_allocation)
+                .unwrap()
+                .copy_to_nonoverlapping(bytes.as_mut_ptr(), 1024*1024*4);
+            bytes.set_len(1024*1024*4)
+        };
+        image::save_buffer(
+            "test_image.png",
+            &bytes,
+            1024,
+            1024,
+            image::ColorType::Rgba8
+        ).unwrap();
     }
 }

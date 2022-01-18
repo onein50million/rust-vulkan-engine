@@ -14,13 +14,14 @@ fastrand = "1.5.0"
 
 erupt = "0.20.0"
 vk-mem-erupt = {git = "https://github.com/onein50million/vk-mem-erupt.git", rev = "0888bf9f0903b12b638f8498316e473301a18689"}
-#vk-mem-erupt = {path = "../vk-mem-erupt"}
-nalgebra = "0.29.0"
+nalgebra = "0.30"
 
 bincode = "2.0.0-alpha.1"
 
 egui = "0.15.0"
 egui-winit = "0.15.0"
+
+parry3d-f64 = "0.8.0"
 
 [profile.dev.package."*"]
 opt-level = 3

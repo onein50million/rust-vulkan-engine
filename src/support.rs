@@ -53,7 +53,7 @@ impl Light {
     pub(crate) fn new() -> Self {
         let rng = fastrand::Rng::new();
         let distance = 5.0;
-        let power = 10.0;
+        let power = 0.0;
         let position = Vector4::new(0.0, 0.0, 0.0, 0.0);
         let color = Vector4::new(1.0, 0.9, 0.9, 0.0) * power;
 
@@ -75,9 +75,7 @@ pub(crate) struct UniformBufferObject {
     pub(crate) mouse_position: Vector2<f32>,
     pub(crate) screen_size: Vector2<f32>,
     pub(crate) time: f32,
-    pub(crate) b: f32,
-    pub(crate) c: f32,
-    pub(crate) d: f32,
+    pub(crate) player_position: Vector3<f32>
 }
 #[derive(Debug)]
 #[repr(C)]
