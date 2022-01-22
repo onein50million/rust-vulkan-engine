@@ -1,8 +1,9 @@
+use erupt::vk;
+use nalgebra::{Matrix4, Scale3, Translation3, UnitQuaternion, Vector2, Vector3, Vector4};
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::hash::Hash;
 use std::ops::Index;
-use erupt::vk;
-use nalgebra::{Matrix4, Vector2, Vector3, Vector4};
 
 pub(crate) const FRAMERATE_TARGET: f64 = 280.0;
 pub(crate) const NUM_RANDOM: usize = 100;
@@ -25,6 +26,8 @@ pub(crate) struct Vertex {
     pub(crate) tangent: Vector4<f32>,
     pub(crate) texture_coordinate: Vector2<f32>,
     pub(crate) texture_type: u32, //Texture index for multiple textures I think
+    pub(crate) bone_indices: Vector4<u32>,
+    pub(crate) bone_weights: Vector4<f32>,
 }
 
 impl Vertex {
@@ -39,6 +42,8 @@ impl Vertex {
             tangent: Vector4::new(0.0, 0.0, 0.0, 0.0),
             texture_coordinate,
             texture_type: 0,
+            bone_indices: Vector4::new(0, 0, 0, 0),
+            bone_weights: Vector4::new(0.0, 0.0, 0.0, 0.0),
         };
     }
 }
@@ -62,30 +67,73 @@ impl Light {
     }
 }
 
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub(crate) struct Bone {
+    pub(crate) matrix: Matrix4<f32>,
+}
+impl Bone {
+    pub(crate) fn new() -> Self {
+        return Self {
+            matrix: Matrix4::from(Translation3::new(0.0, 0.0, 0.0)),
+        };
+    }
+}
+
+pub(crate) const NUM_BONES_PER_BONESET: usize = 256;
+pub(crate) const NUM_BONE_SETS: usize = 256;
+
+
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub(crate) struct BoneSet { //One frame
+    pub(crate) bones: [Bone; NUM_BONES_PER_BONESET],
+}
+
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub(crate) struct ShaderStorageBufferObject {
+    pub(crate) bone_sets: [BoneSet; NUM_BONE_SETS],
+}
+impl ShaderStorageBufferObject{
+    pub(crate) fn new_boxed() -> Box<Self>{
+
+        //need to do unsafe things because we can't create a array on the heap (afaik)
+        let layout =  std::alloc::Layout::new::<[Bone;NUM_BONE_SETS*NUM_BONES_PER_BONESET]>();
+        unsafe{
+            let pointer = std::alloc::alloc(layout) as *mut Bone;
+            for i in 0..(NUM_BONE_SETS*NUM_BONES_PER_BONESET){
+                pointer.offset(i as isize).write(Bone::new());
+            }
+            Box::new(std::ptr::NonNull::new_unchecked(pointer as *mut Self).as_ref().to_owned())
+        }
+    }
+}
 
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub(crate) struct UniformBufferObject {
+    pub(crate) view: Matrix4<f32>,
+    pub(crate) proj: Matrix4<f32>,
     pub(crate) random: [Vector4<f32>; NUM_RANDOM], //std140 packing so it needs to be 16 bytes wide
     pub(crate) lights: [Light; NUM_LIGHTS],        //std140 packing so it needs to be 16 bytes wide
     pub(crate) player_index: u32,
     pub(crate) num_lights: u32,
     pub(crate) _map_mode: u32,
-    pub(crate) _selected_province: u32,
+    pub(crate) exposure: f32,
     pub(crate) mouse_position: Vector2<f32>,
     pub(crate) screen_size: Vector2<f32>,
     pub(crate) time: f32,
-    pub(crate) player_position: Vector3<f32>
+    pub(crate) player_position: Vector3<f32>,
 }
 #[derive(Debug)]
 #[repr(C)]
 pub(crate) struct PushConstants {
     pub(crate) model: Matrix4<f32>,
-    pub(crate) view: Matrix4<f32>,
-    pub(crate) proj: Matrix4<f32>,
     pub(crate) texture_index: u32,
-    pub(crate) constant: f32,
     pub(crate) bitfield: u32,
+    pub(crate) animation_frames: u32,
+
 }
 
 impl Vertex {
@@ -123,6 +171,16 @@ impl Vertex {
                 .location(4)
                 .format(vk::Format::R32_UINT)
                 .offset(48),
+            vk::VertexInputAttributeDescriptionBuilder::new()
+                .binding(0)
+                .location(5)
+                .format(vk::Format::R32G32B32A32_UINT)
+                .offset(52),
+            vk::VertexInputAttributeDescriptionBuilder::new()
+                .binding(0)
+                .location(6)
+                .format(vk::Format::R32G32B32A32_SFLOAT)
+                .offset(68),
         ];
 
         return attribute_descriptions

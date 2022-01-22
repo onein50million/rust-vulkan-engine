@@ -1,23 +1,22 @@
 use crate::Vertex;
 use nalgebra::{Vector2, Vector3, Vector4};
+use parry3d_f64::shape::TriMesh;
 use std::convert::TryInto;
 use std::ops::{Div, Sub};
-use parry3d_f64::shape::TriMesh;
 
-pub(crate) const WORLD_SIZE_X: usize = 1000;
-pub(crate) const WORLD_SIZE_Z: usize = 1000;
+pub(crate) const WORLD_SIZE_X: usize = 10;
+pub(crate) const WORLD_SIZE_Z: usize = 10;
 pub(crate) const WORLD_SIZE_Y: usize = 10;
 
 const SURFACE_LEVEL: f32 = 0.0;
 
-fn map_range_linear(value:f32,
-                    from_min: f32,
-                    from_max: f32,
-                    to_min: f32,
-                    to_max: f32 ) -> f32
-{
-let result = f32::clamp(to_min + ((value - from_min) / (from_max - from_min)) * (to_max - to_min), f32::min(to_min, to_max), f32::max(to_max, to_min));
-return result;
+fn map_range_linear(value: f32, from_min: f32, from_max: f32, to_min: f32, to_max: f32) -> f32 {
+    let result = f32::clamp(
+        to_min + ((value - from_min) / (from_max - from_min)) * (to_max - to_min),
+        f32::min(to_min, to_max),
+        f32::max(to_max, to_min),
+    );
+    return result;
 }
 
 #[derive(Copy, Clone)]
@@ -58,18 +57,17 @@ impl World {
 
         let mut voxels = Self {
             voxels: vec![Voxel { strength: 0.0 }; WORLD_SIZE_X * WORLD_SIZE_Z * WORLD_SIZE_Y],
-            collision: None
+            collision: None,
         };
         for x_index in 0..(WORLD_SIZE_X - 1) {
             for z_index in 1..WORLD_SIZE_Z {
                 for y_index in 0..(WORLD_SIZE_Y - 1) {
                     // voxels.get_mut_voxel(x_index, z_index, y_index).strength = (rng.f32() - 0.5) * 10.0;
-                    if y_index > 4{
+                    if y_index > 4 {
                         voxels.get_mut_voxel(x_index, z_index, y_index).strength = 2.0;
-                    }else if rng.bool(){
+                    } else if rng.bool() {
                         voxels.get_mut_voxel(x_index, z_index, y_index).strength = -0.5;
                     }
-
                 }
             }
         }
@@ -101,16 +99,39 @@ impl World {
 
                     assert_eq!(edges.len() % 3, 0);
 
-
                     for edge in edges {
                         let x = match edge {
-                            0 => map_range_linear(SURFACE_LEVEL, cube.voxels[0].strength,cube.voxels[1].strength,0.0, 1.0),
+                            0 => map_range_linear(
+                                SURFACE_LEVEL,
+                                cube.voxels[0].strength,
+                                cube.voxels[1].strength,
+                                0.0,
+                                1.0,
+                            ),
                             1 => 1.0,
-                            2 => map_range_linear(SURFACE_LEVEL, cube.voxels[3].strength,cube.voxels[2].strength,0.0, 1.0),
+                            2 => map_range_linear(
+                                SURFACE_LEVEL,
+                                cube.voxels[3].strength,
+                                cube.voxels[2].strength,
+                                0.0,
+                                1.0,
+                            ),
                             3 => 0.0,
-                            4 => map_range_linear(SURFACE_LEVEL, cube.voxels[4].strength,cube.voxels[5].strength,0.0, 1.0),
+                            4 => map_range_linear(
+                                SURFACE_LEVEL,
+                                cube.voxels[4].strength,
+                                cube.voxels[5].strength,
+                                0.0,
+                                1.0,
+                            ),
                             5 => 1.0,
-                            6 => map_range_linear(SURFACE_LEVEL, cube.voxels[7].strength,cube.voxels[6].strength,0.0, 1.0),
+                            6 => map_range_linear(
+                                SURFACE_LEVEL,
+                                cube.voxels[7].strength,
+                                cube.voxels[6].strength,
+                                0.0,
+                                1.0,
+                            ),
                             7 => 0.0,
                             8 => 0.0,
                             9 => 1.0,
@@ -129,23 +150,71 @@ impl World {
                             5 => 0.0,
                             6 => 0.0,
                             7 => 0.0,
-                            8 => map_range_linear(SURFACE_LEVEL, cube.voxels[4].strength,cube.voxels[0].strength,0.0, 1.0),
-                            9 => map_range_linear(SURFACE_LEVEL, cube.voxels[5].strength,cube.voxels[1].strength,0.0, 1.0),
-                            10 => map_range_linear(SURFACE_LEVEL, cube.voxels[6].strength,cube.voxels[2].strength,0.0, 1.0),
-                            11 => map_range_linear(SURFACE_LEVEL, cube.voxels[7].strength,cube.voxels[3].strength,0.0, 1.0),
+                            8 => map_range_linear(
+                                SURFACE_LEVEL,
+                                cube.voxels[4].strength,
+                                cube.voxels[0].strength,
+                                0.0,
+                                1.0,
+                            ),
+                            9 => map_range_linear(
+                                SURFACE_LEVEL,
+                                cube.voxels[5].strength,
+                                cube.voxels[1].strength,
+                                0.0,
+                                1.0,
+                            ),
+                            10 => map_range_linear(
+                                SURFACE_LEVEL,
+                                cube.voxels[6].strength,
+                                cube.voxels[2].strength,
+                                0.0,
+                                1.0,
+                            ),
+                            11 => map_range_linear(
+                                SURFACE_LEVEL,
+                                cube.voxels[7].strength,
+                                cube.voxels[3].strength,
+                                0.0,
+                                1.0,
+                            ),
                             &_ => {
                                 panic!()
                             }
                         };
                         let z = match edge {
                             0 => 1.0,
-                            1 => map_range_linear(SURFACE_LEVEL, cube.voxels[2].strength,cube.voxels[1].strength,0.0, 1.0),
+                            1 => map_range_linear(
+                                SURFACE_LEVEL,
+                                cube.voxels[2].strength,
+                                cube.voxels[1].strength,
+                                0.0,
+                                1.0,
+                            ),
                             2 => 0.0,
-                            3 => map_range_linear(SURFACE_LEVEL, cube.voxels[3].strength,cube.voxels[0].strength,0.0, 1.0),
+                            3 => map_range_linear(
+                                SURFACE_LEVEL,
+                                cube.voxels[3].strength,
+                                cube.voxels[0].strength,
+                                0.0,
+                                1.0,
+                            ),
                             4 => 1.0,
-                            5 => map_range_linear(SURFACE_LEVEL, cube.voxels[6].strength,cube.voxels[5].strength,0.0, 1.0),
+                            5 => map_range_linear(
+                                SURFACE_LEVEL,
+                                cube.voxels[6].strength,
+                                cube.voxels[5].strength,
+                                0.0,
+                                1.0,
+                            ),
                             6 => 0.0,
-                            7 => map_range_linear(SURFACE_LEVEL, cube.voxels[7].strength,cube.voxels[4].strength,0.0, 1.0),
+                            7 => map_range_linear(
+                                SURFACE_LEVEL,
+                                cube.voxels[7].strength,
+                                cube.voxels[4].strength,
+                                0.0,
+                                1.0,
+                            ),
                             8 => 1.0,
                             9 => 1.0,
                             10 => 0.0,
@@ -170,6 +239,8 @@ impl World {
                             tangent,
                             texture_coordinate,
                             texture_type,
+                            bone_indices: Vector4::zeros(),
+                            bone_weights: Vector4::zeros(),
                         })
                     }
                 }
@@ -178,17 +249,19 @@ impl World {
 
         for triangle_index in (0..output.len()).step_by(3) {
             for i in 0..3 {
-                let edge1 = output[triangle_index + i].position - output[triangle_index + ((i + 1) % 3)].position;
-                let edge2 = output[triangle_index + i].position - output[triangle_index + ((i + 2) % 3)].position;
-                let normal = edge1.cross(&edge2);
-                output[triangle_index + i].normal = normal.try_normalize(0.1).unwrap_or(Vector3::zeros())
+                let edge1 = output[triangle_index + i].position
+                    - output[triangle_index + ((i + 1) % 3)].position;
+                let edge2 = output[triangle_index + i].position
+                    - output[triangle_index + ((i + 2) % 3)].position;
+                let normal = edge2.cross(&edge1);
+                output[triangle_index + i].normal =
+                    normal.try_normalize(0.1).unwrap_or(Vector3::zeros())
             }
         }
 
         // for vertex in &mut output {
         //     vertex.normal = vertex.normal.normalize();
         // }
-
 
         return output;
     }

@@ -1,9 +1,9 @@
 mod cube;
+mod edge_triangulation;
 mod game;
+mod marching_cubes;
 mod renderer;
 mod support;
-mod marching_cubes;
-mod edge_triangulation;
 
 use crate::game::*;
 use crate::renderer::*;
@@ -43,7 +43,7 @@ fn main() {
     let mut state = egui_winit::State::new(&window);
 
     let mut game = Game::new(&window);
-
+    println!("Game created");
     let mut texture_version = 0;
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
@@ -92,9 +92,7 @@ fn main() {
                             game.mouse_position.y = position.y;
                             // println!("Position: {:?}", position);
                         }
-                        WindowEvent::MouseInput {
-                            button, state, ..
-                        } => {
+                        WindowEvent::MouseInput { button, state, .. } => {
                             match button {
                                 MouseButton::Left => {
                                     if state == ElementState::Released {
@@ -103,23 +101,21 @@ fn main() {
                                 }
                                 MouseButton::Middle => {
                                     game.inputs.panning = match state {
-                                        ElementState::Pressed => { true }
-                                        ElementState::Released => { false }
+                                        ElementState::Pressed => true,
+                                        ElementState::Released => false,
                                     }
                                 }
                                 _ => {}
                             };
                         }
-                        WindowEvent::MouseWheel {
-                            delta, ..
-                        } => {
-                            match delta {
-                                MouseScrollDelta::LineDelta(_, vertical_lines) => {
-                                    game.inputs.zoom = (game.inputs.zoom * 1.1f64.powf(vertical_lines as f64)).max(1.0);
-                                }
-                                _ => {}
+                        WindowEvent::MouseWheel { delta, .. } => match delta {
+                            MouseScrollDelta::LineDelta(_, vertical_lines) => {
+                                game.inputs.zoom = (game.inputs.zoom
+                                    * 1.1f64.powf(vertical_lines as f64))
+                                .max(1.0);
                             }
-                        }
+                            _ => {}
+                        },
                         WindowEvent::KeyboardInput { input, .. } => {
                             if input.virtual_keycode == Some(VirtualKeyCode::Escape)
                                 && input.state == ElementState::Released
@@ -150,6 +146,32 @@ fn main() {
                                     ElementState::Pressed => 1.0,
                                 };
                             }
+
+                            if input.virtual_keycode == Some(VirtualKeyCode::Up) {
+                                game.inputs.exposure *= match input.state {
+                                    ElementState::Released => 1.1,
+                                    ElementState::Pressed => 1.0,
+                                };
+                            }
+                            if input.virtual_keycode == Some(VirtualKeyCode::Down) {
+                                game.inputs.exposure *= match input.state {
+                                    ElementState::Released => 0.9,
+                                    ElementState::Pressed => 1.0,
+                                };
+                            }
+
+                            if input.virtual_keycode == Some(VirtualKeyCode::Left) {
+                                game.inputs.angle += match input.state {
+                                    ElementState::Released => -0.05,
+                                    ElementState::Pressed => 0.0,
+                                };
+                            }
+                            if input.virtual_keycode == Some(VirtualKeyCode::Right) {
+                                game.inputs.angle += match input.state {
+                                    ElementState::Released => 0.05,
+                                    ElementState::Pressed => 0.0,
+                                };
+                            }
                         }
                         _ => {}
                     }
@@ -177,7 +199,7 @@ fn main() {
                     time_since_last_frame -= 1.0 / FRAMERATE_TARGET;
                 }
                 time_since_last_frame += elapsed_time;
-            },
+            }
             _ => {}
         }
     })

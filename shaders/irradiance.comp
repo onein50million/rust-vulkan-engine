@@ -1,0 +1,56 @@
+#version 450
+#include "map.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0) uniform samplerCube inImage;
+layout(set = 0, binding = 1, rgba32f) uniform imageCube outImage;
+
+const float PI = 3.14159;
+
+void main()
+{
+    vec2 uv = (vec2(gl_GlobalInvocationID.xy) / vec2(imageSize(outImage).xy)) * 2.0 - 1.0;
+    vec3 normal;
+    if (gl_GlobalInvocationID.z == 0)
+    { normal = vec3(1.0f, -uv.y, -uv.x); }
+    else if (gl_GlobalInvocationID.z == 1)
+    { normal = vec3(-1.0f, -uv.y, uv.x); }
+    else if (gl_GlobalInvocationID.z == 2)
+    { normal = vec3(uv.x, 1.0f, uv.y); }
+    else if (gl_GlobalInvocationID.z == 3)
+    { normal = vec3(uv.x, -1.0f, -uv.y); }
+    else if (gl_GlobalInvocationID.z == 4)
+    { normal = vec3(uv.x, -uv.y, 1.0f); }
+    else if (gl_GlobalInvocationID.z == 5)
+    { normal = vec3(uv.x, -uv.y, -1.0f); }
+
+    normal = normalize(normal);
+
+
+
+    vec3 irradiance = vec3(0.0);
+
+    vec3 up    = vec3(0.0, -1.0, 0.0);
+    vec3 right = normalize(cross(up, normal));
+    up         = normalize(cross(normal, right));
+
+    const int SAMPLE_WIDTH = 1024;
+    const int SAMPLE_COUNT = SAMPLE_WIDTH*SAMPLE_WIDTH;
+    for(int x = 0; x < SAMPLE_WIDTH; x++)
+    {
+        float phi = map_range_linear(float(x), 0.0, SAMPLE_WIDTH, 0.0, 2.0*PI);
+        for(int y = 0; y < SAMPLE_WIDTH; y++)
+        {
+            float theta = map_range_linear(float(y), 0.0, SAMPLE_WIDTH, 0.0, 0.5*PI);
+            // spherical to cartesian (in tangent space)
+            vec3 tangentSample = vec3(sin(theta) * cos(phi),  sin(theta) * sin(phi), cos(theta));
+            // tangent space to world
+            vec3 sampleVec = tangentSample.x * right + tangentSample.y * up + tangentSample.z;
+
+            irradiance += texture(inImage, sampleVec).rgb * cos(theta) * sin(theta);
+        }
+    }
+    irradiance = PI * irradiance * (1.0 / float(SAMPLE_COUNT));
+
+    imageStore(outImage, ivec3(gl_GlobalInvocationID.xyz),vec4(irradiance,1.0));
+}

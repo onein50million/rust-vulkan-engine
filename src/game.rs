@@ -1,29 +1,34 @@
 use crate::marching_cubes::{World, WORLD_SIZE_X, WORLD_SIZE_Y, WORLD_SIZE_Z};
 use crate::renderer::*;
-use nalgebra::{Isometry3, Matrix4, Point3, Rotation3, Translation3, UnitQuaternion, Vector2, Vector3};
+use nalgebra::{
+    Isometry3, Matrix4, Point3, Rotation3, Translation3, UnitQuaternion, Vector2, Vector3,
+};
+use parry3d_f64::query::contact;
 use parry3d_f64::shape::{Capsule, TriMesh};
 use std::convert::TryInto;
+use std::mem::size_of;
 use std::path::Path;
 use std::time::Instant;
-use parry3d_f64::query::{contact};
 use winit::window::Window;
 
-mod directions{
-    use std::f64::consts::FRAC_1_SQRT_2;
+mod directions {
     use nalgebra::Vector3;
-
+    use std::f64::consts::FRAC_1_SQRT_2;
 
     pub(crate) const UP: Vector3<f64> = Vector3::new(0.0, -1.0, 0.0);
-    pub(crate) const DOWN: Vector3<f64> = Vector3::new(0.0,1.0,0.0);
-    pub(crate) const LEFT: Vector3<f64> = Vector3::new(-1.0,0.0,0.0);
-    pub(crate) const RIGHT: Vector3<f64> = Vector3::new(1.0,0.0,0.0);
-    pub(crate) const FORWARDS: Vector3<f64> = Vector3::new(0.0,0.0,1.0);
-    pub(crate) const BACKWARDS: Vector3<f64> = Vector3::new(0.0,0.0,-1.0);
+    pub(crate) const DOWN: Vector3<f64> = Vector3::new(0.0, 1.0, 0.0);
+    pub(crate) const LEFT: Vector3<f64> = Vector3::new(-1.0, 0.0, 0.0);
+    pub(crate) const RIGHT: Vector3<f64> = Vector3::new(1.0, 0.0, 0.0);
+    pub(crate) const FORWARDS: Vector3<f64> = Vector3::new(0.0, 0.0, 1.0);
+    pub(crate) const BACKWARDS: Vector3<f64> = Vector3::new(0.0, 0.0, -1.0);
 
-    pub(crate) const ISOMETRIC_DOWN: Vector3<f64> = Vector3::new(-FRAC_1_SQRT_2, 0.0, -FRAC_1_SQRT_2);
+    pub(crate) const ISOMETRIC_DOWN: Vector3<f64> =
+        Vector3::new(-FRAC_1_SQRT_2, 0.0, -FRAC_1_SQRT_2);
     pub(crate) const ISOMETRIC_UP: Vector3<f64> = Vector3::new(FRAC_1_SQRT_2, 0.0, FRAC_1_SQRT_2);
-    pub(crate) const ISOMETRIC_RIGHT: Vector3<f64> = Vector3::new(-FRAC_1_SQRT_2, 0.0, FRAC_1_SQRT_2);
-    pub(crate) const ISOMETRIC_LEFT: Vector3<f64> = Vector3::new(FRAC_1_SQRT_2, 0.0, -FRAC_1_SQRT_2);
+    pub(crate) const ISOMETRIC_RIGHT: Vector3<f64> =
+        Vector3::new(-FRAC_1_SQRT_2, 0.0, FRAC_1_SQRT_2);
+    pub(crate) const ISOMETRIC_LEFT: Vector3<f64> =
+        Vector3::new(FRAC_1_SQRT_2, 0.0, -FRAC_1_SQRT_2);
 }
 
 pub(crate) struct GameObject {
@@ -51,6 +56,8 @@ pub(crate) struct Inputs {
     pub(crate) right: f64,
     pub(crate) map_mode: u8,
     pub(crate) zoom: f64,
+    pub(crate) exposure: f64,
+    pub(crate) angle: f64,
     pub(crate) panning: bool,
     pub(crate) left_click: bool,
 }
@@ -63,6 +70,8 @@ impl Inputs {
             down: 0.0,
             map_mode: 0,
             zoom: 1.0,
+            exposure: 1.0,
+            angle: 0.0,
             panning: false,
             left_click: false,
         };
@@ -90,14 +99,14 @@ impl Camera {
     }
 }
 
-struct Player{
+struct Player {
     position: Vector3<f64>,
     velocity: Vector3<f64>,
     angle: f64,
     render_object_index: usize,
 }
-impl Player{
-    const HEIGHT: Vector3<f64> = Vector3::new(0.0,1.7,0.0);
+impl Player {
+    const HEIGHT: Vector3<f64> = Vector3::new(0.0, 1.7, 0.0);
     fn get_rotation(&self) -> UnitQuaternion<f64> {
         return UnitQuaternion::face_towards(
             &Vector3::new(1.0, 0.0, 1.0),
@@ -108,20 +117,29 @@ impl Player{
         return self.position;
     }
 
-    fn process(&mut self, delta_time: f64, inputs: &mut Inputs, world: &World, world_isometry: &Isometry3<f64>){
-        let friction = Vector3::new(10.0,0.1,10.0);
+    fn process(
+        &mut self,
+        delta_time: f64,
+        inputs: &mut Inputs,
+        world: &World,
+        world_isometry: &Isometry3<f64>,
+    ) {
+        let friction = Vector3::new(10.0, 0.1, 10.0);
         let acceleration = 100.0;
-        if inputs.left_click{
+        if inputs.left_click {
             self.position.y = -2.0 * (WORLD_SIZE_Y as f64);
             self.velocity.y = 0.0;
             inputs.left_click = false;
         }
 
-        self.velocity +=
-            (inputs.up * directions::ISOMETRIC_UP
+        self.velocity += (inputs.up * directions::ISOMETRIC_UP
             + inputs.down * directions::ISOMETRIC_DOWN
             + inputs.left * directions::ISOMETRIC_LEFT
-            + inputs.right * directions::ISOMETRIC_RIGHT).try_normalize(0.1).unwrap_or(Vector3::zeros()) * acceleration * delta_time;
+            + inputs.right * directions::ISOMETRIC_RIGHT)
+            .try_normalize(0.1)
+            .unwrap_or(Vector3::zeros())
+            * acceleration
+            * delta_time;
 
         self.velocity -= self.velocity.component_mul(&friction) * delta_time.min(1.0);
 
@@ -139,36 +157,30 @@ impl Player{
         //     0.5
         // );
         let player_capsule = Capsule::new(
-            Point3::new(0.0,0.0,0.0),
-            Point3::new(0.0,-Self::HEIGHT.y, 0.0),
-            0.5
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, -Self::HEIGHT.y, 0.0),
+            0.5,
         );
 
-        let player_isometry = Isometry3::from_parts(
-            Translation3::from(self.position),
-            self.get_rotation()
-        );
+        let player_isometry =
+            Isometry3::from_parts(Translation3::from(self.position), self.get_rotation());
 
-        let contact_result =  contact(
+        let contact_result = contact(
             world_isometry,
             world.collision.as_ref().unwrap(),
             &player_isometry,
             &player_capsule,
-            10.0
-        ).unwrap();
-
+            10.0,
+        )
+        .unwrap();
 
         if contact_result.is_none() || contact_result.unwrap().dist > 0.1 {
             self.velocity.y += 9.8 * delta_time
-        }
-        else {
+        } else {
             self.velocity.y = 0.0;
             self.position.y = contact_result.unwrap().point1.y;
         }
-
-
     }
-
 }
 
 pub(crate) struct Game {
@@ -183,7 +195,7 @@ pub(crate) struct Game {
     camera: Camera,
     player: Player,
     world: World,
-    world_index: usize
+    world_index: usize,
 }
 
 impl Game {
@@ -192,13 +204,19 @@ impl Game {
 
         let mut world = World::new_random();
 
+        dbg!(size_of::<VulkanData>());
+
         let mut vulkan_data = VulkanData::new();
+        println!("Vulkan Data created");
         vulkan_data.init_vulkan(&window);
+
+        println!("Vulkan Data initialized");
 
         let world_index = objects.len();
         let mut world_object = GameObject::new(vulkan_data.objects.len());
 
-        world_object.position = Vector3::new(WORLD_SIZE_X as f64 / -2.0, 0.0, WORLD_SIZE_Z as f64 / -2.0);
+        world_object.position =
+            Vector3::new(WORLD_SIZE_X as f64 / -2.0, 0.0, WORLD_SIZE_Z as f64 / -2.0);
 
         objects.push(world_object);
         let mesh = world.generate_mesh();
@@ -235,17 +253,20 @@ impl Game {
         vulkan_data.load_folder("models/planet/mountain".parse().unwrap());
         vulkan_data.load_folder("models/planet/snow".parse().unwrap());
 
-        let mut player = Player{
-            position: Vector3::new(0.0,-2.0 * (WORLD_SIZE_Y as f64),0.0),
+        let mut player = Player {
+            position: Vector3::new(0.0, -2.0 * (WORLD_SIZE_Y as f64), 0.0),
             velocity: Vector3::zeros(),
             angle: 0.0,
-            render_object_index: vulkan_data.load_folder("models/person".parse().unwrap())};
+            render_object_index: vulkan_data.load_folder("models/person".parse().unwrap()),
+        };
         // player.rotation = UnitQuaternion::face_towards(
         //     &Vector3::new(1.0, 0.0, 1.0),
         //     &Vector3::new(0.0, -1.0, 0.0),
         // );
 
-        objects.push(GameObject::new(vulkan_data.load_folder("models/test_ball".parse().unwrap())));
+        objects.push(GameObject::new(
+            vulkan_data.load_folder("models/test_ball".parse().unwrap()),
+        ));
 
         vulkan_data.update_vertex_and_index_buffers();
 
@@ -261,7 +282,7 @@ impl Game {
             camera: Camera::new(),
             player,
             world,
-            world_index
+            world_index,
         };
         return game;
     }
@@ -286,18 +307,17 @@ impl Game {
         //     self.objects[self.player_index].position.x -= delta_mouse.y * delta_time * 5.0;
         // }
 
-
         // self.objects[self.player_index].position
-
 
         let world_isometry = Isometry3::from_parts(
             Translation3::from(self.objects[self.world_index].position),
             self.objects[self.world_index].rotation,
         );
-        self.player.process(delta_time, &mut self.inputs, &self.world, &world_isometry);
+        self.player
+            .process(delta_time, &mut self.inputs, &self.world, &world_isometry);
 
-        self.camera.position = self.player.get_position()
-            + Vector3::new(1.0, 1.0, 1.0).normalize() * 50.0;
+        self.camera.position =
+            self.player.get_position() + Vector3::new(1.0, 1.0, 1.0).normalize() * 50.0;
 
         self.update_renderer();
         self.vulkan_data.transfer_data_to_gpu();
@@ -315,46 +335,35 @@ impl Game {
         let projection = self.vulkan_data.get_projection(self.inputs.zoom);
         let projection_matrix = clip * projection.to_homogeneous();
 
-        let cubemap_projection = self.vulkan_data.get_cubemap_projection(self.inputs.zoom);
-
-        let cubemap_projection_matrix = clip * cubemap_projection.to_homogeneous();
-
-        let view_matrix = (Matrix4::from(Translation3::from(self.camera.get_position()))
-            * self.camera.get_rotation().to_homogeneous())
+        let view_matrix = (Rotation3::from_euler_angles(0.0, self.inputs.angle, 0.0)
+            .to_homogeneous()
+            * (Matrix4::from(Translation3::from(self.camera.get_position()))
+                * self.camera.get_rotation().to_homogeneous()))
         .try_inverse()
         .unwrap();
-        let view_matrix_no_translation = (self.camera.get_rotation().to_homogeneous())
-            .try_inverse()
-            .unwrap();
-
-        self.vulkan_data.cubemap.as_mut().unwrap().process(
-            view_matrix_no_translation.cast(),
-            cubemap_projection_matrix.cast(),
-        );
 
         for i in 0..self.objects.len() {
             let model_matrix = (Matrix4::from(Translation3::from(self.objects[i].position))
                 * Matrix4::from(Rotation3::from(self.objects[i].rotation)))
             .cast();
             self.vulkan_data.objects[self.objects[i].render_object_index].model = model_matrix;
-            self.vulkan_data.objects[self.objects[i].render_object_index].view = view_matrix.cast();
-            self.vulkan_data.objects[self.objects[i].render_object_index].proj =
-                projection_matrix.cast();
         }
-
 
         let model_matrix = (Matrix4::from(Translation3::from(self.player.get_position()))
             * Matrix4::from(Rotation3::from(self.player.get_rotation())))
-            .cast();
+        .cast();
         self.vulkan_data.objects[self.player.render_object_index].model = model_matrix;
-        self.vulkan_data.objects[self.player.render_object_index].view = view_matrix.cast();
-        self.vulkan_data.objects[self.player.render_object_index].proj =
-            projection_matrix.cast();
+        self.vulkan_data.objects[self.player.render_object_index].previous_frame = 0;
+        self.vulkan_data.objects[self.player.render_object_index].next_frame = 1;
+        self.vulkan_data.objects[self.player.render_object_index].animation_progress = (self.game_start.elapsed().as_secs_f64().sin() + 1.0) / 2.0;
 
 
+        self.vulkan_data.uniform_buffer_object.view = view_matrix.cast();
+        self.vulkan_data.uniform_buffer_object.proj = projection_matrix.cast();
 
         self.vulkan_data.uniform_buffer_object.time = self.game_start.elapsed().as_secs_f32();
         self.vulkan_data.uniform_buffer_object.player_position = self.player.position.cast();
+        self.vulkan_data.uniform_buffer_object.exposure = self.inputs.exposure as f32;
         // self.vulkan_data.uniform_buffer_object.time = 0.5;
         self.vulkan_data.uniform_buffer_object.mouse_position = Vector2::new(
             (self.mouse_position.x) as f32,

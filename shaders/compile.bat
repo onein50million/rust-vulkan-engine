@@ -1,8 +1,11 @@
-D:\VulkanSDK\1.2.176.1\Bin32\glslc.exe shader.vert -o vert.spv
-D:\VulkanSDK\1.2.176.1\Bin32\glslc.exe shader.frag -o frag.spv
-D:\VulkanSDK\1.2.176.1\Bin32\glslc.exe shader.comp -o comp.spv
+glslc shader.vert -o vert.spv
+glslc shader.frag -o frag.spv
+glslc shader.comp -o comp.spv
 
-D:\VulkanSDK\1.2.176.1\Bin32\glslc.exe ui.vert -o ui_vert.spv
-D:\VulkanSDK\1.2.176.1\Bin32\glslc.exe ui.frag -o ui_frag.spv
+glslc ui.vert -o ui_vert.spv
+glslc ui.frag -o ui_frag.spv
+
+glslc irradiance.comp -o irradiance.spv
+glslc environment.comp -o environment.spv
 
 pause

@@ -1,5 +1,4 @@
 #version 450
-#include "extras.glsl"
 
 layout(location = 0) in vec3 fragPosition;
 layout(location = 1) in vec2 fragTexCoord;
