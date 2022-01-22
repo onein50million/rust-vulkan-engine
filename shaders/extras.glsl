@@ -50,6 +50,10 @@ struct Bone {
 };
 
 struct BoneSet {
+    float input_tangent;
+    float output_tangent;
+    float _padding1;
+    float _padding2;
     Bone bones[NUM_BONES_PER_BONESET];
 };
 layout(binding = 2) buffer ShaderStorageBufferObject {

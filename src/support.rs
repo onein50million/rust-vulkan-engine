@@ -87,6 +87,10 @@ pub(crate) const NUM_BONE_SETS: usize = 256;
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub(crate) struct BoneSet { //One frame
+    pub(crate) input_tangent: f32,
+    pub(crate) output_tangent: f32,
+    pub(crate) _padding1: f32,
+    pub(crate) _padding2: f32,
     pub(crate) bones: [Bone; NUM_BONES_PER_BONESET],
 }
 
@@ -99,11 +103,17 @@ impl ShaderStorageBufferObject{
     pub(crate) fn new_boxed() -> Box<Self>{
 
         //need to do unsafe things because we can't create a array on the heap (afaik)
-        let layout =  std::alloc::Layout::new::<[Bone;NUM_BONE_SETS*NUM_BONES_PER_BONESET]>();
+        let layout =  std::alloc::Layout::new::<[BoneSet;NUM_BONE_SETS]>();
         unsafe{
-            let pointer = std::alloc::alloc(layout) as *mut Bone;
-            for i in 0..(NUM_BONE_SETS*NUM_BONES_PER_BONESET){
-                pointer.offset(i as isize).write(Bone::new());
+            let pointer = std::alloc::alloc(layout) as *mut BoneSet;
+            for i in 0..(NUM_BONE_SETS){
+                pointer.offset(i as isize).write(BoneSet{
+                    input_tangent: 0.0,
+                    output_tangent: 0.0,
+                    _padding1: 0.0,
+                    _padding2: 0.0,
+                    bones: [Bone::new();NUM_BONES_PER_BONESET]
+                });
             }
             Box::new(std::ptr::NonNull::new_unchecked(pointer as *mut Self).as_ref().to_owned())
         }

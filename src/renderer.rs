@@ -18,6 +18,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use winit::window::Window;
 
+//TODO: Generate JSON descriptor set info and parse that instead of having to manually keep everything up to date
+//https://www.reddit.com/r/vulkan/comments/s7e9wn/reflection_on_shaders_to_determine_uniforms/
+
 const BASE_VOXEL_SIZE: f32 = 128.0;
 const MIP_LEVELS: u32 = 6;
 const MSAA_ENABLED: bool = false;
@@ -1438,7 +1441,7 @@ impl VulkanData {
             normal,
             roughness_metalness_ao: rough_metal_ao,
         };
-        let (vertices, indices, bones) = if folder.join("model.glb").is_file() {
+        let (vertices, indices, bone_sets) = if folder.join("model.glb").is_file() {
             Self::load_gltf_model(folder.join("model.glb"))
         } else {
             (vec![], vec![], vec![])
@@ -1447,24 +1450,27 @@ impl VulkanData {
         let output = self.objects.len();
         self.objects.push(render_object);
 
-        if bones.len() > 0 {
+        if bone_sets.len() > 0 {
             dbg!(self.current_boneset);
-            for (i, bone) in bones.into_iter().enumerate() {
-                self.storage_buffer_object.bone_sets[self.current_boneset].bones[i] = bone;
+            let num_bone_sets = bone_sets.len();
+            for (bone_set_index, bones) in bone_sets.into_iter().enumerate() {
+                for (bone_index, bone) in bones.into_iter().enumerate(){
+                    self.storage_buffer_object.bone_sets[self.current_boneset + bone_set_index].bones[bone_index] = bone;
+                }
             }
-            self.current_boneset += 1;
+            self.current_boneset += num_bone_sets;
         }
         return output;
     }
 
-    pub(crate) fn load_gltf_model(path: std::path::PathBuf) -> (Vec<Vertex>, Vec<u32>, Vec<Bone>) {
+    pub(crate) fn load_gltf_model(path: std::path::PathBuf) -> (Vec<Vertex>, Vec<u32>, Vec<Vec<Bone>>) {
         println!("loading {:}", path.to_str().unwrap());
         let (gltf, buffers, _) = gltf::import(path).unwrap();
         // let materials = material_result.unwrap();
 
         let mut out_vertices = vec![];
         let mut out_indices = vec![];
-        let mut out_bones = vec![];
+        let mut out_bone_sets = vec![];
         // let mut positions = vec![];
 
         let root_node = gltf.scenes().nth(0).unwrap().nodes().nth(0).unwrap();
@@ -1637,17 +1643,19 @@ impl VulkanData {
                     }
                 }
 
+                let mut bones = vec![];
                 for (joint_index,joint) in skin.joints().enumerate() {
                     let new_bone = Bone {
                         matrix: mesh_transform.try_inverse().unwrap() * node_global_transforms[joint.index()]
                             * inverse_bind_matrices[joint_index] * vulkan_correction_transform,
                     };
-                    out_bones.push(new_bone);
+                    bones.push(new_bone);
                 }
+                out_bone_sets.push(bones);
             }
         }
 
-        return (out_vertices, out_indices, out_bones);
+        return (out_vertices, out_indices, out_bone_sets);
     }
 
     fn create_depth_resources(&mut self) {

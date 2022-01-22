@@ -355,7 +355,7 @@ impl Game {
         self.vulkan_data.objects[self.player.render_object_index].model = model_matrix;
         self.vulkan_data.objects[self.player.render_object_index].previous_frame = 0;
         self.vulkan_data.objects[self.player.render_object_index].next_frame = 1;
-        self.vulkan_data.objects[self.player.render_object_index].animation_progress = (self.game_start.elapsed().as_secs_f64().sin() + 1.0) / 2.0;
+        self.vulkan_data.objects[self.player.render_object_index].animation_progress = self.game_start.elapsed().as_secs_f64() % 1.0;
 
 
         self.vulkan_data.uniform_buffer_object.view = view_matrix.cast();
