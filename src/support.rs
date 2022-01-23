@@ -199,3 +199,11 @@ impl Vertex {
             .collect();
     }
 }
+pub(crate) fn map_range_linear(value: f32, from_min: f32, from_max: f32, to_min: f32, to_max: f32) -> f32 {
+    let result = f32::clamp(
+        to_min + ((value - from_min) / (from_max - from_min)) * (to_max - to_min),
+        f32::min(to_min, to_max),
+        f32::max(to_max, to_min),
+    );
+    return result;
+}

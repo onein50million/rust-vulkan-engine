@@ -1,4 +1,5 @@
 use crate::Vertex;
+use crate::support::map_range_linear;
 use nalgebra::{Vector2, Vector3, Vector4};
 use parry3d_f64::shape::TriMesh;
 use std::convert::TryInto;
@@ -10,14 +11,7 @@ pub(crate) const WORLD_SIZE_Y: usize = 10;
 
 const SURFACE_LEVEL: f32 = 0.0;
 
-fn map_range_linear(value: f32, from_min: f32, from_max: f32, to_min: f32, to_max: f32) -> f32 {
-    let result = f32::clamp(
-        to_min + ((value - from_min) / (from_max - from_min)) * (to_max - to_min),
-        f32::min(to_min, to_max),
-        f32::max(to_max, to_min),
-    );
-    return result;
-}
+
 
 #[derive(Copy, Clone)]
 struct Voxel {

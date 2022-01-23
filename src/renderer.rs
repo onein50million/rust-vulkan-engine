@@ -1,21 +1,29 @@
+use std::borrow::Borrow;
 use crate::cube::*;
 use crate::support::*;
 use erupt::vk::{DescriptorBufferInfoBuilder, DescriptorImageInfoBuilder, ShaderModule};
 use erupt::vk1_0::{CommandBuffer, PipelineLayout, Sampler};
 use erupt::{vk, DeviceLoader, EntryLoader, ExtendableFromConst, InstanceLoader, SmallVec};
+use gltf::animation::util::{ReadOutputs, Rotations};
 use gltf::mesh::util::{ReadJoints, ReadWeights};
 use gltf::{Node, Skin};
 use image::{GenericImageView, ImageFormat};
-use nalgebra::{Matrix4, Orthographic3, Perspective3, Vector2, Vector3, Vector4};
+use nalgebra::{
+    ArrayStorage, Const, Matrix4, Orthographic3, Perspective3, Quaternion, Rotation3, Scale3,
+    Translation3, UnitQuaternion, Vector2, Vector3, Vector4,
+};
+use parry3d_f64::partitioning::QBVHDataGenerator;
 use std::convert::TryInto;
 use std::default::Default;
 use std::ffi::{c_void, CStr, CString};
 use std::fs::File;
 use std::io::BufReader;
 use std::mem::size_of;
+use std::ops::Index;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use fastrand::Rng;
 use winit::window::Window;
 
 //TODO: Generate JSON descriptor set info and parse that instead of having to manually keep everything up to date
@@ -584,7 +592,7 @@ impl RenderObject {
             model: Matrix4::identity(),
             previous_frame: 0,
             next_frame: 0,
-            animation_progress: 0.0
+            animation_progress: 0.0,
         };
         return object;
     }
@@ -623,17 +631,21 @@ impl Drawable for RenderObject {
             let previous_frame = self.previous_frame.to_be_bytes();
             let next_frame = self.next_frame.to_be_bytes();
 
-            let animation_progress = ((self.animation_progress * u16::MAX as f64) as u16).to_be_bytes();
+            let animation_progress =
+                ((self.animation_progress * u16::MAX as f64) as u16).to_be_bytes();
 
             let animation_bytes = [
-                &previous_frame[..],&next_frame[..],&animation_progress[..]
-            ].concat();
+                &previous_frame[..],
+                &next_frame[..],
+                &animation_progress[..],
+            ]
+            .concat();
 
             let push_constant = PushConstants {
                 model: self.model,
                 texture_index,
                 bitfield,
-                animation_frames: u32::from_be_bytes(animation_bytes.try_into().unwrap())
+                animation_frames: u32::from_be_bytes(animation_bytes.try_into().unwrap()),
             };
             device.cmd_push_constants(
                 command_buffer,
@@ -829,7 +841,6 @@ impl VulkanData {
             time: 0.0,
             player_position: Vector3::zeros(),
         };
-
 
         let storage_buffer_object = ShaderStorageBufferObject::new_boxed();
 
@@ -1408,7 +1419,7 @@ impl VulkanData {
         }
     }
 
-    pub(crate) fn load_folder(&mut self, folder: PathBuf) -> usize {
+    pub(crate) fn load_folder(&mut self, folder: PathBuf) -> (usize, usize) {
         let albedo_path = folder.join("albedo.png");
         let albedo = CombinedImage::new(
             self,
@@ -1449,21 +1460,23 @@ impl VulkanData {
         let render_object = RenderObject::new(self, vertices, indices, texture, false);
         let output = self.objects.len();
         self.objects.push(render_object);
-
-        if bone_sets.len() > 0 {
+        let num_bone_sets = bone_sets.len();
+        if num_bone_sets > 0 {
             dbg!(self.current_boneset);
-            let num_bone_sets = bone_sets.len();
             for (bone_set_index, bones) in bone_sets.into_iter().enumerate() {
-                for (bone_index, bone) in bones.into_iter().enumerate(){
-                    self.storage_buffer_object.bone_sets[self.current_boneset + bone_set_index].bones[bone_index] = bone;
+                for (bone_index, bone) in bones.into_iter().enumerate() {
+                    self.storage_buffer_object.bone_sets[self.current_boneset + bone_set_index]
+                        .bones[bone_index] = bone;
                 }
             }
             self.current_boneset += num_bone_sets;
         }
-        return output;
+        return (output, num_bone_sets);
     }
 
-    pub(crate) fn load_gltf_model(path: std::path::PathBuf) -> (Vec<Vertex>, Vec<u32>, Vec<Vec<Bone>>) {
+    pub(crate) fn load_gltf_model(
+        path: std::path::PathBuf,
+    ) -> (Vec<Vertex>, Vec<u32>, Vec<Vec<Bone>>) {
         println!("loading {:}", path.to_str().unwrap());
         let (gltf, buffers, _) = gltf::import(path).unwrap();
         // let materials = material_result.unwrap();
@@ -1476,12 +1489,14 @@ impl VulkanData {
         let root_node = gltf.scenes().nth(0).unwrap().nodes().nth(0).unwrap();
 
         let mut mesh_transform = Matrix4::identity();
-        let vulkan_correction_transform = Matrix4::from_axis_angle(&Vector3::x_axis(), std::f32::consts::PI);
+        let vulkan_correction_transform =
+            Matrix4::from_axis_angle(&Vector3::x_axis(), std::f32::consts::PI);
 
         for node in gltf.nodes() {
             // let transformation_matrix = Matrix4::from(node.transform().matrix())
             //     * Matrix4::from_axis_angle(&Vector3::x_axis(), std::f32::consts::PI);
-            let transformation_matrix = Matrix4::from(node.transform().matrix()) * vulkan_correction_transform;
+            let transformation_matrix =
+                Matrix4::from(node.transform().matrix()) * vulkan_correction_transform;
 
             let transformation_position = transformation_matrix.column(3).xyz();
             match node.mesh() {
@@ -1609,49 +1624,241 @@ impl VulkanData {
                     .map(|matrix| Matrix4::from(matrix))
                     .collect();
 
-                let mut node_global_transforms: Vec<_> = gltf.nodes()
-                    .map(|node| Matrix4::from(node.transform().matrix()))
-                    .collect();
+                let animation = gltf.animations().nth(0).expect("No animation found");
+
+                let animation_end = {
+                    animation
+                        .channels()
+                        .map(|channel| {
+                            let reader = channel.reader(|buffer| Some(&buffers[buffer.index()]));
+                            reader.read_inputs().unwrap().reduce(f32::max).unwrap()
+                        })
+                        .reduce(f32::max)
+                        .unwrap()
+                };
+
+                let num_frames = {
+                    animation
+                        .channels()
+                        .map(|channel| {
+                            let reader = channel.reader(|buffer| Some(&buffers[buffer.index()]));
+                            reader.read_inputs().unwrap().count()
+                        }).max().unwrap()
+                };
+
+                #[derive(Copy,Clone)]
+                struct Keyframe{
+                    frame_time: f32,
+                    value: Matrix4<f32>
+                }
+
+                #[derive(Clone)]
+                struct AnimationKeyframes{
+                    keyframes: Vec<Keyframe>
+                }
+                impl AnimationKeyframes{
+                    fn get_closest_below(&self, target_frame_time: f32) -> Keyframe{
+                        self.keyframes.iter().filter(|keyframe| keyframe.frame_time <= target_frame_time).map(|keyframe| *keyframe).reduce(|accumulator, keyframe|{
+                            if accumulator.frame_time < keyframe.frame_time{
+                                accumulator
+                            }else{
+                                keyframe
+                            }
+                        }).unwrap_or(self.keyframes.iter().map(|keyframe| *keyframe).next().unwrap_or(
+                            Keyframe{
+                                frame_time: target_frame_time,
+                                value: Matrix4::identity()
+                            }
+                        ))
+                    }
+
+                    fn get_closest_above(&self, target_frame_time: f32) -> Keyframe{
+                        self.keyframes.iter().filter(|keyframe| keyframe.frame_time >= target_frame_time).map(|keyframe| *keyframe).reduce(|accumulator, keyframe|{
+                            if accumulator.frame_time < keyframe.frame_time{
+                                accumulator
+                            }else{
+                                keyframe
+                            }
+                        }).unwrap_or(self.keyframes.iter().map(|keyframe| *keyframe).last().unwrap_or(
+                            Keyframe{
+                                frame_time: target_frame_time,
+                                value: Matrix4::identity()
+                            }
+                        ))
+                    }
+
+                    fn sample(&self, index: f32) -> Matrix4<f32> {
+                        let below = self.get_closest_below(index);
+                        let above = self.get_closest_above(index);
+
+                        return below.value;
+
+                        let mapped_index = if below.frame_time != above.frame_time{
+                             map_range_linear(
+                                index, below.frame_time, above.frame_time, 0.0,1.0
+                            )
+                        }else{
+                            0.5
+                        };
+                        below.value * (1.0 - mapped_index) + above.value * mapped_index
+                    }
+                    fn add_sample(&mut self, sample: Keyframe){
+                        let mut filtered = self.keyframes.iter().filter(|keyframe| (sample.frame_time - keyframe.frame_time).abs() < 0.001).map(|keyframe| *keyframe).collect::<Vec<_>>();
+                        if filtered.len() == 0{
+                            match self.keyframes.binary_search_by(|keyframe|sample.frame_time.partial_cmp(&keyframe.frame_time).unwrap()){
+                                Ok(_) => {panic!()}
+                                Err(position) => {
+                                    self.keyframes.insert(position,sample);
+
+                                }
+                            }
+                        }else{
+                            for i in 0..filtered.len(){
+                                filtered[i].value = sample.value * filtered[i].value;
+                            }
+                        }
+                    }
+                }
+
+                let mut animation_frames = vec![AnimationKeyframes{
+                    keyframes: vec![]
+                }; gltf.nodes().len()];
+
+                animation.channels().for_each(|channel| {
+                    let reader = channel.reader(|buffer| Some(&buffers[buffer.index()]));
+
+                    let matrices = match reader.read_outputs().unwrap() {
+                        ReadOutputs::Translations(translations) => {
+                            let out_translations = translations
+                                .map(|translation| Translation3::from(translation).to_homogeneous());
+                                // .map(|translation| Matrix4::identity());
+                            out_translations.collect::<Vec<_>>()
+                            // vec![]
+                        }
+                        ReadOutputs::Rotations(rotations) => {
+                            match rotations.into_f32().unwrap() {
+                                Rotations::F32(inner_rotations) => {
+                                    let out_rotations = inner_rotations.map(|rotation| {
+                                        dbg!(rotation);
+                                        dbg!(UnitQuaternion::from_quaternion(Quaternion::from(
+                                            rotation,
+                                        ))
+                                        .to_homogeneous())
+                                    });
+                                    out_rotations.collect::<Vec<_>>()
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        ReadOutputs::Scales(scales) => {
+                            let out_scales = scales.map(|scale| Scale3::from(scale).to_homogeneous());
+                            // let out_scales = scales.map(|scale| Matrix4::identity());
+                            out_scales.collect::<Vec<_>>()
+                            // vec![]
+                        }
+                        ReadOutputs::MorphTargetWeights(_) => unimplemented!(),
+                    };
+
+                    let node_index = channel.target().node().index();
+
+
+                    // let mut matrices = vec![];
+                    // let rng = Rng::new();
+                    // let spread = 0.1;
+                    //
+                    // if node_index == 5{
+                    //     for _ in 0..num_frames{
+                    //         matrices.push(
+                    //             Rotation3::face_towards(&Vector3::new(rng.f32()*spread,rng.f32()*spread,rng.f32()*spread), &Vector3::new(0.0,1.0,0.0)).to_homogeneous()
+                    //         );
+                    //     }
+                    // }
+
+
+
+                    dbg!(matrices.len());
+
+                    reader.read_inputs().unwrap().zip(matrices.into_iter()).for_each(
+                        |(frame_time, transformation): (
+                            f32,
+                            nalgebra::Matrix<
+                                f32,
+                                Const<4_usize>,
+                                Const<4_usize>,
+                                ArrayStorage<f32, 4_usize, 4_usize>,
+                            >,
+                        )| {
+                            dbg!(transformation);
+                            animation_frames[node_index].add_sample(
+                                Keyframe{
+                                    frame_time,
+                                    value: transformation,
+                                }
+                            );
+                            // dbg!((frame_time, transformation));
+                        },
+                    )
+                });
+
 
                 // node_global_transforms[root_node.index()] = vulkan_correction_transform * node_global_transforms[root_node.index()];
 
-                let mut current_indices: Vec<_> = vec![root_node.index()];
-                let mut next_indices = vec![];
-                loop {
-                    for index in current_indices {
-                        let node = gltf.nodes().nth(index).unwrap();
-                        println!("{:}", node.name().unwrap());
-                        let matrix = node_global_transforms[node.index()];
-                        node.children().for_each(|child| {
-                            node_global_transforms[child.index()] =
-                                matrix * node_global_transforms[child.index()];
-                        });
+                for keyframe_index in 0..num_frames {
+                    let current_frame_time = (keyframe_index as f32 / num_frames as f32) * animation_end;
 
-                        next_indices.extend(
-                            gltf.nodes()
-                                .nth(index)
-                                .unwrap()
-                                .children()
-                                .map(|node| node.index()),
-                        );
-                    }
-                    if next_indices.len() > 0 {
-                        current_indices = vec![];
-                        current_indices.append(&mut next_indices);
-                    } else {
-                        break;
-                    }
-                }
+                    let mut node_global_transforms = gltf
+                        .nodes()
+                        .map(|node| Matrix4::from(node.transform().matrix()))
+                        .collect::<Vec<_>>();
 
-                let mut bones = vec![];
-                for (joint_index,joint) in skin.joints().enumerate() {
-                    let new_bone = Bone {
-                        matrix: mesh_transform.try_inverse().unwrap() * node_global_transforms[joint.index()]
-                            * inverse_bind_matrices[joint_index] * vulkan_correction_transform,
-                    };
-                    bones.push(new_bone);
+                    // node_global_transforms.iter_mut().enumerate().map(|(node_index, mut transform)| transform = transform * animation_frames[node_index].sample(current_frame_time));
+
+                    // dbg!(animation_frames[skin.joints().nth(0).unwrap().index()].sample(current_frame_time));
+
+                    for node_index in 0..node_global_transforms.len(){
+                        node_global_transforms[node_index] = animation_frames[node_index].sample(current_frame_time) * node_global_transforms[node_index];
+                    }
+
+                    let mut current_indices: Vec<_> = vec![root_node.index()];
+                    let mut next_indices = vec![];
+                    loop {
+                        for index in current_indices {
+                            let node = gltf.nodes().nth(index).unwrap();
+                            println!("{:}", node.name().unwrap());
+                            let matrix = node_global_transforms[node.index()];
+                            node.children().for_each(|child| {
+                                node_global_transforms[child.index()] =
+                                    matrix * node_global_transforms[child.index()];
+                            });
+
+                            next_indices.extend(
+                                gltf.nodes()
+                                    .nth(index)
+                                    .unwrap()
+                                    .children()
+                                    .map(|node| node.index()),
+                            );
+                        }
+                        if next_indices.len() > 0 {
+                            current_indices = vec![];
+                            current_indices.append(&mut next_indices);
+                        } else {
+                            break;
+                        }
+                    }
+
+                    let mut bones = vec![];
+                    for (joint_index, joint) in skin.joints().enumerate() {
+                        let new_bone = Bone {
+                            matrix: mesh_transform.try_inverse().unwrap()
+                                * node_global_transforms[joint.index()]
+                                * inverse_bind_matrices[joint_index]
+                                * vulkan_correction_transform,
+                        };
+                        bones.push(new_bone);
+                    }
+                    out_bone_sets.push(bones);
                 }
-                out_bone_sets.push(bones);
             }
         }
 
@@ -3580,7 +3787,7 @@ impl VulkanData {
                     model: Matrix4::identity(),
                     texture_index: 0,
                     bitfield: 0,
-                    animation_frames: 0
+                    animation_frames: 0,
                 };
                 unsafe {
                     self.device.as_ref().unwrap().cmd_push_constants(

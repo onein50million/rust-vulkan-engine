@@ -1,12 +1,11 @@
 use crate::marching_cubes::{World, WORLD_SIZE_X, WORLD_SIZE_Y, WORLD_SIZE_Z};
 use crate::renderer::*;
-use nalgebra::{
-    Isometry3, Matrix4, Point3, Rotation3, Translation3, UnitQuaternion, Vector2, Vector3,
-};
+use nalgebra::{Isometry3, Matrix4, Point3, Rotation3, Translation3, Unit, UnitQuaternion, Vector2, Vector3};
 use parry3d_f64::query::contact;
 use parry3d_f64::shape::{Capsule, TriMesh};
 use std::convert::TryInto;
 use std::mem::size_of;
+use std::option::Option::None;
 use std::path::Path;
 use std::time::Instant;
 use winit::window::Window;
@@ -35,17 +34,24 @@ pub(crate) struct GameObject {
     position: Vector3<f64>,
     rotation: UnitQuaternion<f64>,
     render_object_index: usize,
+    animation_handler: Option<AnimationHandler>
 }
 impl GameObject {
-    fn new(render_object_index: usize) -> Self {
+    fn new(render_object_index: usize, animation_handler: Option<AnimationHandler>) -> Self {
         return Self {
             position: Vector3::new(0.0, 0.0, 0.0),
             rotation: UnitQuaternion::from_axis_angle(&Vector3::z_axis(), 0.0),
             render_object_index,
+            animation_handler
         };
     }
-    fn process(&mut self, _delta_time: f64) {
-        //Do stuff
+    fn process(&mut self, delta_time: f64) {
+        match self.animation_handler.as_mut(){
+            None => {}
+            Some(animation_handler) => {
+                animation_handler.process(delta_time)
+            }
+        }
     }
 }
 
@@ -99,19 +105,54 @@ impl Camera {
     }
 }
 
+struct AnimationHandler{
+    previous_frame: usize,
+    next_frame: usize,
+    frame_count: usize,
+    frame_rate: f64,
+    progress: f64,
+}
+impl AnimationHandler{
+    fn new(frame_count: usize) -> Self{
+        assert!(frame_count > 0);
+        Self{
+            previous_frame: 0,
+            next_frame: 1,
+            frame_count,
+            frame_rate: 60.0,
+            progress: 0.0
+        }
+    }
+    fn process(&mut self, delta_time: f64){
+        self.progress += delta_time * self.frame_rate;
+        if self.progress > 1.0{
+            self.progress = 0.0;
+            self.previous_frame = (self.previous_frame + 1) % self.frame_count;
+            self.next_frame = (self.next_frame + 1) % self.frame_count;
+        }
+
+    }
+}
+
 struct Player {
     position: Vector3<f64>,
     velocity: Vector3<f64>,
     angle: f64,
     render_object_index: usize,
+    animation_handler: AnimationHandler
 }
 impl Player {
     const HEIGHT: Vector3<f64> = Vector3::new(0.0, 1.7, 0.0);
     fn get_rotation(&self) -> UnitQuaternion<f64> {
-        return UnitQuaternion::face_towards(
-            &Vector3::new(1.0, 0.0, 1.0),
-            &Vector3::new(0.0, 1.0, 0.0),
-        ) * UnitQuaternion::from_euler_angles(0.0, 0.0, self.angle);
+        // return UnitQuaternion::face_towards(
+        //     &Vector3::new(1.0, 0.0, 1.0),
+        //     &Vector3::new(0.0, 1.0, 0.0),
+        // ) * UnitQuaternion::from_euler_angles(0.0, 0.0, self.angle);
+        if self.velocity.magnitude() > 0.1{
+            return UnitQuaternion::face_towards(&self.velocity, &Vector3::new(0.0, 1.0, 0.0))
+        }else{
+            return UnitQuaternion::identity()
+        }
     }
     fn get_position(&self) -> Vector3<f64> {
         return self.position;
@@ -180,6 +221,9 @@ impl Player {
             self.velocity.y = 0.0;
             self.position.y = contact_result.unwrap().point1.y;
         }
+        if self.velocity.magnitude() > 0.1 || true{
+            self.animation_handler.process(delta_time);
+        }
     }
 }
 
@@ -213,7 +257,7 @@ impl Game {
         println!("Vulkan Data initialized");
 
         let world_index = objects.len();
-        let mut world_object = GameObject::new(vulkan_data.objects.len());
+        let mut world_object = GameObject::new(vulkan_data.objects.len(), None);
 
         world_object.position =
             Vector3::new(WORLD_SIZE_X as f64 / -2.0, 0.0, WORLD_SIZE_Z as f64 / -2.0);
@@ -246,18 +290,21 @@ impl Game {
 
         vulkan_data.objects.push(voxel_render_object);
 
-        vulkan_data.load_folder("models/planet/deep_water".parse().unwrap()); //Dummy objects to fill offsets
-        vulkan_data.load_folder("models/planet/shallow_water".parse().unwrap()); //Dummy objects to fill offsets
-        vulkan_data.load_folder("models/planet/foliage".parse().unwrap());
-        vulkan_data.load_folder("models/planet/desert".parse().unwrap());
-        vulkan_data.load_folder("models/planet/mountain".parse().unwrap());
-        vulkan_data.load_folder("models/planet/snow".parse().unwrap());
+        vulkan_data.load_folder("models/planet/deep_water".parse().unwrap()).0; //Dummy objects to fill offsets
+        vulkan_data.load_folder("models/planet/shallow_water".parse().unwrap()).0; //Dummy objects to fill offsets
+        vulkan_data.load_folder("models/planet/foliage".parse().unwrap()).0;
+        vulkan_data.load_folder("models/planet/desert".parse().unwrap()).0;
+        vulkan_data.load_folder("models/planet/mountain".parse().unwrap()).0;
+        vulkan_data.load_folder("models/planet/snow".parse().unwrap()).0;
 
+        let (render_object_index, frame_count) = vulkan_data.load_folder("models/person".parse().unwrap());
+        dbg!(frame_count);
         let mut player = Player {
             position: Vector3::new(0.0, -2.0 * (WORLD_SIZE_Y as f64), 0.0),
             velocity: Vector3::zeros(),
             angle: 0.0,
-            render_object_index: vulkan_data.load_folder("models/person".parse().unwrap()),
+            render_object_index,
+            animation_handler: AnimationHandler::new(frame_count),
         };
         // player.rotation = UnitQuaternion::face_towards(
         //     &Vector3::new(1.0, 0.0, 1.0),
@@ -265,9 +312,15 @@ impl Game {
         // );
 
         objects.push(GameObject::new(
-            vulkan_data.load_folder("models/test_ball".parse().unwrap()),
+            vulkan_data.load_folder("models/test_ball".parse().unwrap()).0,
+            None,
         ));
 
+        let (render_index, frame_count) = vulkan_data.load_folder("models/cube".parse().unwrap());
+        objects.push(GameObject::new(
+            render_index,
+            Some(AnimationHandler::new(frame_count)),
+        ));
         vulkan_data.update_vertex_and_index_buffers();
 
         let game = Game {
@@ -353,9 +406,9 @@ impl Game {
             * Matrix4::from(Rotation3::from(self.player.get_rotation())))
         .cast();
         self.vulkan_data.objects[self.player.render_object_index].model = model_matrix;
-        self.vulkan_data.objects[self.player.render_object_index].previous_frame = 0;
-        self.vulkan_data.objects[self.player.render_object_index].next_frame = 1;
-        self.vulkan_data.objects[self.player.render_object_index].animation_progress = self.game_start.elapsed().as_secs_f64() % 1.0;
+        self.vulkan_data.objects[self.player.render_object_index].previous_frame = self.player.animation_handler.previous_frame as u8;
+        self.vulkan_data.objects[self.player.render_object_index].next_frame = self.player.animation_handler.next_frame as u8;
+        self.vulkan_data.objects[self.player.render_object_index].animation_progress = self.player.animation_handler.progress;
 
 
         self.vulkan_data.uniform_buffer_object.view = view_matrix.cast();

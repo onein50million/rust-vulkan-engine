@@ -83,7 +83,8 @@ void main() {
         second_frame_bone_transform = mat4(1.0);
     }
 
-    mat4 bone_transform = cubic_spline(first_frame_bone_transform, previous_tangent, second_frame_bone_transform, next_tangent, animation_progress);
+//    mat4 bone_transform = cubic_spline(first_frame_bone_transform, previous_tangent, second_frame_bone_transform, next_tangent, animation_progress);
+    mat4 bone_transform = first_frame_bone_transform;
 //    float cubic_animation_progress = cubic_spline(0.0, previous_tangent, 1.0, next_tangent, animation_progress);
 //    mat4 bone_transform = mix(first_frame_bone_transform, second_frame_bone_transform, cubic_animation_progress);
 
