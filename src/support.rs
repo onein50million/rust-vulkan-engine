@@ -1,9 +1,9 @@
 use erupt::vk;
-use nalgebra::{Matrix4, Scale3, Translation3, UnitQuaternion, Vector2, Vector3, Vector4};
-use std::collections::HashMap;
-use std::convert::TryInto;
-use std::hash::Hash;
-use std::ops::Index;
+use nalgebra::{Matrix4, Translation3, Vector2, Vector3, Vector4};
+
+
+
+
 
 pub(crate) const FRAMERATE_TARGET: f64 = 280.0;
 pub(crate) const NUM_RANDOM: usize = 100;
@@ -56,8 +56,8 @@ pub(crate) struct Light {
 }
 impl Light {
     pub(crate) fn new() -> Self {
-        let rng = fastrand::Rng::new();
-        let distance = 5.0;
+        let _rng = fastrand::Rng::new();
+        let _distance = 5.0;
         let power = 0.0;
         let position = Vector4::new(0.0, 0.0, 0.0, 0.0);
         let color = Vector4::new(1.0, 0.9, 0.9, 0.0) * power;

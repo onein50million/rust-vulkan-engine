@@ -2,14 +2,14 @@ use std::borrow::BorrowMut;
 use crate::marching_cubes::{World, WORLD_SIZE_X, WORLD_SIZE_Y, WORLD_SIZE_Z};
 use crate::renderer::*;
 use nalgebra::{
-    Isometry3, Matrix4, Point3, Rotation3, Translation3, Unit, UnitQuaternion, Vector2, Vector3,
+    Isometry3, Matrix4, Point3, Rotation3, Translation3, UnitQuaternion, Vector2, Vector3,
 };
 use parry3d_f64::query::contact;
 use parry3d_f64::shape::{Capsule, TriMesh};
 use std::convert::TryInto;
 use std::mem::size_of;
 use std::option::Option::None;
-use std::path::Path;
+
 use std::time::Instant;
 use winit::window::Window;
 
@@ -131,7 +131,6 @@ impl AnimationHandler {
     fn process(&mut self, delta_time: f64) {
         self.progress += delta_time * self.frame_rate;
         if self.progress > 1.0 {
-            // dbg!(self.progress);
             self.progress = 0.0;
             self.previous_frame = (self.previous_frame + 1) % self.frame_count;
             self.next_frame = (self.next_frame + 1) % self.frame_count;
@@ -148,10 +147,10 @@ impl Player {
     const HEIGHT: Vector3<f64> = Vector3::new(0.0, 1.7, 0.0);
     fn process(
         &mut self,
-        delta_time: f64,
-        inputs: &mut Inputs,
-        world: &World,
-        world_isometry: &Isometry3<f64>,
+        _delta_time: f64,
+        _inputs: &mut Inputs,
+        _world: &World,
+        _world_isometry: &Isometry3<f64>,
     ) {
     }
 }
@@ -224,7 +223,7 @@ impl Game {
             .0; //Dummy objects to fill offsets
         vulkan_data
             .load_folder("models/planet/shallow_water".parse().unwrap())
-            .0; //Dummy objects to fill offsets
+            .0;
         vulkan_data
             .load_folder("models/planet/foliage".parse().unwrap())
             .0;
@@ -253,10 +252,6 @@ impl Game {
             ObjectType::Player(player)
         ));
         objects[player_index].position = Vector3::new(0.0, -2.0 * (WORLD_SIZE_Y as f64), 0.0);
-        // player.rotation = UnitQuaternion::face_towards(
-        //     &Vector3::new(1.0, 0.0, 1.0),
-        //     &Vector3::new(0.0, -1.0, 0.0),
-        // );
 
         objects.push(GameObject::new(vulkan_data
                                          .load_folder("models/test_ball".parse().unwrap())
@@ -304,7 +299,7 @@ impl Game {
     pub(crate) fn process(&mut self) -> Result<(), DanielError> {
         let delta_time = self.last_frame_instant.elapsed().as_secs_f64();
         self.last_frame_instant = std::time::Instant::now();
-        let delta_mouse = self.last_mouse_position - self.mouse_position;
+        let _delta_mouse = self.last_mouse_position - self.mouse_position;
         self.last_mouse_position = self.mouse_position;
 
         let world_isometry = Isometry3::from_parts(
@@ -319,7 +314,7 @@ impl Game {
             let mut animation_change = delta_time;
             match self.objects[i].object_type.borrow_mut(){
                 ObjectType::None => {}
-                ObjectType::Grip(is_gripped) => {}
+                ObjectType::Grip(_is_gripped) => {}
                 ObjectType::Player(player) =>{
                     let friction = Vector3::new(10.0, 0.1, 10.0);
                     let acceleration = 100.0;
@@ -400,11 +395,6 @@ impl Game {
     }
 
     fn update_renderer(&mut self) {
-        // let clip = Matrix4::new(
-        //                         1.0,  0.0, 0.0, 0.0,
-        //                         0.0, -1.0, 0.0, 0.0,
-        //                         0.0,  0.0, 0.5, 0.0,
-        //                         0.0,  0.0, 0.5, 1.0);
         let clip = Matrix4::<f64>::identity();
 
         let projection = self.vulkan_data.get_projection(self.inputs.zoom);

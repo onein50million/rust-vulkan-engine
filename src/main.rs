@@ -8,11 +8,11 @@ mod support;
 use crate::game::*;
 use crate::renderer::*;
 use crate::support::*;
-use egui_winit::winit::event::{DeviceEvent, ElementState, Event, VirtualKeyCode, WindowEvent};
+use egui_winit::winit::event::{ElementState, Event, VirtualKeyCode, WindowEvent};
 use egui_winit::winit::event_loop::{ControlFlow, EventLoop};
 use egui_winit::winit::window::WindowBuilder;
 use std::env;
-use winit::event::{MouseButton, MouseScrollDelta, ScanCode};
+use winit::event::{MouseButton, MouseScrollDelta};
 //Coordinate system for future reference:
 //from starting location
 //up: negative y

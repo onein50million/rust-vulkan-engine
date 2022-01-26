@@ -1,16 +1,15 @@
 use crate::cube::*;
 use crate::support::*;
-use erupt::vk::{DescriptorBufferInfoBuilder, DescriptorImageInfoBuilder, ShaderModule};
-use erupt::vk1_0::{CommandBuffer, PipelineLayout, Sampler};
+use erupt::vk::{DescriptorBufferInfoBuilder, DescriptorImageInfoBuilder};
+
 use erupt::{vk, DeviceLoader, EntryLoader, ExtendableFromConst, InstanceLoader, SmallVec};
-use fastrand::{usize, Rng};
+
 use gltf::animation::util::{ReadOutputs, Rotations};
-use gltf::mesh::util::{ReadJoints, ReadWeights};
-use gltf::{Node, Skin};
+
+
 use image::{GenericImageView, ImageFormat};
-use nalgebra::{ArrayStorage, Const, Matrix, Matrix4, Orthographic3, Perspective3, Point, Point3, Quaternion, Rotation3, Scale, Scale3, Translation3, Unit, UnitQuaternion, Vector2, Vector3, Vector4};
-use parry3d_f64::partitioning::QBVHDataGenerator;
-use std::borrow::Borrow;
+use nalgebra::{Matrix4, Orthographic3, Point3, Quaternion, Scale3, Translation3, UnitQuaternion, Vector2, Vector3, Vector4};
+
 use std::convert::TryInto;
 use std::default::Default;
 use std::f32::consts::PI;
@@ -18,11 +17,10 @@ use std::ffi::{c_void, CStr, CString};
 use std::fs::File;
 use std::io::BufReader;
 use std::mem::size_of;
-use std::ops::Index;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
-use winit::dpi::Position;
+
+
 use winit::window::Window;
 
 //TODO: Generate JSON descriptor set info and parse that instead of having to manually keep everything up to date
@@ -439,7 +437,7 @@ impl CombinedImage {
         generate_new_image: bool,
     ) -> Option<Self> {
         let mut width;
-        let mut height;
+        let height;
         let layer_count;
         let mut bytes;
         let pixel_size;
@@ -1661,7 +1659,6 @@ impl VulkanData {
         self.objects.push(render_object);
         let num_bone_sets = bone_sets.len();
         if num_bone_sets > 0 {
-            dbg!(self.current_boneset);
             for (bone_set_index, bones) in bone_sets.into_iter().enumerate() {
                 for (bone_index, bone) in bones.into_iter().enumerate() {
                     self.storage_buffer_object.bone_sets[self.current_boneset + bone_set_index]
@@ -1702,7 +1699,7 @@ impl VulkanData {
             let transformation_matrix = Matrix4::identity();
                 // * vulkan_correction_transform;
 
-            let transformation_position = transformation_matrix.column(3).xyz();
+            let _transformation_position = transformation_matrix.column(3).xyz();
             match node.mesh() {
                 None => {}
                 Some(mesh) => {
@@ -1761,19 +1758,9 @@ impl VulkanData {
                                 let index2 = triangle[(i + 1) % 3] as usize;
                                 let index3 = triangle[(i + 2) % 3] as usize;
 
-                                // let position3 = transformation_matrix
-                                //     .transform_vector(&Vector3::from(positions[index3]));
-                                // let position1 = transformation_matrix
-                                //     .transform_vector(&Vector3::from(positions[index1]));
-                                // let position2 = transformation_matrix
-                                //     .transform_vector(&Vector3::from(positions[index2]));
                                 let position3 = transformation_matrix.transform_point(&Point3::from(Vector3::from(positions[index3]))).coords;
                                 let position1 = transformation_matrix.transform_point(&Point3::from(Vector3::from(positions[index1]))).coords;
                                 let position2 = transformation_matrix.transform_point(&Point3::from(Vector3::from(positions[index2]))).coords;
-
-                                // let position1 = &Vector3::from(positions[index1]);
-                                // let position2 = &Vector3::from(positions[index2]);
-                                // let position3 = &Vector3::from(positions[index3]);
 
                                 let edge1 = position2 - position1;
                                 let edge2 = position3 - position1;
@@ -1859,8 +1846,6 @@ impl VulkanData {
                     animation.channels().for_each(|channel| {
                         let reader = channel.reader(|buffer| Some(&buffers[buffer.index()]));
 
-                        dbg!(channel.target().node().name());
-
                         let keyframes = match reader.read_outputs().unwrap() {
                             ReadOutputs::Translations(translations) => {
                                 let out_translations = translations.map(|translation| Keyframe {
@@ -1872,24 +1857,9 @@ impl VulkanData {
                                 out_translations.collect::<Vec<_>>()
                             }
                             ReadOutputs::Rotations(rotations) => {
-                                // match rotations{
-                                //     Rotations::I8(_) => {}
-                                //     Rotations::U8(_) => {}
-                                //     Rotations::I16(_) => {}
-                                //     Rotations::U16(_) => {}
-                                //     Rotations::F32(inner_rotations) => {
-                                //         // inner_rotations.for_each(|rotation|{
-                                //         //     println!("rotation {:?}", rotation);
-                                //         // })
-                                //         dbg!(inner_rotations.count());
-                                //     }
-                                // }
-                                // vec![]
-
                                 match rotations.into_f32().unwrap() {
                                     Rotations::F32(inner_rotations) => {
                                         let out_rotations = inner_rotations.map(|rotation| {
-                                            dbg!(rotation);
                                             Keyframe {
                                                 frame_time: f32::NAN,
                                                 translation: None,
@@ -1912,81 +1882,45 @@ impl VulkanData {
                                     scale: Some(Scale3::from(scale)),
                                 });
                                 out_scales.collect::<Vec<_>>()
-                                // vec![]
                             }
                             ReadOutputs::MorphTargetWeights(_) => unimplemented!(),
                         };
 
                         let node_index = channel.target().node().index();
 
-                        // let mut matrices = vec![];
-                        // let rng = Rng::new();
-                        // let spread = 0.1;
-                        //
-                        // if node_index == 5{
-                        //     for _ in 0..num_frames{
-                        //         matrices.push(
-                        //             Rotation3::face_towards(&Vector3::new(rng.f32()*spread,rng.f32()*spread,rng.f32()*spread), &Vector3::new(0.0,1.0,0.0)).to_homogeneous()
-                        //         );
-                        //     }
-                        // }
-
-                        dbg!(keyframes.len());
-
                         reader
                             .read_inputs()
                             .unwrap()
                             .zip(keyframes.into_iter())
                             .for_each(|(frame_time, sampler_output)| {
-                                dbg!(sampler_output.rotation);
-                                dbg!(frame_time);
                                 animation_frames[node_index].add_sample(Keyframe {
                                     frame_time,
                                     translation: sampler_output.translation,
                                     rotation: sampler_output.rotation,
                                     scale: sampler_output.scale,
                                 });
-                                // dbg!((frame_time, transformation));
                             })
                     });
 
-                    // node_global_transforms[root_node.index()] = vulkan_correction_transform * node_global_transforms[root_node.index()];
 
                     for keyframe_index in 0..num_frames {
                         let current_frame_time =
                             (keyframe_index as f32 / num_frames as f32) * animation_end;
 
-                        // let mut node_global_transforms = gltf
-                        //     .nodes()
-                        //     .map(|node| {
-                        //         Matrix4::from(node.transform().matrix())
-                        //     })
-                        //     .collect::<Vec<_>>();
                         let mut node_global_transforms = gltf
                             .nodes()
                             .map(|node| {
                                 animation_frames[node.index()].sample(current_frame_time)
-                                // Matrix4::identity()
                             })
                             .collect::<Vec<_>>();
 
-                        // node_global_transforms.iter_mut().enumerate().map(|(node_index, mut transform)| transform = transform * animation_frames[node_index].sample(current_frame_time));
-
-                        dbg!(current_frame_time);
-                        // dbg!(animation_frames[skin.joints().nth(0).unwrap().index()].sample(current_frame_time));
-
-
                         let nodes = gltf.nodes().collect::<Vec<_>>();
-                        // let mut current_indices: Vec<_> = vec![skin.joints().collect::<Vec<_>>().last().unwrap().index()];
                         let mut current_indices: Vec<_> = vec![root_node.index()];
-
-                        // node_global_transforms[current_indices[0]] = vulkan_correction_transform * node_global_transforms[current_indices[0]];
 
                         let mut next_indices = vec![];
                         loop {
                             for index in current_indices {
                                 let node = &nodes[index];
-                                println!("{:}", node.name().unwrap());
                                 let matrix = node_global_transforms[node.index()];
                                 node.children().for_each(|child| {
                                     node_global_transforms[child.index()] =
@@ -2009,15 +1943,6 @@ impl VulkanData {
                         let mut bones = vec![];
                         for (joint_index, joint) in skin.joints().enumerate() {
                             let new_bone = Bone {
-                                // matrix: mesh_transform.try_inverse().unwrap()
-                                //     * node_global_transforms[joint.index()]
-                                //     * inverse_bind_matrices[joint_index]
-                                //     * vulkan_correction_transform,
-                                // matrix: mesh_transform.try_inverse().unwrap()
-                                //     * node_global_transforms[joint.index()]
-                                //     * vulkan_correction_transform
-                                //     // * (vulkan_correction_transform * inverse_bind_matrices[joint_index].try_inverse().unwrap()).try_inverse().unwrap()
-                                //     * inverse_bind_matrices[joint_index]
                                 matrix: vulkan_correction_transform * (mesh_transform.try_inverse().unwrap()
                                     * node_global_transforms[joint.index()]
                                     * inverse_bind_matrices[joint_index])
@@ -2435,12 +2360,6 @@ impl VulkanData {
                         .dst_array_element(0)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(&bone_ssbo_infos),
-                    // vk::WriteDescriptorSetBuilder::new() //For the cubemap, which I'm not using because of the isometric camera
-                    //     .dst_set(*descriptor_set)
-                    //     .dst_binding(3)
-                    //     .dst_array_element(0)
-                    //     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    //     .image_info(&[]),
                     vk::WriteDescriptorSetBuilder::new()
                         .dst_set(*descriptor_set)
                         .dst_binding(4)
@@ -3122,14 +3041,6 @@ impl VulkanData {
             self.destroy_index_buffer();
             self.create_index_buffer();
         }
-        // unsafe{
-        //     self.device.as_ref().unwrap().reset_descriptor_pool(
-        //         self.descriptor_pool.unwrap(),
-        //         None,
-        //     ).unwrap();
-        // }
-        //
-        // self.create_descriptor_sets();
     }
 
     fn find_memory_type(&self, type_filter: u32, properties: vk::MemoryPropertyFlags) -> u32 {
@@ -3244,14 +3155,6 @@ impl VulkanData {
         .unwrap();
         unsafe { self.device.as_ref().unwrap().reset_fences(&fences) }.unwrap();
 
-        // unsafe{
-        //     self.device.as_ref().unwrap().free_command_buffers(
-        //         self.command_pool.unwrap(),
-        //         self.command_buffers.as_ref().unwrap(),
-        //     );
-        // }
-        //
-        // self.create_command_buffers();
         self.run_commands();
 
         let image_index: u32;
@@ -3369,12 +3272,6 @@ impl VulkanData {
             "Selected Surface format: {:?}",
             self.surface_format.unwrap()
         );
-
-        // surface_formats
-        //     .into_iter()
-        //     .for_each(|format| {
-        //         println!("Format Properties: {:?}", unsafe{self.instance.as_ref().unwrap().get_physical_device_format_properties(self.physical_device.unwrap(),format.format)}.optimal_tiling_features);
-        //     });
 
         let swapchain_create_info = vk::SwapchainCreateInfoKHRBuilder::new()
             .surface(self.surface.unwrap())
@@ -3688,14 +3585,6 @@ impl VulkanData {
 
     fn destroy_compute_pipelines(&mut self) {
         unsafe {
-            // self.device.as_ref().unwrap().destroy_descriptor_set_layout(
-            //     Some(self.compute_descriptor_set_layout.unwrap()),
-            //     None,
-            // );
-            // self.device
-            //     .as_ref()
-            //     .unwrap()
-            //     .destroy_descriptor_pool(Some(self.compute_descriptor_pool.unwrap()), None);
             self.device
                 .as_ref()
                 .unwrap()
@@ -4214,12 +4103,10 @@ impl VulkanData {
         self.create_framebuffers();
         self.create_buffers();
         self.transfer_data_to_storage_buffer(&self.storage_buffer_object);
-        // self.create_descriptor_pool();
         self.create_compute_images();
 
         self.create_compute_pipelines();
         self.create_ui_pipeline();
-        // self.create_descriptor_sets();
         self.create_command_buffers();
         self.update_descriptor_sets();
 
@@ -4361,11 +4248,6 @@ impl VulkanData {
     fn create_cubemap_resources(&mut self) {
         let cubemap_folder = PathBuf::from("cubemap_forest2");
 
-        // self.cubemap = Some(Cubemap::new(
-        //     self,
-        //     cubemap_folder.join("StandardCubeMap.hdr"),
-        // ));
-
         let base_cubemap = CombinedImage::new(
             self,
             cubemap_folder.join("StandardCubeMap.hdr"),
@@ -4441,7 +4323,7 @@ impl VulkanData {
 
         let roughness_mipmaps = 10;
 
-        let mut target_cubemap = self.create_blank_cubemap(1024, 1024, roughness_mipmaps);
+        let target_cubemap = self.create_blank_cubemap(1024, 1024, roughness_mipmaps);
 
         for i in 0..roughness_mipmaps {
             println!("Running shader for mip level {:}", i);
@@ -4634,7 +4516,7 @@ impl VulkanData {
         let pool_sizes: Vec<_> = combined_descriptors
             .iter()
             .enumerate()
-            .map(|(index, combined_descriptor)| {
+            .map(|(_index, combined_descriptor)| {
                 vk::DescriptorPoolSizeBuilder::new()
                     .descriptor_count(combined_descriptor.descriptor_count)
                     ._type(combined_descriptor.descriptor_type)
@@ -4667,7 +4549,7 @@ impl VulkanData {
             .iter()
             .enumerate()
             .map(
-                |(index, combined_descriptor)| match combined_descriptor.descriptor_info {
+                |(_index, combined_descriptor)| match combined_descriptor.descriptor_info {
                     DescriptorInfoData::Image {
                         image_view,
                         sampler,
@@ -4938,7 +4820,7 @@ impl VulkanData {
         const TILE_HEIGHT: f64 = 10.0;
         let tile_height = TILE_HEIGHT / zoom;
 
-        let mut projection = nalgebra::Orthographic3::new(
+        let projection = nalgebra::Orthographic3::new(
             -tile_height * aspect_ratio,
             tile_height * aspect_ratio,
             tile_height,
@@ -4947,32 +4829,10 @@ impl VulkanData {
             0.01,
         );
 
-        // let surface_width = self.surface_capabilities.unwrap().current_extent.width as f64;
-        // let surface_height = self.surface_capabilities.unwrap().current_extent.height as f64;
-        // let aspect_ratio = surface_width / surface_height;
-        // const TILE_HEIGHT: f64 = 10.0;
-        // let tile_height = TILE_HEIGHT / zoom;
-        //
-        // let mut projection = nalgebra::Perspective3::new(
-        //     surface_width/surface_height,
-        //     90f64.to_radians(),
-        //     0.1,
-        //     1000.0,
-        // );
-
-        // projection.set_bottom_and_top(projection.top(), projection.bottom());
 
         return projection;
     }
     pub(crate) fn get_cubemap_projection(&self, zoom: f64) -> Orthographic3<f64> {
-        // let surface_width = self.surface_capabilities.unwrap().current_extent.width as f64;
-        // let surface_height = self.surface_capabilities.unwrap().current_extent.height as f64;
-        // let projection = nalgebra::Orthographic3::from_fov(
-        //     surface_width / surface_height,
-        //     (90f64.to_radians() * (1.0 / zoom)),
-        //     100.0,
-        //     0.1,
-        // );
         return self.get_projection(zoom);
     }
     pub(crate) fn transfer_data_to_gpu(&mut self) {
@@ -4986,12 +4846,6 @@ impl VulkanData {
             self.surface_capabilities.unwrap().current_extent.width as f32,
             self.surface_capabilities.unwrap().current_extent.height as f32,
         );
-
-        // for i in 0..1{
-        //     // let random_vec = vec![self.rng.u8(..); (self.cpu_images[0].image.width * self.cpu_images[0].image.height) as usize];
-        //     let random_vec = std::iter::repeat_with(||self.rng.u8(..)).take((self.cpu_images[0].image.width * self.cpu_images[0].image.height) as usize).collect();
-        //     self.cpu_images[i].write_data(random_vec);
-        // }
 
         for i in 0..self.uniform_buffer_pointers.len() {
             unsafe {
@@ -5058,7 +4912,7 @@ impl VulkanData {
     }
 
     pub(crate) fn transfer_data_to_storage_buffer(&self, data: &ShaderStorageBufferObject) {
-        let (staging_buffer, allocation, allocation_info) = self
+        let (staging_buffer, _allocation, allocation_info) = self
             .allocator
             .as_ref()
             .unwrap()
@@ -5114,7 +4968,6 @@ impl VulkanData {
 
         let mut i = 1;
         while i < mip_levels && mip_height > 2 && mip_width > 2 {
-            println!("i: {:}", i);
             let barriers = [vk::ImageMemoryBarrierBuilder::new()
                 .image(image)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -5482,150 +5335,4 @@ impl VulkanData {
         .unwrap();
         return (image, image_memory);
     }
-    // fn run_test_shader(&self) {
-    //     #[repr(C)]
-    //     struct TestPushConstant(f32);
-    //     let test_constant = TestPushConstant(0.0);
-    //
-    //     let image_info = vk::ImageCreateInfoBuilder::new()
-    //         .image_type(vk::ImageType::_2D)
-    //         .extent(vk::Extent3D {
-    //             width: 1024,
-    //             height: 1024,
-    //             depth: 1,
-    //         })
-    //         .mip_levels(1)
-    //         .array_layers(1)
-    //         .format(vk::Format::R8G8B8A8_UNORM)
-    //         .tiling(vk::ImageTiling::OPTIMAL)
-    //         .initial_layout(vk::ImageLayout::UNDEFINED)
-    //         .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC)
-    //         .samples(vk::SampleCountFlagBits::_1)
-    //         .sharing_mode(vk::SharingMode::EXCLUSIVE);
-    //
-    //     let allocation_info = vk_mem_erupt::AllocationCreateInfo {
-    //         usage: vk_mem_erupt::MemoryUsage::GpuOnly,
-    //         ..Default::default()
-    //     };
-    //
-    //     let (image, allocation, _) = self
-    //         .allocator
-    //         .as_ref()
-    //         .unwrap()
-    //         .create_image(&image_info, &allocation_info)
-    //         .unwrap();
-    //
-    //     let image_view =
-    //         self.create_image_view(image, image_info.format, vk::ImageAspectFlags::COLOR, 1);
-    //
-    //     let subresource_range = vk::ImageSubresourceRangeBuilder::new()
-    //         .level_count(1)
-    //         .layer_count(1)
-    //         .aspect_mask(vk::ImageAspectFlags::COLOR)
-    //         .base_mip_level(0)
-    //         .base_array_layer(0);
-    //     let barrier = vk::ImageMemoryBarrierBuilder::new()
-    //         .old_layout(vk::ImageLayout::UNDEFINED)
-    //         .new_layout(vk::ImageLayout::GENERAL)
-    //         .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-    //         .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-    //         .image(image)
-    //         .subresource_range(*subresource_range);
-    //
-    //     let command_buffer = self.begin_single_time_commands();
-    //     unsafe {
-    //         self.device.as_ref().unwrap().cmd_pipeline_barrier(
-    //             command_buffer,
-    //             Some(vk::PipelineStageFlags::ALL_COMMANDS),
-    //             Some(vk::PipelineStageFlags::ALL_COMMANDS),
-    //             None,
-    //             &[],
-    //             &[],
-    //             &[barrier],
-    //         )
-    //     };
-    //
-    //     self.end_single_time_commands(command_buffer);
-    //
-    //     let descriptor_infos = vec![CombinedDescriptor {
-    //         descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
-    //         descriptor_count: 1,
-    //         descriptor_info: DescriptorInfoData::Image {
-    //             image_view,
-    //             sampler: None,
-    //             layout: vk::ImageLayout::GENERAL,
-    //         },
-    //     }];
-    //
-    //     self.run_arbitrary_compute_shader(
-    //         self.load_shader("shaders/test_comp.spv".parse().unwrap()),
-    //         test_constant,
-    //         &descriptor_infos,
-    //         (1024 / 8, 1024 / 8, 1),
-    //     );
-    //
-    //     let buffer_info = vk::BufferCreateInfoBuilder::new()
-    //         .size(1024 * 1024 * 4)
-    //         .usage(vk::BufferUsageFlags::TRANSFER_DST);
-    //
-    //     let allocation_info = vk_mem_erupt::AllocationCreateInfo {
-    //         usage: vk_mem_erupt::MemoryUsage::GpuToCpu,
-    //         ..Default::default()
-    //     };
-    //
-    //     let (buffer, buffer_allocation, _) = self
-    //         .allocator
-    //         .as_ref()
-    //         .unwrap()
-    //         .create_buffer(&buffer_info, &allocation_info)
-    //         .unwrap();
-    //
-    //     let command_buffer = self.begin_single_time_commands();
-    //
-    //     // let subresource_layers = vk::ImageSubresourceLayersBuilder::new()
-    //     //     .aspect_mask(vk::ImageAspectFlags::COLOR)
-    //     //     .base_array_layer(0)
-    //     //     .mip_level(0)
-    //     //     .layer_count(1);
-    //     let buffer_region = vk::BufferImageCopyBuilder::new()
-    //         .buffer_offset(0)
-    //         .buffer_row_length(1024)
-    //         .image_subresource(
-    //             *vk::ImageSubresourceLayersBuilder::new()
-    //                 .aspect_mask(vk::ImageAspectFlags::COLOR)
-    //                 .base_array_layer(0)
-    //                 .mip_level(0)
-    //                 .layer_count(1),
-    //         )
-    //         .image_extent(*vk::Extent3DBuilder::new().width(1024).height(1024).depth(1));
-    //     unsafe {
-    //         self.device.as_ref().unwrap().cmd_copy_image_to_buffer(
-    //             command_buffer,
-    //             image,
-    //             vk::ImageLayout::GENERAL,
-    //             buffer,
-    //             &[buffer_region],
-    //         )
-    //     };
-    //     self.end_single_time_commands(command_buffer);
-    //
-    //     let mut bytes: Vec<u8> = Vec::with_capacity(1024 * 1024 * 4);
-    //
-    //     unsafe {
-    //         self.allocator
-    //             .as_ref()
-    //             .unwrap()
-    //             .map_memory(&buffer_allocation)
-    //             .unwrap()
-    //             .copy_to_nonoverlapping(bytes.as_mut_ptr(), 1024*1024*4);
-    //         bytes.set_len(1024*1024*4)
-    //     };
-    //     image::save_buffer(
-    //         "test_image.png",
-    //         &bytes,
-    //         1024,
-    //         1024,
-    //         image::ColorType::Rgba8
-    //     ).unwrap();
-    // }
 }

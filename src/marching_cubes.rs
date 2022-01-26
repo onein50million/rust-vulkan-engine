@@ -2,8 +2,8 @@ use crate::support::map_range_linear;
 use crate::Vertex;
 use nalgebra::{Vector2, Vector3, Vector4};
 use parry3d_f64::shape::TriMesh;
-use std::convert::TryInto;
-use std::ops::{Div, Sub};
+
+
 
 pub(crate) const WORLD_SIZE_X: usize = 10;
 pub(crate) const WORLD_SIZE_Z: usize = 10;
@@ -54,7 +54,6 @@ impl World {
         for x_index in 0..(WORLD_SIZE_X - 1) {
             for z_index in 1..WORLD_SIZE_Z {
                 for y_index in 0..(WORLD_SIZE_Y - 1) {
-                    // voxels.get_mut_voxel(x_index, z_index, y_index).strength = (rng.f32() - 0.5) * 10.0;
                     if y_index > 4 {
                         voxels.get_mut_voxel(x_index, z_index, y_index).strength = 2.0;
                     } else if rng.bool() {
@@ -63,7 +62,6 @@ impl World {
                 }
             }
         }
-        // let voxels = Box::new(voxels.try_into().unwrap());
         return voxels;
     }
 
@@ -72,7 +70,6 @@ impl World {
         for x_index in 0..(WORLD_SIZE_X - 1) {
             for z_index in 1..WORLD_SIZE_Z {
                 for y_index in 0..(WORLD_SIZE_Y - 1) {
-                    // dbg!(self.get_voxel(x_index,z_index,y_index).drawn);
                     let cube = Cube {
                         voxels: [
                             *self.get_voxel(x_index, z_index, y_index + 1),
@@ -251,9 +248,7 @@ impl World {
             }
         }
 
-        // for vertex in &mut output {
-        //     vertex.normal = vertex.normal.normalize();
-        // }
+
 
         return output;
     }

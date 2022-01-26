@@ -56,13 +56,10 @@ void main() {
 
     uint previous_animation_frame = pushConstant.animation_frames >> 24;
     uint next_animation_frame = (pushConstant.animation_frames & 16711680) >> 16; //0b0000_0000_1111_1111_0000_0000_0000_0000
-//    uint previous_animation_frame = 32;
-//    uint next_animation_frame = 0; //0b0000_0000_1111_1111_0000_0000_0000_0000
 
 
 
     float animation_progress = unpackUnorm2x16(pushConstant.animation_frames).x; //x because we want the least significant bits
-//    float animation_progress = 1.0; //x because we want the least significant bits
 
     float previous_tangent = ssbo.bone_sets[previous_animation_frame].output_tangent;
     float next_tangent = ssbo.bone_sets[next_animation_frame].input_tangent;
@@ -89,11 +86,8 @@ void main() {
         second_frame_bone_transform = mat4(1.0);
     }
 
-//    mat4 bone_transform = cubic_spline(first_frame_bone_transform, previous_tangent, second_frame_bone_transform, next_tangent, animation_progress);
-//    mat4 bone_transform = first_frame_bone_transform;
     float cubic_animation_progress = cubic_spline(0.0, previous_tangent, 1.0, next_tangent, animation_progress);
     mat4 bone_transform = mix(first_frame_bone_transform, second_frame_bone_transform, cubic_animation_progress);
-    //    mat4 bone_transform = mat4(1.0);
     vec4 out_position = ubos.proj * ubos.view * pushConstant.model * bone_transform * vec4(inPosition, w);
     gl_Position = out_position;
 

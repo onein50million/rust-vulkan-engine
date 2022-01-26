@@ -89,13 +89,8 @@ vec3 triplanar_normal(in sampler2D in_sampler, vec3 position,vec3 world_normal,v
     vec3 tangent_normal_z = texture(in_sampler, (position.xy + offset.xy) * scale).xyz * 2.0 - 1.0;
 
     float blend_sharpness = 50.0;
-    //    vec3 blend_weight = pow(abs(world_normal), vec3(blend_sharpness));
     vec3 blend_weight = pow(abs(object_normal), vec3(blend_sharpness));
     blend_weight /= dot(blend_weight, vec3(1.0));
-
-    //    normal_x.z *= sign(world_normal).x;
-    //    normal_y.z *= sign(world_normal).y;
-    //    normal_z.z *= sign(world_normal).z;
 
     tangent_normal_x = vec3(tangent_normal_x.xy + world_normal.zy,(tangent_normal_x.z) * world_normal.x);
     tangent_normal_y = vec3(tangent_normal_y.xy + world_normal.xz,(tangent_normal_y.z) * world_normal.y);
@@ -109,7 +104,6 @@ vec3 triplanar_normal(in sampler2D in_sampler, vec3 position,vec3 world_normal,v
 SampleSet load_sample_set(int texture_offset, vec3 offset){
     float scale = 1.0;
     vec3 normal = triplanar_normal(normal_maps[pushConstant.texture_index+texture_offset],worldPosition, fragNormal,fragNormal,scale, offset).rgb;
-//    vec3 normal = fragNormal;
     vec4 albedo = triplanar_sample(texSampler[pushConstant.texture_index+texture_offset],worldPosition, normal, scale, offset);
     albedo.a = 1.0;
     float roughness = triplanar_sample(rough_metal_ao_maps[pushConstant.texture_index+texture_offset],worldPosition, normal, scale, offset).r;
@@ -219,8 +213,6 @@ void main() {
         vec3 modified_player_position = player_position;
         modified_player_position.y = (player_position.y - worldPosition.y)*0.05 + worldPosition.y;
         shadow_amount = clamp(mix(1.0,0.0,pow(distance(modified_player_position, worldPosition)*2.0 + 0.1,5.0)),0.0,1.0);
-//            outColor = albedo;
-//            return;
     }
     else {
 
@@ -231,9 +223,6 @@ void main() {
         normal = texture(normal_maps[pushConstant.texture_index], fragTexCoord).rgb;
 
 
-//            outColor.rgb = vec3(metalness);
-//            outColor.a = 1.0;
-//            return;
         tangent = fragTangent.xyz;
         bitangent = cross(fragNormal, tangent)*fragTangent.w;
         TBN = (mat3(
@@ -245,7 +234,6 @@ void main() {
         normal = 2.0*normal - 1.0;
         normal = normalize(TBN * normal);
         normal = inverse(mat3(pushConstant.model)) * normal;//not sure why I need this
-//            normal = -normal;
     }
     vec3 sun_direction = normalize(vec3(sin(ubos.time.x), cos(ubos.time.x), 0.0));
 
@@ -307,7 +295,6 @@ void main() {
 
     }
 
-//        vec3 irradiance = texture(irradiance_map[0], normal).rgb;
     vec3 irradiance = texture(irradiance_map[0], normal).rgb;
     irradiance = vec3(1.0) - exp(-irradiance * ubos.exposure);
 
@@ -318,15 +305,12 @@ void main() {
     vec3 prefilteredColor = textureLod(environment_map[0],reflection,int(roughness*9.0)).rgb; //TODO set max reflection lod smarterly
     prefilteredColor = vec3(1.0) - exp(-prefilteredColor * ubos.exposure);
 
-//        prefilteredColor = vec3(0.0);
-    //        vec3 prefilteredColor = textureLod(environment_map[0],reflection,).rgb; //TODO set max reflection lod smarterly
     vec2 brdf = texture(brdf_lut,vec2(max(dot(normal,view_direction),0.0),roughness)).xy;
     vec3 specular = prefilteredColor * (irradiance_reflection * brdf.x + brdf.y);
     vec3 diffuse = irradiance * albedo.rgb;
     diffuse *= 1.0 - shadow_amount;
     specular *= 1.0 - shadow_amount;
     vec3 ambient = (irradiance_refraction * diffuse + specular) * ambient_occlusion;
-//        ambient = vec3(1.0) - exp(-ambient * ubos.exposure);
     vec3 color = ambient + total_light;
 
     outColor = vec4(color, albedo.a);
