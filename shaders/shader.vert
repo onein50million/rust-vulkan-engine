@@ -42,10 +42,10 @@ mat4 cubic_spline(mat4 previous_matrix, float previous_tangent, mat4 next_matrix
 float cubic_spline(float start, float previous_tangent, float end, float next_tangent, float interpolation_value){
 
     float t = interpolation_value;
-    float t2 = t * t;
-    float t3 = t2* t;
+    float t_2 = t * t;
+    float t_3 = t_2* t;
 
-    return (2.0 * t3 - 3.0 * t2 + 1.0) * start + (t3 - 2.0 * t2 + t) * previous_tangent + (-2.0 * t3 + 3.0 * t2) * end + (t3 - t2) * next_tangent;
+    return (2.0 * t_3 - 3.0 * t_2 + 1.0) * start + (t_3 - 2.0 * t_2 + t) * previous_tangent + (-2.0 * t_3 + 3.0 * t_2) * end + (t_3 - t_2) * next_tangent;
 
 }
 
@@ -56,7 +56,13 @@ void main() {
 
     uint previous_animation_frame = pushConstant.animation_frames >> 24;
     uint next_animation_frame = (pushConstant.animation_frames & 16711680) >> 16; //0b0000_0000_1111_1111_0000_0000_0000_0000
+//    uint previous_animation_frame = 32;
+//    uint next_animation_frame = 0; //0b0000_0000_1111_1111_0000_0000_0000_0000
+
+
+
     float animation_progress = unpackUnorm2x16(pushConstant.animation_frames).x; //x because we want the least significant bits
+//    float animation_progress = 1.0; //x because we want the least significant bits
 
     float previous_tangent = ssbo.bone_sets[previous_animation_frame].output_tangent;
     float next_tangent = ssbo.bone_sets[next_animation_frame].input_tangent;
@@ -84,19 +90,18 @@ void main() {
     }
 
 //    mat4 bone_transform = cubic_spline(first_frame_bone_transform, previous_tangent, second_frame_bone_transform, next_tangent, animation_progress);
-    mat4 bone_transform = first_frame_bone_transform;
-//    float cubic_animation_progress = cubic_spline(0.0, previous_tangent, 1.0, next_tangent, animation_progress);
-//    mat4 bone_transform = mix(first_frame_bone_transform, second_frame_bone_transform, cubic_animation_progress);
-
+//    mat4 bone_transform = first_frame_bone_transform;
+    float cubic_animation_progress = cubic_spline(0.0, previous_tangent, 1.0, next_tangent, animation_progress);
+    mat4 bone_transform = mix(first_frame_bone_transform, second_frame_bone_transform, cubic_animation_progress);
     //    mat4 bone_transform = mat4(1.0);
     vec4 out_position = ubos.proj * ubos.view * pushConstant.model * bone_transform * vec4(inPosition, w);
     gl_Position = out_position;
 
-    mat3 transpose_inverse = mat3(transpose(inverse(pushConstant.model)));
+    mat3 transpose_inverse = mat3(transpose(inverse(pushConstant.model * bone_transform)));
     fragNormal = transpose_inverse * inNormal;
 
-    worldPosition = (pushConstant.model * vec4(inPosition, 1.0)).xyz;
-    fragPosition = inPosition;
+    worldPosition = (pushConstant.model * bone_transform * vec4(inPosition, 1.0)).xyz;
+    fragPosition = (bone_transform * vec4(inPosition,1.0)).xyz;
     fragTexCoord = inTexCoord;
     fragTangent = inTangent;
     textureType = inTextureType;

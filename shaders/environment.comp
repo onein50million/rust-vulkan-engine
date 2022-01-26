@@ -8,6 +8,10 @@ layout(push_constant) uniform PushConstants{
     float roughness;
 } pushConstant;
 
+const mat3 CORRECTION_MATRIX = mat3(1.0000000,  0.0000000,  0.0000000,
+0.0000000,  0.0000000, 1.0000000,
+0.0000000,  -1.0000000,  0.0000000);
+//const mat3 CORRECTION_MATRIX = mat3(1.0);
 const float PI = 3.14159265359;
 float RadicalInverse_VdC(uint bits)
 {
@@ -67,9 +71,9 @@ void main()
     else if (gl_GlobalInvocationID.z == 4)
     { normal = vec3(uv.x, -uv.y, 1.0f); }
     else if (gl_GlobalInvocationID.z == 5)
-    { normal = vec3(uv.x, -uv.y, -1.0f); }
+    { normal = vec3(-uv.x, -uv.y, -1.0f); }
 
-    normal = normalize(normal);
+    normal = CORRECTION_MATRIX * normalize(normal);
 
 
     vec3 N = normal;
@@ -88,7 +92,7 @@ void main()
         float NdotL = max(dot(N, L), 0.0);
         if(NdotL > 0.0)
         {
-            prefilteredColor += texture(inImage, L).rgb * NdotL;
+            prefilteredColor += texture(inImage,  L).rgb * NdotL;
             totalWeight      += NdotL;
         }
     }

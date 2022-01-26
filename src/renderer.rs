@@ -1,20 +1,19 @@
-use std::borrow::Borrow;
 use crate::cube::*;
 use crate::support::*;
 use erupt::vk::{DescriptorBufferInfoBuilder, DescriptorImageInfoBuilder, ShaderModule};
 use erupt::vk1_0::{CommandBuffer, PipelineLayout, Sampler};
 use erupt::{vk, DeviceLoader, EntryLoader, ExtendableFromConst, InstanceLoader, SmallVec};
+use fastrand::{usize, Rng};
 use gltf::animation::util::{ReadOutputs, Rotations};
 use gltf::mesh::util::{ReadJoints, ReadWeights};
 use gltf::{Node, Skin};
 use image::{GenericImageView, ImageFormat};
-use nalgebra::{
-    ArrayStorage, Const, Matrix4, Orthographic3, Perspective3, Quaternion, Rotation3, Scale3,
-    Translation3, UnitQuaternion, Vector2, Vector3, Vector4,
-};
+use nalgebra::{ArrayStorage, Const, Matrix, Matrix4, Orthographic3, Perspective3, Point, Point3, Quaternion, Rotation3, Scale, Scale3, Translation3, Unit, UnitQuaternion, Vector2, Vector3, Vector4};
 use parry3d_f64::partitioning::QBVHDataGenerator;
+use std::borrow::Borrow;
 use std::convert::TryInto;
 use std::default::Default;
+use std::f32::consts::PI;
 use std::ffi::{c_void, CStr, CString};
 use std::fs::File;
 use std::io::BufReader;
@@ -23,7 +22,7 @@ use std::ops::Index;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use fastrand::Rng;
+use winit::dpi::Position;
 use winit::window::Window;
 
 //TODO: Generate JSON descriptor set info and parse that instead of having to manually keep everything up to date
@@ -33,6 +32,196 @@ const BASE_VOXEL_SIZE: f32 = 128.0;
 const MIP_LEVELS: u32 = 6;
 const MSAA_ENABLED: bool = false;
 const UI_BUFFER_LENGTH: usize = 8192;
+
+#[derive(Debug, Copy, Clone)]
+pub(crate) enum DanielError {
+    Minimized,
+    SwapchainNotCreated
+}
+
+#[derive(Copy, Clone)]
+struct Keyframe {
+    frame_time: f32,
+    translation: Option<Translation3<f32>>,
+    rotation: Option<UnitQuaternion<f32>>,
+    scale: Option<Scale3<f32>>,
+}
+impl Keyframe{
+    fn to_homogeneous(&self) -> Matrix4<f32> {
+        let translation = self.translation.unwrap_or_default();
+        let rotation = self.rotation.unwrap_or_default();
+        let scale = self.scale.unwrap_or(Scale3::identity());
+        translation.to_homogeneous() * rotation.to_homogeneous() * scale.to_homogeneous()
+    }
+}
+
+#[derive(Clone)]
+struct AnimationKeyframes {
+    keyframes: Vec<Keyframe>,
+    end_time: f32,
+}
+
+trait ClampedAddition {
+    fn clamped_addition(self, amount: i64, min: Self, max: Self) -> Self;
+}
+
+impl ClampedAddition for usize {
+    fn clamped_addition(self, amount: i64, min: Self, max: Self) -> Self {
+        let new_value = self as i64 + amount;
+
+        if new_value < Self::MIN as i64 {
+            Self::MIN
+        } else if new_value > Self::MAX as i64 {
+            Self::MAX
+        } else {
+            new_value as usize
+        }
+        .clamp(min, max)
+    }
+}
+
+impl AnimationKeyframes {
+    // fn get_closest_below(&self, target_frame_time: f32) -> Option<usize> {
+    //     if self.keyframes.len() > 0 {
+    //         let search_result = self.keyframes.binary_search_by(|keyframe| {
+    //             keyframe.frame_time.partial_cmp(&target_frame_time).unwrap()
+    //         });
+    //         match search_result {
+    //             Ok(index) => Some((index)),
+    //             Err(index) => Some((index.clamped_addition(0, 0, self.keyframes.len() - 1))),
+    //         }
+    //     } else {
+    //         None
+    //     }
+    // }
+    //
+    // fn get_closest_above(&self, target_frame_time: f32) -> Option<usize> {
+    //     if self.keyframes.len() > 0 {
+    //         let search_result = self.keyframes.binary_search_by(|keyframe| {
+    //             keyframe.frame_time.partial_cmp(&target_frame_time).unwrap()
+    //         });
+    //         match search_result {
+    //             Ok(index) => Some((index)),
+    //             Err(index) => Some((index.clamped_addition(1, 0, self.keyframes.len() - 1))),
+    //         }
+    //     } else {
+    //         None
+    //     }
+    fn get_closest_below(&self, target_frame_time: f32) -> Option<usize> {
+        let output = ((self.keyframes.len() as f32) * (target_frame_time / self.end_time)) as usize;
+        if output >= 0 && output < self.keyframes.len(){
+            Some(output)
+        }else{
+            None
+        }
+    }
+
+    fn get_closest_above(&self, target_frame_time: f32) -> Option<usize> {
+        let output = (((self.keyframes.len() as f32) * (target_frame_time / self.end_time)).ceil()) as usize;
+        if output >= 0 && output < self.keyframes.len(){
+            Some(output)
+        }else{
+            None
+        }
+    }
+
+    fn sample(&self, index: f32) -> Matrix4<f32> {
+        let below = self.get_closest_below(index);
+        let above = self.get_closest_above(index);
+        match (below, above) {
+            (None, None) => { Matrix4::identity() }
+            (Some(below), None) => { self.keyframes[below].to_homogeneous() }
+            // (None, Some(above)) => { self.keyframes[above].to_homogeneous() }
+            (None, Some(above)) => { self.keyframes[above].to_homogeneous() }
+            (Some(below), Some(above)) => {
+                self.interpolate(above, below, index).to_homogeneous()
+                // self.keyframes[below].to_homogeneous()
+            }
+        }
+    }
+    fn interpolate(&self, first: usize, second: usize, frame_time: f32) -> Keyframe{
+        let first = self.keyframes[first];
+        let second = self.keyframes[second];
+
+        let mapped_range = map_range_linear(frame_time, first.frame_time, second.frame_time, 0.0, 1.0);
+        let mapped_range = match mapped_range.is_nan() {
+             true => 0.5,
+             false => mapped_range
+        };
+
+
+        let translation = Some(match (first.translation, second.translation) {
+            (None, None) => { Translation3::identity() }
+            (Some(first), None) => { first }
+            (None, Some(second)) => { second }
+            (Some(first), Some(second)) => {
+                Translation3::from(first.vector * (1.0 - mapped_range) + second.vector * mapped_range)
+            }
+        });
+        let rotation = Some(match (first.rotation, second.rotation) {
+            (None, None) => { UnitQuaternion::identity() }
+            (Some(first), None) => { first }
+            (None, Some(second)) => { second }
+            (Some(first), Some(second)) => {
+                first.slerp(&second, mapped_range)
+            }
+        });
+        let scale = Some(match (first.scale, second.scale) {
+            (None, None) => { Scale3::identity() }
+            (Some(first), None) => { first }
+            (None, Some(second)) => { second }
+            (Some(first), Some(second)) => {
+                Scale3::from(first.vector * (1.0 - mapped_range) + second.vector * mapped_range)
+            }
+        });
+
+
+        Keyframe{
+            frame_time,
+            translation,
+            rotation,
+            scale,
+        }
+
+    }
+
+    fn frametime(&self, index: usize) -> f32 {
+        if index < self.keyframes.len() {
+            self.keyframes[index].frame_time
+        } else {
+            f32::NAN
+        }
+    }
+    fn add_sample(&mut self, sample: Keyframe) {
+        match self.keyframes.binary_search_by(|keyframe| {
+            keyframe.frame_time.partial_cmp(&sample.frame_time).unwrap()
+        }) {
+            Ok(index) => {
+                match (self.keyframes[index].translation, sample.translation) {
+                    (_, None) => {}
+                    (None, Some(translation)) => {
+                        self.keyframes[index].translation = Some(translation)
+                    }
+                    (Some(_current_translation), Some(_new_translation)) => { /*TODO, maybe do some fancy averaging but shouldn't happen too often so we should be good to ignore it*/
+                    }
+                };
+                match (self.keyframes[index].rotation, sample.rotation) {
+                    (_, None) => {}
+                    (None, Some(rotation)) => self.keyframes[index].rotation = Some(rotation),
+                    (Some(_), Some(_)) => { /*TODO*/ }
+                };
+                match (self.keyframes[index].scale, sample.scale) {
+                    (_, None) => {}
+                    (None, Some(scale)) => self.keyframes[index].scale = Some(scale),
+                    (Some(_), Some(_)) => { /*TODO*/ }
+                }
+            }
+            Err(index) => {
+                self.keyframes.insert(index, sample);
+            }
+        }
+    }
+}
 
 enum DescriptorInfoData {
     Image {
@@ -446,7 +635,15 @@ impl CombinedImage {
 
         let mut regions = vec![];
         println!("Width: {:}, Height: {:}", width, height);
-        for face in 0..layer_count {
+        let face_order = match layer_count{
+            1 => vec![0],
+            // 6 => vec![0,1,4,5,2,3],
+            6 => vec![0,1,2,3,4,5],
+            // 6 => vec![2,3,4,5,0,1],
+            // 6 => vec![0,0,0,0,0,0],
+            _ => unimplemented!()
+        };
+        for (face_index, face) in face_order.into_iter().enumerate() {
             regions.push(
                 vk::BufferImageCopyBuilder::new()
                     .buffer_offset((face * width * width * pixel_size as u32) as u64)
@@ -455,7 +652,7 @@ impl CombinedImage {
                     .image_subresource(vk::ImageSubresourceLayers {
                         aspect_mask: vk::ImageAspectFlags::COLOR,
                         mip_level: 0,
-                        base_array_layer: face,
+                        base_array_layer: face_index as u32,
                         layer_count: 1,
                     })
                     .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
@@ -748,6 +945,7 @@ pub(crate) struct VulkanData {
     surface: Option<vk::SurfaceKHR>,
     surface_format: Option<vk::SurfaceFormatKHR>,
     pub(crate) surface_capabilities: Option<vk::SurfaceCapabilitiesKHR>,
+    swapchain_created: bool,
     swapchain: Option<vk::SwapchainKHR>,
     swapchain_images: SmallVec<vk::Image>,
     swapchain_image_views: Option<Vec<vk::ImageView>>,
@@ -792,7 +990,7 @@ pub(crate) struct VulkanData {
     storage_buffer: Option<vk::Buffer>,
     storage_buffer_allocation: Option<vk_mem_erupt::Allocation>,
     pub(crate) storage_buffer_object: Box<ShaderStorageBufferObject>,
-    current_boneset: usize,
+    pub(crate) current_boneset: usize,
     msaa_samples: vk::SampleCountFlagBits,
     descriptor_pool: Option<vk::DescriptorPool>,
     descriptor_set_layout: Option<vk::DescriptorSetLayout>,
@@ -859,6 +1057,7 @@ impl VulkanData {
             surface: None,
             surface_format: None,
             surface_capabilities: None,
+            swapchain_created: false,
             swapchain: None,
             swapchain_images: SmallVec::new(),
             swapchain_image_views: None,
@@ -1489,20 +1688,25 @@ impl VulkanData {
         let root_node = gltf.scenes().nth(0).unwrap().nodes().nth(0).unwrap();
 
         let mut mesh_transform = Matrix4::identity();
-        let vulkan_correction_transform =
-            Matrix4::from_axis_angle(&Vector3::x_axis(), std::f32::consts::PI);
-
+        // let vulkan_correction_transform =
+        //     Matrix4::from_axis_angle(&Vector3::x_axis(), std::f32::consts::PI);
+        let vulkan_correction_transform = Matrix4::from(UnitQuaternion::from_euler_angles(0.0,0.0,PI));
+        // let vulkan_correction_transform = Matrix4::identity();
+        // let vulkan_correction_transform = Scale3::new(1.0,-1.0,1.0).to_homogeneous();
+        // let vulkan_correction_transform = Scale3::new(1.0,-1.0,1.0).to_homogeneous();
         for node in gltf.nodes() {
             // let transformation_matrix = Matrix4::from(node.transform().matrix())
             //     * Matrix4::from_axis_angle(&Vector3::x_axis(), std::f32::consts::PI);
-            let transformation_matrix =
-                Matrix4::from(node.transform().matrix()) * vulkan_correction_transform;
+            // let transformation_matrix = Matrix4::from(node.transform().matrix());
+            // let transformation_matrix = Matrix4::identity();
+            let transformation_matrix = Matrix4::identity();
+                // * vulkan_correction_transform;
 
             let transformation_position = transformation_matrix.column(3).xyz();
             match node.mesh() {
                 None => {}
                 Some(mesh) => {
-                    mesh_transform = transformation_matrix;
+                    mesh_transform = Matrix4::from(node.transform().matrix());
                     let mut texture_type = 0; //I think primitve index should line up with texture type... maybe?
                     for primitive in mesh.primitives() {
                         println!("Texture type: {:}", texture_type);
@@ -1532,7 +1736,7 @@ impl VulkanData {
                         out_indices.extend_from_slice(&indices);
                         for i in 0..positions.len() {
                             let position = Vector3::from(positions[i]);
-                            let position = transformation_matrix.transform_vector(&position);
+                            let position = transformation_matrix.transform_point(&Point3::from(position)).coords;
                             out_vertices.push(Vertex {
                                 position,
                                 normal: Vector3::zeros(),
@@ -1548,8 +1752,7 @@ impl VulkanData {
                             for i in 0..3 {
                                 let normal = normals[triangle[i] as usize];
                                 let normal = -Vector3::from(normal);
-                                let normal = transformation_matrix.transform_vector(&normal)
-                                    - transformation_position;
+                                let normal = transformation_matrix.transform_vector(&normal);
 
                                 let texture_coordinate = texture_coordinates[triangle[i] as usize];
                                 let texture_coordinate = Vector2::from(texture_coordinate);
@@ -1558,12 +1761,15 @@ impl VulkanData {
                                 let index2 = triangle[(i + 1) % 3] as usize;
                                 let index3 = triangle[(i + 2) % 3] as usize;
 
-                                let position3 = transformation_matrix
-                                    .transform_vector(&Vector3::from(positions[index3]));
-                                let position1 = transformation_matrix
-                                    .transform_vector(&Vector3::from(positions[index1]));
-                                let position2 = transformation_matrix
-                                    .transform_vector(&Vector3::from(positions[index2]));
+                                // let position3 = transformation_matrix
+                                //     .transform_vector(&Vector3::from(positions[index3]));
+                                // let position1 = transformation_matrix
+                                //     .transform_vector(&Vector3::from(positions[index1]));
+                                // let position2 = transformation_matrix
+                                //     .transform_vector(&Vector3::from(positions[index2]));
+                                let position3 = transformation_matrix.transform_point(&Point3::from(Vector3::from(positions[index3]))).coords;
+                                let position1 = transformation_matrix.transform_point(&Point3::from(Vector3::from(positions[index1]))).coords;
+                                let position2 = transformation_matrix.transform_point(&Point3::from(Vector3::from(positions[index2]))).coords;
 
                                 // let position1 = &Vector3::from(positions[index1]);
                                 // let position2 = &Vector3::from(positions[index2]);
@@ -1624,240 +1830,203 @@ impl VulkanData {
                     .map(|matrix| Matrix4::from(matrix))
                     .collect();
 
-                let animation = gltf.animations().nth(0).expect("No animation found");
-
-                let animation_end = {
-                    animation
-                        .channels()
-                        .map(|channel| {
-                            let reader = channel.reader(|buffer| Some(&buffers[buffer.index()]));
-                            reader.read_inputs().unwrap().reduce(f32::max).unwrap()
-                        })
-                        .reduce(f32::max)
-                        .unwrap()
-                };
-
-                let num_frames = {
-                    animation
-                        .channels()
-                        .map(|channel| {
-                            let reader = channel.reader(|buffer| Some(&buffers[buffer.index()]));
-                            reader.read_inputs().unwrap().count()
-                        }).max().unwrap()
-                };
-
-                #[derive(Copy,Clone)]
-                struct Keyframe{
-                    frame_time: f32,
-                    value: Matrix4<f32>
-                }
-
-                #[derive(Clone)]
-                struct AnimationKeyframes{
-                    keyframes: Vec<Keyframe>
-                }
-                impl AnimationKeyframes{
-                    fn get_closest_below(&self, target_frame_time: f32) -> Keyframe{
-                        self.keyframes.iter().filter(|keyframe| keyframe.frame_time <= target_frame_time).map(|keyframe| *keyframe).reduce(|accumulator, keyframe|{
-                            if accumulator.frame_time < keyframe.frame_time{
-                                accumulator
-                            }else{
-                                keyframe
-                            }
-                        }).unwrap_or(self.keyframes.iter().map(|keyframe| *keyframe).next().unwrap_or(
-                            Keyframe{
-                                frame_time: target_frame_time,
-                                value: Matrix4::identity()
-                            }
-                        ))
-                    }
-
-                    fn get_closest_above(&self, target_frame_time: f32) -> Keyframe{
-                        self.keyframes.iter().filter(|keyframe| keyframe.frame_time >= target_frame_time).map(|keyframe| *keyframe).reduce(|accumulator, keyframe|{
-                            if accumulator.frame_time < keyframe.frame_time{
-                                accumulator
-                            }else{
-                                keyframe
-                            }
-                        }).unwrap_or(self.keyframes.iter().map(|keyframe| *keyframe).last().unwrap_or(
-                            Keyframe{
-                                frame_time: target_frame_time,
-                                value: Matrix4::identity()
-                            }
-                        ))
-                    }
-
-                    fn sample(&self, index: f32) -> Matrix4<f32> {
-                        let below = self.get_closest_below(index);
-                        let above = self.get_closest_above(index);
-
-                        return below.value;
-
-                        let mapped_index = if below.frame_time != above.frame_time{
-                             map_range_linear(
-                                index, below.frame_time, above.frame_time, 0.0,1.0
-                            )
-                        }else{
-                            0.5
-                        };
-                        below.value * (1.0 - mapped_index) + above.value * mapped_index
-                    }
-                    fn add_sample(&mut self, sample: Keyframe){
-                        let mut filtered = self.keyframes.iter().filter(|keyframe| (sample.frame_time - keyframe.frame_time).abs() < 0.001).map(|keyframe| *keyframe).collect::<Vec<_>>();
-                        if filtered.len() == 0{
-                            match self.keyframes.binary_search_by(|keyframe|sample.frame_time.partial_cmp(&keyframe.frame_time).unwrap()){
-                                Ok(_) => {panic!()}
-                                Err(position) => {
-                                    self.keyframes.insert(position,sample);
-
-                                }
-                            }
-                        }else{
-                            for i in 0..filtered.len(){
-                                filtered[i].value = sample.value * filtered[i].value;
-                            }
-                        }
-                    }
-                }
-
-                let mut animation_frames = vec![AnimationKeyframes{
-                    keyframes: vec![]
-                }; gltf.nodes().len()];
-
-                animation.channels().for_each(|channel| {
-                    let reader = channel.reader(|buffer| Some(&buffers[buffer.index()]));
-
-                    let matrices = match reader.read_outputs().unwrap() {
-                        ReadOutputs::Translations(translations) => {
-                            let out_translations = translations
-                                .map(|translation| Translation3::from(translation).to_homogeneous());
-                                // .map(|translation| Matrix4::identity());
-                            out_translations.collect::<Vec<_>>()
-                            // vec![]
-                        }
-                        ReadOutputs::Rotations(rotations) => {
-                            match rotations.into_f32().unwrap() {
-                                Rotations::F32(inner_rotations) => {
-                                    let out_rotations = inner_rotations.map(|rotation| {
-                                        dbg!(rotation);
-                                        dbg!(UnitQuaternion::from_quaternion(Quaternion::from(
-                                            rotation,
-                                        ))
-                                        .to_homogeneous())
-                                    });
-                                    out_rotations.collect::<Vec<_>>()
-                                }
-                                _ => unreachable!(),
-                            }
-                        }
-                        ReadOutputs::Scales(scales) => {
-                            let out_scales = scales.map(|scale| Scale3::from(scale).to_homogeneous());
-                            // let out_scales = scales.map(|scale| Matrix4::identity());
-                            out_scales.collect::<Vec<_>>()
-                            // vec![]
-                        }
-                        ReadOutputs::MorphTargetWeights(_) => unimplemented!(),
+                for animation in gltf.animations(){
+                    let animation_end = {
+                        animation
+                            .channels()
+                            .map(|channel| {
+                                let reader = channel.reader(|buffer| Some(&buffers[buffer.index()]));
+                                reader.read_inputs().unwrap().reduce(f32::max).unwrap()
+                            })
+                            .reduce(f32::max)
+                            .unwrap()
                     };
 
-                    let node_index = channel.target().node().index();
+                    let num_frames = {
+                        animation
+                            .channels()
+                            .map(|channel| {
+                                let reader = channel.reader(|buffer| Some(&buffers[buffer.index()]));
+                                reader.read_inputs().unwrap().count()
+                            })
+                            .max()
+                            .unwrap()
+                    };
 
+                    let mut animation_frames =
+                        vec![AnimationKeyframes { keyframes: vec![], end_time: animation_end }; gltf.nodes().len()];
 
-                    // let mut matrices = vec![];
-                    // let rng = Rng::new();
-                    // let spread = 0.1;
-                    //
-                    // if node_index == 5{
-                    //     for _ in 0..num_frames{
-                    //         matrices.push(
-                    //             Rotation3::face_towards(&Vector3::new(rng.f32()*spread,rng.f32()*spread,rng.f32()*spread), &Vector3::new(0.0,1.0,0.0)).to_homogeneous()
-                    //         );
-                    //     }
-                    // }
+                    animation.channels().for_each(|channel| {
+                        let reader = channel.reader(|buffer| Some(&buffers[buffer.index()]));
 
+                        dbg!(channel.target().node().name());
 
+                        let keyframes = match reader.read_outputs().unwrap() {
+                            ReadOutputs::Translations(translations) => {
+                                let out_translations = translations.map(|translation| Keyframe {
+                                    frame_time: f32::NAN,
+                                    translation: Some(Translation3::from(translation)),
+                                    rotation: None,
+                                    scale: None,
+                                });
+                                out_translations.collect::<Vec<_>>()
+                            }
+                            ReadOutputs::Rotations(rotations) => {
+                                // match rotations{
+                                //     Rotations::I8(_) => {}
+                                //     Rotations::U8(_) => {}
+                                //     Rotations::I16(_) => {}
+                                //     Rotations::U16(_) => {}
+                                //     Rotations::F32(inner_rotations) => {
+                                //         // inner_rotations.for_each(|rotation|{
+                                //         //     println!("rotation {:?}", rotation);
+                                //         // })
+                                //         dbg!(inner_rotations.count());
+                                //     }
+                                // }
+                                // vec![]
 
-                    dbg!(matrices.len());
-
-                    reader.read_inputs().unwrap().zip(matrices.into_iter()).for_each(
-                        |(frame_time, transformation): (
-                            f32,
-                            nalgebra::Matrix<
-                                f32,
-                                Const<4_usize>,
-                                Const<4_usize>,
-                                ArrayStorage<f32, 4_usize, 4_usize>,
-                            >,
-                        )| {
-                            dbg!(transformation);
-                            animation_frames[node_index].add_sample(
-                                Keyframe{
-                                    frame_time,
-                                    value: transformation,
+                                match rotations.into_f32().unwrap() {
+                                    Rotations::F32(inner_rotations) => {
+                                        let out_rotations = inner_rotations.map(|rotation| {
+                                            dbg!(rotation);
+                                            Keyframe {
+                                                frame_time: f32::NAN,
+                                                translation: None,
+                                                rotation: Some(UnitQuaternion::from_quaternion(
+                                                    Quaternion::from(rotation),
+                                                )),
+                                                scale: None,
+                                            }
+                                        });
+                                        out_rotations.collect::<Vec<_>>()
+                                    }
+                                    _ => unreachable!(),
                                 }
-                            );
-                            // dbg!((frame_time, transformation));
-                        },
-                    )
-                });
-
-
-                // node_global_transforms[root_node.index()] = vulkan_correction_transform * node_global_transforms[root_node.index()];
-
-                for keyframe_index in 0..num_frames {
-                    let current_frame_time = (keyframe_index as f32 / num_frames as f32) * animation_end;
-
-                    let mut node_global_transforms = gltf
-                        .nodes()
-                        .map(|node| Matrix4::from(node.transform().matrix()))
-                        .collect::<Vec<_>>();
-
-                    // node_global_transforms.iter_mut().enumerate().map(|(node_index, mut transform)| transform = transform * animation_frames[node_index].sample(current_frame_time));
-
-                    // dbg!(animation_frames[skin.joints().nth(0).unwrap().index()].sample(current_frame_time));
-
-                    for node_index in 0..node_global_transforms.len(){
-                        node_global_transforms[node_index] = animation_frames[node_index].sample(current_frame_time) * node_global_transforms[node_index];
-                    }
-
-                    let mut current_indices: Vec<_> = vec![root_node.index()];
-                    let mut next_indices = vec![];
-                    loop {
-                        for index in current_indices {
-                            let node = gltf.nodes().nth(index).unwrap();
-                            println!("{:}", node.name().unwrap());
-                            let matrix = node_global_transforms[node.index()];
-                            node.children().for_each(|child| {
-                                node_global_transforms[child.index()] =
-                                    matrix * node_global_transforms[child.index()];
-                            });
-
-                            next_indices.extend(
-                                gltf.nodes()
-                                    .nth(index)
-                                    .unwrap()
-                                    .children()
-                                    .map(|node| node.index()),
-                            );
-                        }
-                        if next_indices.len() > 0 {
-                            current_indices = vec![];
-                            current_indices.append(&mut next_indices);
-                        } else {
-                            break;
-                        }
-                    }
-
-                    let mut bones = vec![];
-                    for (joint_index, joint) in skin.joints().enumerate() {
-                        let new_bone = Bone {
-                            matrix: mesh_transform.try_inverse().unwrap()
-                                * node_global_transforms[joint.index()]
-                                * inverse_bind_matrices[joint_index]
-                                * vulkan_correction_transform,
+                            }
+                            ReadOutputs::Scales(scales) => {
+                                let out_scales = scales.map(|scale| Keyframe {
+                                    frame_time: f32::NAN,
+                                    translation: None,
+                                    rotation: None,
+                                    scale: Some(Scale3::from(scale)),
+                                });
+                                out_scales.collect::<Vec<_>>()
+                                // vec![]
+                            }
+                            ReadOutputs::MorphTargetWeights(_) => unimplemented!(),
                         };
-                        bones.push(new_bone);
+
+                        let node_index = channel.target().node().index();
+
+                        // let mut matrices = vec![];
+                        // let rng = Rng::new();
+                        // let spread = 0.1;
+                        //
+                        // if node_index == 5{
+                        //     for _ in 0..num_frames{
+                        //         matrices.push(
+                        //             Rotation3::face_towards(&Vector3::new(rng.f32()*spread,rng.f32()*spread,rng.f32()*spread), &Vector3::new(0.0,1.0,0.0)).to_homogeneous()
+                        //         );
+                        //     }
+                        // }
+
+                        dbg!(keyframes.len());
+
+                        reader
+                            .read_inputs()
+                            .unwrap()
+                            .zip(keyframes.into_iter())
+                            .for_each(|(frame_time, sampler_output)| {
+                                dbg!(sampler_output.rotation);
+                                dbg!(frame_time);
+                                animation_frames[node_index].add_sample(Keyframe {
+                                    frame_time,
+                                    translation: sampler_output.translation,
+                                    rotation: sampler_output.rotation,
+                                    scale: sampler_output.scale,
+                                });
+                                // dbg!((frame_time, transformation));
+                            })
+                    });
+
+                    // node_global_transforms[root_node.index()] = vulkan_correction_transform * node_global_transforms[root_node.index()];
+
+                    for keyframe_index in 0..num_frames {
+                        let current_frame_time =
+                            (keyframe_index as f32 / num_frames as f32) * animation_end;
+
+                        // let mut node_global_transforms = gltf
+                        //     .nodes()
+                        //     .map(|node| {
+                        //         Matrix4::from(node.transform().matrix())
+                        //     })
+                        //     .collect::<Vec<_>>();
+                        let mut node_global_transforms = gltf
+                            .nodes()
+                            .map(|node| {
+                                animation_frames[node.index()].sample(current_frame_time)
+                                // Matrix4::identity()
+                            })
+                            .collect::<Vec<_>>();
+
+                        // node_global_transforms.iter_mut().enumerate().map(|(node_index, mut transform)| transform = transform * animation_frames[node_index].sample(current_frame_time));
+
+                        dbg!(current_frame_time);
+                        // dbg!(animation_frames[skin.joints().nth(0).unwrap().index()].sample(current_frame_time));
+
+
+                        let nodes = gltf.nodes().collect::<Vec<_>>();
+                        // let mut current_indices: Vec<_> = vec![skin.joints().collect::<Vec<_>>().last().unwrap().index()];
+                        let mut current_indices: Vec<_> = vec![root_node.index()];
+
+                        // node_global_transforms[current_indices[0]] = vulkan_correction_transform * node_global_transforms[current_indices[0]];
+
+                        let mut next_indices = vec![];
+                        loop {
+                            for index in current_indices {
+                                let node = &nodes[index];
+                                println!("{:}", node.name().unwrap());
+                                let matrix = node_global_transforms[node.index()];
+                                node.children().for_each(|child| {
+                                    node_global_transforms[child.index()] =
+                                        matrix * node_global_transforms[child.index()];
+                                });
+
+                                next_indices.extend(nodes[index]
+                                                        .children()
+                                                        .map(|node| node.index()),
+                                );
+                            }
+                            if next_indices.len() > 0 {
+                                current_indices = vec![];
+                                current_indices.append(&mut next_indices);
+                            } else {
+                                break;
+                            }
+                        }
+
+                        let mut bones = vec![];
+                        for (joint_index, joint) in skin.joints().enumerate() {
+                            let new_bone = Bone {
+                                // matrix: mesh_transform.try_inverse().unwrap()
+                                //     * node_global_transforms[joint.index()]
+                                //     * inverse_bind_matrices[joint_index]
+                                //     * vulkan_correction_transform,
+                                // matrix: mesh_transform.try_inverse().unwrap()
+                                //     * node_global_transforms[joint.index()]
+                                //     * vulkan_correction_transform
+                                //     // * (vulkan_correction_transform * inverse_bind_matrices[joint_index].try_inverse().unwrap()).try_inverse().unwrap()
+                                //     * inverse_bind_matrices[joint_index]
+                                matrix: vulkan_correction_transform * (mesh_transform.try_inverse().unwrap()
+                                    * node_global_transforms[joint.index()]
+                                    * inverse_bind_matrices[joint_index])
+                            };
+                            bones.push(new_bone);
+                        }
+                        out_bone_sets.push(bones);
+
                     }
-                    out_bone_sets.push(bones);
                 }
             }
         }
@@ -3055,7 +3224,16 @@ impl VulkanData {
         return (buffer, buffer_memory);
     }
 
-    pub(crate) fn draw_frame(&mut self) {
+    pub(crate) fn draw_frame(&mut self) -> Result<(), DanielError>{
+        if !self.swapchain_created{
+            match self.recreate_swapchain(){
+                Ok(_) => {}
+                Err(_) => {return Err(DanielError::SwapchainNotCreated)}
+            }
+
+
+        }
+
         let fences = [self.in_flight_fence.unwrap()];
         unsafe {
             self.device
@@ -3093,8 +3271,12 @@ impl VulkanData {
                 if e == vk::Result::ERROR_OUT_OF_DATE_KHR || e == vk::Result::SUBOPTIMAL_KHR {
                     unsafe { self.device.as_ref().unwrap().device_wait_idle() }.unwrap();
                     self.cleanup_swapchain();
-                    self.recreate_swapchain();
-                    return;
+                    match self.recreate_swapchain(){
+                        Ok(_) => {return Ok(())}
+                        Err(error) => {
+                            return Err(error);
+                        }
+                    }
                 } else {
                     panic!("acquire_next_image error");
                 }
@@ -3140,10 +3322,12 @@ impl VulkanData {
                 if e == vk::Result::ERROR_OUT_OF_DATE_KHR || e == vk::Result::SUBOPTIMAL_KHR {
                     unsafe { self.device.as_ref().unwrap().device_wait_idle() }.unwrap();
                     self.cleanup_swapchain();
-                    self.recreate_swapchain();
+                    self.recreate_swapchain()?;
                 }
             }
         }
+
+        Ok(())
     }
 
     fn create_swapchain(&mut self) {
@@ -3217,6 +3401,7 @@ impl VulkanData {
             }
             .unwrap(),
         );
+        self.swapchain_created = true;
     }
 
     fn create_swapchain_image_views(&mut self) {
@@ -4006,17 +4191,17 @@ impl VulkanData {
             });
     }
 
-    fn recreate_swapchain(&mut self) {
+
+    pub(crate) fn recreate_swapchain(&mut self)-> Result<(), DanielError> {
         self.get_surface_capabilities();
 
-        while self.surface_capabilities.unwrap().current_extent.height == 0
+        if self.surface_capabilities.unwrap().current_extent.height == 0
             || self.surface_capabilities.unwrap().current_extent.width == 0
         {
-            self.get_surface_capabilities();
             unsafe {
                 self.device.as_ref().unwrap().device_wait_idle().unwrap();
             }
-            std::thread::sleep(Duration::from_millis(100));
+            return Err(DanielError::Minimized)
         }
 
         self.create_color_resources();
@@ -4037,6 +4222,9 @@ impl VulkanData {
         // self.create_descriptor_sets();
         self.create_command_buffers();
         self.update_descriptor_sets();
+
+        self.swapchain_created = true;
+        Ok(())
     }
 
     fn create_color_resources(&mut self) {
@@ -4655,6 +4843,7 @@ impl VulkanData {
                 .unwrap()
                 .destroy_swapchain_khr(Some(self.swapchain.unwrap()), None)
         };
+        self.swapchain_created = false;
     }
 
     pub(crate) fn cleanup(&mut self) {

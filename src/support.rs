@@ -83,10 +83,10 @@ impl Bone {
 pub(crate) const NUM_BONES_PER_BONESET: usize = 256;
 pub(crate) const NUM_BONE_SETS: usize = 256;
 
-
 #[derive(Copy, Clone)]
 #[repr(C)]
-pub(crate) struct BoneSet { //One frame
+pub(crate) struct BoneSet {
+    //One frame
     pub(crate) input_tangent: f32,
     pub(crate) output_tangent: f32,
     pub(crate) _padding1: f32,
@@ -99,23 +99,26 @@ pub(crate) struct BoneSet { //One frame
 pub(crate) struct ShaderStorageBufferObject {
     pub(crate) bone_sets: [BoneSet; NUM_BONE_SETS],
 }
-impl ShaderStorageBufferObject{
-    pub(crate) fn new_boxed() -> Box<Self>{
-
+impl ShaderStorageBufferObject {
+    pub(crate) fn new_boxed() -> Box<Self> {
         //need to do unsafe things because we can't create a array on the heap (afaik)
-        let layout =  std::alloc::Layout::new::<[BoneSet;NUM_BONE_SETS]>();
-        unsafe{
+        let layout = std::alloc::Layout::new::<[BoneSet; NUM_BONE_SETS]>();
+        unsafe {
             let pointer = std::alloc::alloc(layout) as *mut BoneSet;
-            for i in 0..(NUM_BONE_SETS){
-                pointer.offset(i as isize).write(BoneSet{
-                    input_tangent: 0.0,
-                    output_tangent: 0.0,
+            for i in 0..(NUM_BONE_SETS) {
+                pointer.offset(i as isize).write(BoneSet {
+                    input_tangent: 1.0,
+                    output_tangent: 1.0,
                     _padding1: 0.0,
                     _padding2: 0.0,
-                    bones: [Bone::new();NUM_BONES_PER_BONESET]
+                    bones: [Bone::new(); NUM_BONES_PER_BONESET],
                 });
             }
-            Box::new(std::ptr::NonNull::new_unchecked(pointer as *mut Self).as_ref().to_owned())
+            Box::new(
+                std::ptr::NonNull::new_unchecked(pointer as *mut Self)
+                    .as_ref()
+                    .to_owned(),
+            )
         }
     }
 }
@@ -143,7 +146,6 @@ pub(crate) struct PushConstants {
     pub(crate) texture_index: u32,
     pub(crate) bitfield: u32,
     pub(crate) animation_frames: u32,
-
 }
 
 impl Vertex {
@@ -199,7 +201,13 @@ impl Vertex {
             .collect();
     }
 }
-pub(crate) fn map_range_linear(value: f32, from_min: f32, from_max: f32, to_min: f32, to_max: f32) -> f32 {
+pub(crate) fn map_range_linear(
+    value: f32,
+    from_min: f32,
+    from_max: f32,
+    to_min: f32,
+    to_max: f32,
+) -> f32 {
     let result = f32::clamp(
         to_min + ((value - from_min) / (from_max - from_min)) * (to_max - to_min),
         f32::min(to_min, to_max),

@@ -1,5 +1,5 @@
-use crate::Vertex;
 use crate::support::map_range_linear;
+use crate::Vertex;
 use nalgebra::{Vector2, Vector3, Vector4};
 use parry3d_f64::shape::TriMesh;
 use std::convert::TryInto;
@@ -10,8 +10,6 @@ pub(crate) const WORLD_SIZE_Z: usize = 10;
 pub(crate) const WORLD_SIZE_Y: usize = 10;
 
 const SURFACE_LEVEL: f32 = 0.0;
-
-
 
 #[derive(Copy, Clone)]
 struct Voxel {

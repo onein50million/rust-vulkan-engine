@@ -6,6 +6,9 @@ layout(set = 0, binding = 0) uniform samplerCube inImage;
 layout(set = 0, binding = 1, rgba32f) uniform imageCube outImage;
 
 const float PI = 3.14159;
+const mat3 CORRECTION_MATRIX = mat3(1.0000000,  0.0000000,  0.0000000,
+0.0000000,  0.0000000, 1.0000000,
+0.0000000,  -1.0000000,  0.0000000);
 
 void main()
 {
@@ -22,9 +25,9 @@ void main()
     else if (gl_GlobalInvocationID.z == 4)
     { normal = vec3(uv.x, -uv.y, 1.0f); }
     else if (gl_GlobalInvocationID.z == 5)
-    { normal = vec3(uv.x, -uv.y, -1.0f); }
+    { normal = vec3(-uv.x, -uv.y, -1.0f); }
 
-    normal = normalize(normal);
+    normal = CORRECTION_MATRIX * normalize(normal);
 
 
 
