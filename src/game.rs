@@ -13,6 +13,16 @@ use std::option::Option::None;
 use std::time::Instant;
 use winit::window::Window;
 
+
+/*
+Some random ideas:
+
+player has states, ie crouching, aiming, maybe a bitfield-like object?
+
+compile time gltf parsing
+ */
+
+
 mod directions {
     use nalgebra::Vector3;
     use std::f64::consts::FRAC_1_SQRT_2;
@@ -110,7 +120,7 @@ impl Camera {
 }
 
 struct AnimationHandler {
-    frame_start: usize,
+    index: usize,
     previous_frame: usize,
     next_frame: usize,
     frame_count: usize,
@@ -118,9 +128,9 @@ struct AnimationHandler {
     progress: f64,
 }
 impl AnimationHandler {
-    fn new(frame_count: usize, frame_start: usize) -> Self {
+    fn new(index: usize, frame_count: usize) -> Self {
         Self {
-            frame_start,
+            index,
             previous_frame: 0,
             next_frame: 1,
             frame_count,
@@ -136,6 +146,12 @@ impl AnimationHandler {
             self.next_frame = (self.next_frame + 1) % self.frame_count;
         }
     }
+    fn switch_animation(&mut self, vulkan_data: &VulkanData, render_object_index: usize, animation_index: usize){
+        self.previous_frame = 0;
+        self.next_frame = 1;
+        self.frame_count = vulkan_data.objects[render_object_index].get_animation_length(animation_index);
+        self.progress = 0.0
+    }
 }
 
 struct Player {
@@ -145,14 +161,6 @@ struct Player {
 }
 impl Player {
     const HEIGHT: Vector3<f64> = Vector3::new(0.0, 1.7, 0.0);
-    fn process(
-        &mut self,
-        _delta_time: f64,
-        _inputs: &mut Inputs,
-        _world: &World,
-        _world_isometry: &Isometry3<f64>,
-    ) {
-    }
 }
 
 pub(crate) struct Game {
@@ -211,6 +219,7 @@ impl Game {
             &mut vulkan_data,
             mesh,
             vec![],
+            vec![],
             TextureSet::new_empty(),
             false,
         );
@@ -219,26 +228,19 @@ impl Game {
         vulkan_data.objects.push(voxel_render_object);
 
         vulkan_data
-            .load_folder("models/planet/deep_water".parse().unwrap())
-            .0; //Dummy objects to fill offsets
+            .load_folder("models/planet/deep_water".parse().unwrap()); //Dummy objects to fill offsets
         vulkan_data
-            .load_folder("models/planet/shallow_water".parse().unwrap())
-            .0;
+            .load_folder("models/planet/shallow_water".parse().unwrap());
         vulkan_data
-            .load_folder("models/planet/foliage".parse().unwrap())
-            .0;
+            .load_folder("models/planet/foliage".parse().unwrap());
         vulkan_data
-            .load_folder("models/planet/desert".parse().unwrap())
-            .0;
+            .load_folder("models/planet/desert".parse().unwrap());
         vulkan_data
-            .load_folder("models/planet/mountain".parse().unwrap())
-            .0;
+            .load_folder("models/planet/mountain".parse().unwrap());
         vulkan_data
-            .load_folder("models/planet/snow".parse().unwrap())
-            .0;
+            .load_folder("models/planet/snow".parse().unwrap());
 
-        let player_frame_start = vulkan_data.current_boneset;
-        let (render_object_index, frame_count) =
+        let render_object_index =
             vulkan_data.load_folder("models/person".parse().unwrap());
         let player = Player {
             velocity: Vector3::zeros(),
@@ -248,31 +250,22 @@ impl Game {
         let player_index = objects.len();
         objects.push(GameObject::new(
             render_object_index,
-            Some(AnimationHandler::new(frame_count, player_frame_start)),
+            Some(AnimationHandler::new(1, vulkan_data.objects[render_object_index].get_animation_length(1))),
             ObjectType::Player(player)
         ));
         objects[player_index].position = Vector3::new(0.0, -2.0 * (WORLD_SIZE_Y as f64), 0.0);
 
         objects.push(GameObject::new(vulkan_data
-                                         .load_folder("models/test_ball".parse().unwrap())
-                                         .0, None, ObjectType::None));
+                                         .load_folder("models/test_ball".parse().unwrap()), None, ObjectType::None));
 
-        let frame_start = vulkan_data.current_boneset;
-        let (render_index, frame_count) = vulkan_data.load_folder("models/cube".parse().unwrap());
-        objects.push(GameObject::new(render_index, Some(AnimationHandler::new(frame_count, frame_start)), ObjectType::None));
+        let render_index = vulkan_data.load_folder("models/cube".parse().unwrap());
 
-        let frame_start = vulkan_data.current_boneset;
-        let (render_index, frame_count) = vulkan_data.load_folder("models/shotgun".parse().unwrap());
+        objects.push(GameObject::new(render_index, Some(AnimationHandler::new(0, vulkan_data.objects[render_index].get_animation_length(0) as usize)), ObjectType::None));
+
+        let render_index = vulkan_data.load_folder("models/shotgun".parse().unwrap());
         objects.push(GameObject::new(
             render_index,
-            Some(AnimationHandler{
-                frame_start,
-                previous_frame: 0,
-                next_frame: 0,
-                frame_count,
-                frame_rate: 0.0,
-                progress: 0.0
-            }),
+            None,
             ObjectType::Grip(true)
         ));
 
@@ -394,6 +387,7 @@ impl Game {
         self.vulkan_data.draw_frame()
     }
 
+
     fn update_renderer(&mut self) {
         let clip = Matrix4::<f64>::identity();
 
@@ -417,8 +411,8 @@ impl Game {
                     const HAND_POSE_INDEX:usize = 17;
                     if is_gripped{
                         let player = &self.objects[self.player_index];
-                        let previous =  self.vulkan_data.storage_buffer_object.bone_sets[player.animation_handler.as_ref().unwrap().frame_start+player.animation_handler.as_ref().unwrap().previous_frame].bones[HAND_POSE_INDEX].matrix;
-                        let next =  self.vulkan_data.storage_buffer_object.bone_sets[player.animation_handler.as_ref().unwrap().frame_start+player.animation_handler.as_ref().unwrap().next_frame].bones[HAND_POSE_INDEX].matrix;
+                        let previous =  self.vulkan_data.storage_buffer_object.bone_sets[player.animation_handler.as_ref().unwrap().index +player.animation_handler.as_ref().unwrap().previous_frame].bones[HAND_POSE_INDEX].matrix;
+                        let next =  self.vulkan_data.storage_buffer_object.bone_sets[player.animation_handler.as_ref().unwrap().index +player.animation_handler.as_ref().unwrap().next_frame].bones[HAND_POSE_INDEX].matrix;
                         let progress = self.objects[self.player_index].animation_handler.as_ref().unwrap().progress;
                         let matrix = previous.cast() * (1.0 - progress) + next.cast() * progress;
                         let matrix = (Translation3::from(player.position).to_homogeneous() * player.rotation.to_homogeneous()) * matrix;
@@ -434,11 +428,7 @@ impl Game {
             match &self.objects[i].animation_handler {
                 None => {}
                 Some(animation_handler) => {
-                    render_object.previous_frame = animation_handler.frame_start as u8
-                        + animation_handler.previous_frame as u8;
-                    render_object.next_frame =
-                        animation_handler.frame_start as u8 + animation_handler.next_frame as u8;
-                    render_object.animation_progress = animation_handler.progress;
+                    render_object.set_animation(animation_handler.index, animation_handler.progress, animation_handler.previous_frame, animation_handler.next_frame)
                 }
             }
         }

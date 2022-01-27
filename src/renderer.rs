@@ -724,6 +724,11 @@ impl TextureSet {
     }
 }
 
+pub(crate) struct AnimationObject{
+    pub(crate) frame_start: usize,
+    pub(crate) frame_count: usize
+}
+
 pub(crate) struct RenderObject {
     pub(crate) vertex_start: u32,
     pub(crate) vertex_count: u32,
@@ -735,9 +740,10 @@ pub(crate) struct RenderObject {
     pub(crate) is_globe: bool,
     pub(crate) is_viewmodel: bool,
     pub(crate) model: Matrix4<f32>,
-    pub(crate) previous_frame: u8,
-    pub(crate) next_frame: u8,
-    pub(crate) animation_progress: f64,
+    pub(crate) animations: Vec<AnimationObject>,
+    previous_frame: usize,
+    next_frame: usize,
+    animation_progress: f64,
 }
 
 impl RenderObject {
@@ -745,6 +751,7 @@ impl RenderObject {
         vulkan_data: &mut VulkanData,
         vertices: Vec<Vertex>,
         indices: Vec<u32>,
+        animations: Vec<AnimationObject>,
         texture: TextureSet,
         is_cubemap: bool,
     ) -> Self {
@@ -770,7 +777,13 @@ impl RenderObject {
             }
         }
 
-        let object = RenderObject {
+        let (previous_frame, next_frame) = if animations.len() > 0{
+            (animations[0].frame_start, animations[0].frame_start + 1)
+        }else{
+            (0,0)
+        };
+
+        let mut object = RenderObject {
             vertex_start,
             vertex_count,
             index_start,
@@ -785,11 +798,23 @@ impl RenderObject {
             is_viewmodel: false,
             is_globe: false,
             model: Matrix4::identity(),
-            previous_frame: 0,
-            next_frame: 0,
+            animations,
+            previous_frame,
+            next_frame,
             animation_progress: 0.0,
         };
+        if object.animations.len() > 0{
+            object.set_animation(0,0.0,0,1);
+        }
         return object;
+    }
+    pub(crate) fn set_animation(&mut self,animation_index: usize, progress: f64, previous_frame: usize, next_frame: usize){
+        self.previous_frame = self.animations[animation_index].frame_start + previous_frame;
+        self.next_frame = self.animations[animation_index].frame_start + next_frame;
+        self.animation_progress = progress;
+    }
+    pub(crate) fn get_animation_length(&self,animation_index: usize) -> usize{
+        self.animations[animation_index].frame_count
     }
 }
 
@@ -823,8 +848,8 @@ impl Drawable for RenderObject {
             } else {
                 0
             };
-            let previous_frame = self.previous_frame.to_be_bytes();
-            let next_frame = self.next_frame.to_be_bytes();
+            let previous_frame = (self.previous_frame as u8).to_be_bytes();
+            let next_frame = (self.next_frame as u8).to_be_bytes();
 
             let animation_progress =
                 ((self.animation_progress * u16::MAX as f64) as u16).to_be_bytes();
@@ -907,7 +932,7 @@ impl Cubemap {
         };
 
         let cubemap = Cubemap {
-            render_object: RenderObject::new(vulkan_data, vertices, indices, texture, true),
+            render_object: RenderObject::new(vulkan_data, vertices, indices,vec![], texture, true),
         };
 
         return cubemap;
@@ -1328,6 +1353,7 @@ impl VulkanData {
                 self,
                 FULLSCREEN_QUAD_VERTICES.to_vec(),
                 QUAD_INDICES.to_vec(),
+                vec![],
                 TextureSet {
                     albedo: Some(CombinedImage {
                         image: self.compute_images[0],
@@ -1616,7 +1642,7 @@ impl VulkanData {
         }
     }
 
-    pub(crate) fn load_folder(&mut self, folder: PathBuf) -> (usize, usize) {
+    pub(crate) fn load_folder(&mut self, folder: PathBuf) -> usize {
         let albedo_path = folder.join("albedo.png");
         let albedo = CombinedImage::new(
             self,
@@ -1649,37 +1675,44 @@ impl VulkanData {
             normal,
             roughness_metalness_ao: rough_metal_ao,
         };
-        let (vertices, indices, bone_sets) = if folder.join("model.glb").is_file() {
+        let (vertices, indices, animations) = if folder.join("model.glb").is_file() {
             Self::load_gltf_model(folder.join("model.glb"))
         } else {
             (vec![], vec![], vec![])
         };
-        let render_object = RenderObject::new(self, vertices, indices, texture, false);
-        let output = self.objects.len();
-        self.objects.push(render_object);
-        let num_bone_sets = bone_sets.len();
-        if num_bone_sets > 0 {
-            for (bone_set_index, bones) in bone_sets.into_iter().enumerate() {
+        let mut out_animations = vec![];
+        for animation in animations {
+            let num_bone_sets = animation.len();
+            let frame_start = self.current_boneset;
+            for (bone_set_index, bones) in animation.into_iter().enumerate() {
                 for (bone_index, bone) in bones.into_iter().enumerate() {
                     self.storage_buffer_object.bone_sets[self.current_boneset + bone_set_index]
                         .bones[bone_index] = bone;
                 }
             }
             self.current_boneset += num_bone_sets;
+            out_animations.push(AnimationObject{
+                frame_start,
+                frame_count: num_bone_sets
+            })
         }
-        return (output, num_bone_sets);
+        let render_object = RenderObject::new(self, vertices, indices, out_animations, texture, false);
+        let output = self.objects.len();
+        self.objects.push(render_object);
+
+        return output;
     }
 
     pub(crate) fn load_gltf_model(
         path: std::path::PathBuf,
-    ) -> (Vec<Vertex>, Vec<u32>, Vec<Vec<Bone>>) {
+    ) -> (Vec<Vertex>, Vec<u32>, Vec<Vec<Vec<Bone>>>) {
         println!("loading {:}", path.to_str().unwrap());
         let (gltf, buffers, _) = gltf::import(path).unwrap();
         // let materials = material_result.unwrap();
 
         let mut out_vertices = vec![];
         let mut out_indices = vec![];
-        let mut out_bone_sets = vec![];
+        let mut out_animations = vec![];
         // let mut positions = vec![];
 
         let root_node = gltf.scenes().nth(0).unwrap().nodes().nth(0).unwrap();
@@ -1817,7 +1850,8 @@ impl VulkanData {
                     .map(|matrix| Matrix4::from(matrix))
                     .collect();
 
-                for animation in gltf.animations(){
+                for (animation_index, animation) in gltf.animations().enumerate(){
+                    let mut bone_sets = vec![];
                     let animation_end = {
                         animation
                             .channels()
@@ -1949,14 +1983,15 @@ impl VulkanData {
                             };
                             bones.push(new_bone);
                         }
-                        out_bone_sets.push(bones);
+                        bone_sets.push(bones);
 
                     }
+                    out_animations.push(bone_sets)
                 }
             }
         }
 
-        return (out_vertices, out_indices, out_bone_sets);
+        return (out_vertices, out_indices, out_animations);
     }
 
     fn create_depth_resources(&mut self) {
