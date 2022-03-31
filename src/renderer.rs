@@ -32,7 +32,7 @@ const MSAA_ENABLED: bool = false;
 const UI_BUFFER_LENGTH: usize = 8192;
 
 #[derive(Debug, Copy, Clone)]
-pub(crate) enum DanielError {
+pub enum DanielError {
     Minimized,
     SwapchainNotCreated
 }
@@ -240,7 +240,7 @@ struct CombinedDescriptor {
     descriptor_info: DescriptorInfoData,
 }
 
-pub(crate) struct UiData {
+pub struct UiData {
     vertex_buffer: Option<vk::Buffer>,
     vertex_allocation: Option<vk_mem_erupt::Allocation>,
     vertex_allocation_info: Option<vk_mem_erupt::AllocationInfo>,
@@ -257,7 +257,7 @@ pub(crate) struct UiData {
     image: Option<CombinedImage>,
 }
 impl UiData {
-    pub(crate) fn update_buffers(&mut self, vertices: &[egui::epaint::Vertex], indices: &[u32]) {
+    pub fn update_buffers(&mut self, vertices: &[egui::epaint::Vertex], indices: &[u32]) {
         assert!(vertices.len() < UI_BUFFER_LENGTH);
         assert!(indices.len() < UI_BUFFER_LENGTH);
 
@@ -729,7 +729,7 @@ pub(crate) struct AnimationObject{
     pub(crate) frame_count: usize
 }
 
-pub(crate) struct RenderObject {
+pub struct RenderObject {
     pub(crate) vertex_start: u32,
     pub(crate) vertex_count: u32,
     pub(crate) index_start: u32,
@@ -739,7 +739,7 @@ pub(crate) struct RenderObject {
     is_highlighted: bool,
     pub(crate) is_globe: bool,
     pub(crate) is_viewmodel: bool,
-    pub(crate) model: Matrix4<f32>,
+    pub model: Matrix4<f32>,
     pub(crate) animations: Vec<AnimationObject>,
     previous_frame: usize,
     next_frame: usize,
@@ -808,7 +808,7 @@ impl RenderObject {
         }
         return object;
     }
-    pub(crate) fn set_animation(&mut self,animation_index: usize, progress: f64, previous_frame: usize, next_frame: usize){
+    pub fn set_animation(&mut self, animation_index: usize, progress: f64, previous_frame: usize, next_frame: usize){
         self.previous_frame = self.animations[animation_index].frame_start + previous_frame;
         self.next_frame = self.animations[animation_index].frame_start + next_frame;
         self.animation_progress = progress;
@@ -956,11 +956,11 @@ impl Drawable for Cubemap {
     }
 }
 
-pub(crate) struct VulkanData {
+pub struct VulkanData {
     rng: fastrand::Rng,
     instance: Option<InstanceLoader>,
     entry: Option<EntryLoader>,
-    pub(crate) device: Option<DeviceLoader>,
+    pub device: Option<DeviceLoader>,
     physical_device: Option<vk::PhysicalDevice>,
     allocator: Option<vk_mem_erupt::Allocator>,
     main_queue: Option<vk::Queue>,
@@ -991,7 +991,7 @@ pub(crate) struct VulkanData {
     in_flight_fence: Option<vk::Fence>,
     vertex_buffer: Option<vk::Buffer>,
     vertex_buffer_memory: Option<vk::DeviceMemory>,
-    pub(crate) ui_data: UiData,
+    pub ui_data: UiData,
     index_buffer: Option<vk::Buffer>,
     index_buffer_memory: Option<vk::DeviceMemory>,
     mip_levels: u32,
@@ -1009,10 +1009,10 @@ pub(crate) struct VulkanData {
     uniform_buffer_pointers: Vec<*mut u8>,
     uniform_buffers: Vec<vk::Buffer>,
     uniform_buffer_allocations: Vec<vk_mem_erupt::Allocation>,
-    pub(crate) uniform_buffer_object: UniformBufferObject,
+    pub uniform_buffer_object: UniformBufferObject,
     storage_buffer: Option<vk::Buffer>,
     storage_buffer_allocation: Option<vk_mem_erupt::Allocation>,
-    pub(crate) storage_buffer_object: Box<ShaderStorageBufferObject>,
+    pub storage_buffer_object: Box<ShaderStorageBufferObject>,
     pub(crate) current_boneset: usize,
     msaa_samples: vk::SampleCountFlagBits,
     descriptor_pool: Option<vk::DescriptorPool>,
@@ -1022,7 +1022,7 @@ pub(crate) struct VulkanData {
     compute_descriptor_set_layout: Option<vk::DescriptorSetLayout>,
     compute_descriptor_sets: Option<SmallVec<vk::DescriptorSet>>,
     last_frame_instant: std::time::Instant,
-    pub(crate) objects: Vec<RenderObject>,
+    pub objects: Vec<RenderObject>,
     textures: Vec<TextureSet>,
     cubemaps: Vec<CombinedImage>,
     irradiance_maps: Vec<CombinedImage>,
@@ -1041,7 +1041,7 @@ fn get_random_vector(rng: &fastrand::Rng, length: usize) -> Vec<f32> {
 }
 
 impl VulkanData {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         let mut lights = [Light::new(); NUM_LIGHTS];
 
         for i in 0..NUM_LIGHTS {
@@ -1159,7 +1159,7 @@ impl VulkanData {
             current_boneset: 0,
         };
     }
-    pub(crate) fn init_vulkan(&mut self, window: &Window) {
+    pub fn init_vulkan(&mut self, window: &Window) {
         let mut validation_layer_names = vec![];
 
         #[cfg(debug_assertions)]
@@ -2565,7 +2565,7 @@ impl VulkanData {
         }
     }
 
-    pub(crate) fn update_ui_texture(&mut self, texture: Arc<egui::epaint::Texture>) {
+    pub fn update_ui_texture(&mut self, texture: Arc<egui::epaint::Texture>) {
         match &self.ui_data.image {
             None => {}
             Some(image) => {
@@ -3170,7 +3170,7 @@ impl VulkanData {
         return (buffer, buffer_memory);
     }
 
-    pub(crate) fn draw_frame(&mut self) -> Result<(), DanielError>{
+    pub fn draw_frame(&mut self) -> Result<(), DanielError>{
         if !self.swapchain_created{
             match self.recreate_swapchain(){
                 Ok(_) => {}
@@ -4281,7 +4281,7 @@ impl VulkanData {
     }
 
     fn create_cubemap_resources(&mut self) {
-        let cubemap_folder = PathBuf::from("cubemap_forest2");
+        let cubemap_folder = PathBuf::from("cubemap_forest");
 
         let base_cubemap = CombinedImage::new(
             self,
@@ -4763,7 +4763,7 @@ impl VulkanData {
         self.swapchain_created = false;
     }
 
-    pub(crate) fn cleanup(&mut self) {
+    pub fn cleanup(&mut self) {
         unsafe { self.device.as_ref().unwrap().device_wait_idle() }.unwrap();
 
         self.cleanup_swapchain();
@@ -4848,7 +4848,7 @@ impl VulkanData {
         self.index_buffer_memory = None;
     }
 
-    pub(crate) fn get_projection(&self, zoom: f64) -> nalgebra::Orthographic3<f64> {
+    pub fn get_projection(&self, zoom: f64) -> nalgebra::Orthographic3<f64> {
         let surface_width = self.surface_capabilities.unwrap().current_extent.width as f64;
         let surface_height = self.surface_capabilities.unwrap().current_extent.height as f64;
         let aspect_ratio = surface_width / surface_height;
@@ -4870,7 +4870,7 @@ impl VulkanData {
     pub(crate) fn get_cubemap_projection(&self, zoom: f64) -> Orthographic3<f64> {
         return self.get_projection(zoom);
     }
-    pub(crate) fn transfer_data_to_gpu(&mut self) {
+    pub fn transfer_data_to_gpu(&mut self) {
         let random: [f32; NUM_RANDOM] =
             get_random_vector(&self.rng, NUM_RANDOM).try_into().unwrap();
         for i in 0..NUM_RANDOM {

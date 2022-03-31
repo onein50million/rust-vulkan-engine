@@ -1,7 +1,8 @@
 use crate::support::map_range_linear;
-use crate::Vertex;
+use crate::support::Vertex;
 use nalgebra::{Vector2, Vector3, Vector4};
 use parry3d_f64::shape::TriMesh;
+use serde::{Serialize, Deserialize};
 
 
 
@@ -11,8 +12,8 @@ pub(crate) const WORLD_SIZE_Y: usize = 10;
 
 const SURFACE_LEVEL: f32 = 0.0;
 
-#[derive(Copy, Clone)]
-struct Voxel {
+#[derive(Serialize, Deserialize, Copy, Clone, Debug)]
+pub(crate) struct Voxel {
     strength: f32,
 }
 
@@ -31,7 +32,9 @@ impl Into<u8> for Cube {
     }
 }
 
-pub(crate) struct World {
+
+
+pub struct World {
     voxels: Vec<Voxel>,
     pub(crate) collision: Option<TriMesh>,
 }
@@ -247,9 +250,6 @@ impl World {
                     normal.try_normalize(0.1).unwrap_or(Vector3::zeros())
             }
         }
-
-
-
         return output;
     }
 }

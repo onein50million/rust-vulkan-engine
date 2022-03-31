@@ -11,8 +11,10 @@ use std::mem::size_of;
 use std::option::Option::None;
 
 use std::time::Instant;
+use slotmap::{new_key_type, SlotMap};
 use winit::window::Window;
 
+use bincode::{Decode, Encode};
 
 /*
 Some random ideas:
@@ -20,6 +22,12 @@ Some random ideas:
 player has states, ie crouching, aiming, maybe a bitfield-like object?
 
 compile time gltf parsing
+
+
+Game object types:
+Server object: calculated purely on server, client just copies data from server
+Client predicted: Uses client side prediction to reduce latency
+Client only (Animations, particles)
  */
 
 
@@ -43,406 +51,273 @@ mod directions {
         Vector3::new(FRAC_1_SQRT_2, 0.0, -FRAC_1_SQRT_2);
 }
 
-enum ObjectType {
-    None,
-    Grip(bool),
-    Player(Player),
+new_key_type!{
+    pub struct GameObjectKey;
 }
 
-pub(crate) struct GameObject {
-    position: Vector3<f64>,
-    rotation: UnitQuaternion<f64>,
-    render_object_index: usize,
-    animation_handler: Option<AnimationHandler>,
-    object_type: ObjectType
-}
-impl GameObject {
-    fn new(render_object_index: usize, animation_handler: Option<AnimationHandler>, object_type: ObjectType) -> Self {
-        return Self {
-            position: Vector3::new(0.0, 0.0, 0.0),
-            rotation: UnitQuaternion::from_axis_angle(&Vector3::z_axis(), 0.0),
-            render_object_index,
-            animation_handler,
-            object_type
-        };
+
+pub(crate) mod server{
+    use std::collections::hash_map::ValuesMut;
+    use std::convert::TryInto;
+    use std::net::SocketAddr;
+    use std::time::Instant;
+    use fastrand::f64;
+    use nalgebra::{Isometry3, Point3, Translation3, UnitQuaternion, Vector3};
+    use parry3d_f64::query::contact;
+    use parry3d_f64::shape::{Capsule, TriMesh};
+    use slotmap::SlotMap;
+    use crate::game::{directions, GameObjectKey};
+    use crate::marching_cubes::{World, WORLD_SIZE_Y};
+    use crate::support::Inputs;
+
+    pub enum ObjectType {
+        None,
+        Grip(bool),
+        Player(Player),
     }
-
-}
-
-pub(crate) struct Inputs {
-    pub(crate) up: f64,
-    pub(crate) down: f64,
-    pub(crate) left: f64,
-    pub(crate) right: f64,
-    pub(crate) map_mode: u8,
-    pub(crate) zoom: f64,
-    pub(crate) exposure: f64,
-    pub(crate) angle: f64,
-    pub(crate) panning: bool,
-    pub(crate) left_click: bool,
-}
-impl Inputs {
-    pub(crate) fn new() -> Self {
-        return Inputs {
-            left: 0.0,
-            right: 0.0,
-            up: 0.0,
-            down: 0.0,
-            map_mode: 0,
-            zoom: 1.0,
-            exposure: 1.0,
-            angle: 0.0,
-            panning: false,
-            left_click: false,
-        };
+    pub struct GameObject {
+        pub position: Vector3<f64>,
+        pub rotation: UnitQuaternion<f64>,
+        pub object_type: ObjectType
     }
-}
-struct Camera {
-    position: Vector3<f64>,
-    rotation: UnitQuaternion<f64>,
-}
-impl Camera {
-    fn new() -> Self {
-        Self {
-            position: Vector3::zeros(),
-            rotation: UnitQuaternion::face_towards(
-                &Vector3::new(1.0, 1.0, 1.0),
-                &Vector3::new(0.0, -1.0, 0.0),
-            ),
+    impl GameObject {
+        pub fn new(object_type: ObjectType) -> Self {
+            return Self {
+                position: Vector3::new(0.0, 0.0, 0.0),
+                rotation: UnitQuaternion::from_axis_angle(&Vector3::z_axis(), 0.0),
+                object_type
+            };
         }
+
     }
-    fn get_rotation(&self) -> UnitQuaternion<f64> {
-        return self.rotation;
-    }
-    fn get_position(&self) -> Vector3<f64> {
-        return self.position;
-    }
-}
-
-struct AnimationHandler {
-    index: usize,
-    previous_frame: usize,
-    next_frame: usize,
-    frame_count: usize,
-    frame_rate: f64,
-    progress: f64,
-}
-impl AnimationHandler {
-    fn new(index: usize, frame_count: usize) -> Self {
-        Self {
-            index,
-            previous_frame: 0,
-            next_frame: 1,
-            frame_count,
-            frame_rate: 60.0,
-            progress: 0.0,
-        }
-    }
-    fn process(&mut self, delta_time: f64) {
-        self.progress += delta_time * self.frame_rate;
-        if self.progress > 1.0 {
-            self.progress = 0.0;
-            self.previous_frame = (self.previous_frame + 1) % self.frame_count;
-            self.next_frame = (self.next_frame + 1) % self.frame_count;
-        }
-    }
-    fn switch_animation(&mut self, vulkan_data: &VulkanData, render_object_index: usize, animation_index: usize){
-        self.previous_frame = 0;
-        self.next_frame = 1;
-        self.frame_count = vulkan_data.objects[render_object_index].get_animation_length(animation_index);
-        self.progress = 0.0
-    }
-}
-
-struct Player {
-    velocity: Vector3<f64>,
-    last_rotation: UnitQuaternion<f64>,
-    angle: f64,
-}
-impl Player {
-    const HEIGHT: Vector3<f64> = Vector3::new(0.0, 1.7, 0.0);
-}
-
-pub(crate) struct Game {
-    game_start: Instant,
-    objects: Vec<GameObject>,
-    pub(crate) mouse_position: Vector2<f64>,
-    last_mouse_position: Vector2<f64>,
-    pub(crate) inputs: Inputs,
-    pub(crate) focused: bool,
-    last_frame_instant: Instant,
-    pub(crate) vulkan_data: VulkanData,
-    camera: Camera,
-    player_index: usize,
-    world: World,
-    world_index: usize,
-}
-
-impl Game {
-    pub(crate) fn new(window: &Window) -> Self {
-        let mut objects = vec![];
-
-        let mut world = World::new_random();
-
-        dbg!(size_of::<VulkanData>());
-
-        let mut vulkan_data = VulkanData::new();
-        println!("Vulkan Data created");
-        vulkan_data.init_vulkan(&window);
-
-        println!("Vulkan Data initialized");
-
-        let world_index = objects.len();
-        let mut world_object = GameObject::new(vulkan_data.objects.len(), None, ObjectType::None);
-
-        world_object.position =
-            Vector3::new(WORLD_SIZE_X as f64 / -2.0, 0.0, WORLD_SIZE_Z as f64 / -2.0);
-
-        objects.push(world_object);
-        let mesh = world.generate_mesh();
-        world.collision = Some(TriMesh::new(
-            mesh.iter()
-                .map(|vector| Point3::from(vector.position).cast())
-                .collect(),
-            (0..mesh.len())
-                .step_by(3)
-                .map(|index| {
-                    (index..(index + 3))
-                        .map(|index| index as u32)
-                        .collect::<Vec<_>>()
-                        .try_into()
-                        .unwrap()
-                })
-                .collect(),
-        ));
-        let mut voxel_render_object = RenderObject::new(
-            &mut vulkan_data,
-            mesh,
-            vec![],
-            vec![],
-            TextureSet::new_empty(),
-            false,
-        );
-        voxel_render_object.is_globe = true;
-
-        vulkan_data.objects.push(voxel_render_object);
-
-        vulkan_data
-            .load_folder("models/planet/deep_water".parse().unwrap()); //Dummy objects to fill offsets
-        vulkan_data
-            .load_folder("models/planet/shallow_water".parse().unwrap());
-        vulkan_data
-            .load_folder("models/planet/foliage".parse().unwrap());
-        vulkan_data
-            .load_folder("models/planet/desert".parse().unwrap());
-        vulkan_data
-            .load_folder("models/planet/mountain".parse().unwrap());
-        vulkan_data
-            .load_folder("models/planet/snow".parse().unwrap());
-
-        let render_object_index =
-            vulkan_data.load_folder("models/person".parse().unwrap());
-        let player = Player {
-            velocity: Vector3::zeros(),
-            last_rotation: UnitQuaternion::identity(),
-            angle: 0.0,
-        };
-        let player_index = objects.len();
-        objects.push(GameObject::new(
-            render_object_index,
-            Some(AnimationHandler::new(1, vulkan_data.objects[render_object_index].get_animation_length(1))),
-            ObjectType::Player(player)
-        ));
-        objects[player_index].position = Vector3::new(0.0, -2.0 * (WORLD_SIZE_Y as f64), 0.0);
-
-        objects.push(GameObject::new(vulkan_data
-                                         .load_folder("models/test_ball".parse().unwrap()), None, ObjectType::None));
-
-        let render_index = vulkan_data.load_folder("models/cube".parse().unwrap());
-
-        objects.push(GameObject::new(render_index, Some(AnimationHandler::new(0, vulkan_data.objects[render_index].get_animation_length(0) as usize)), ObjectType::None));
-
-        let render_index = vulkan_data.load_folder("models/shotgun".parse().unwrap());
-        objects.push(GameObject::new(
-            render_index,
-            None,
-            ObjectType::Grip(true)
-        ));
-
-
-        vulkan_data.update_vertex_and_index_buffers();
-
-        let game = Game {
-            game_start: std::time::Instant::now(),
-            objects,
-            mouse_position: Vector2::new(0.0, 0.0),
-            last_mouse_position: Vector2::new(0.0, 0.0),
-            inputs: Inputs::new(),
-            focused: false,
-            last_frame_instant: Instant::now(),
-            vulkan_data,
-            camera: Camera::new(),
-            player_index,
-            world,
-            world_index,
-        };
-        return game;
+    struct Game {
+        game_start: Instant,
+        game_objects: SlotMap<GameObjectKey, GameObject>,
+        last_frame_instant: Instant,
+        world: World,
     }
 
-    pub(crate) fn process(&mut self) -> Result<(), DanielError> {
-        let delta_time = self.last_frame_instant.elapsed().as_secs_f64();
-        self.last_frame_instant = std::time::Instant::now();
-        let _delta_mouse = self.last_mouse_position - self.mouse_position;
-        self.last_mouse_position = self.mouse_position;
+    pub struct Player {
+        velocity: Vector3<f64>,
+        last_rotation: UnitQuaternion<f64>,
+        inputs: Inputs
+    }
+    impl Player{
+        fn process(&mut self, delta_time: f64, world_isometry: Isometry3<f64>, world: &World, position: &mut Vector3<f64>, rotation: &mut UnitQuaternion<f64>){
 
-        let world_isometry = Isometry3::from_parts(
-            Translation3::from(self.objects[self.world_index].position),
-            self.objects[self.world_index].rotation,
-        );
-
-
-        for i in 0..self.objects.len() {
-            let mut position = self.objects[i].position;
-            let mut rotation = self.objects[i].rotation;
-            let mut animation_change = delta_time;
-            match self.objects[i].object_type.borrow_mut(){
-                ObjectType::None => {}
-                ObjectType::Grip(_is_gripped) => {}
-                ObjectType::Player(player) =>{
-                    let friction = Vector3::new(10.0, 0.1, 10.0);
-                    let acceleration = 100.0;
-                    if self.inputs.left_click {
-                        position.y = -2.0 * (WORLD_SIZE_Y as f64);
-                        player.velocity.y = 0.0;
-                        self.inputs.left_click = false;
-                    }
-
-                    player.velocity += (self.inputs.up * directions::ISOMETRIC_UP
-                        + self.inputs.down * directions::ISOMETRIC_DOWN
-                        + self.inputs.left * directions::ISOMETRIC_LEFT
-                        + self.inputs.right * directions::ISOMETRIC_RIGHT)
-                        .try_normalize(0.1)
-                        .unwrap_or(Vector3::zeros())
-                        * acceleration
-                        * delta_time;
-
-                    rotation = if player.velocity.magnitude() > 0.1 {
-                        UnitQuaternion::face_towards(&player.velocity, &Vector3::new(0.0, 1.0, 0.0))
-                    } else {
-                        player.last_rotation
-                    };
-
-                    player.velocity -= player.velocity.component_mul(&friction) * delta_time.min(1.0);
-
-                    position += player.velocity * delta_time;
-
-                    let player_capsule = Capsule::new(
-                        Point3::new(0.0, 0.0, 0.0),
-                        Point3::new(0.0, -Player::HEIGHT.y, 0.0),
-                        0.5,
-                    );
-
-                    let player_isometry =
-                        Isometry3::from_parts(Translation3::from(position), rotation);
-
-                    let contact_result = contact(
-                        &world_isometry,
-                        self.world.collision.as_ref().unwrap(),
-                        &player_isometry,
-                        &player_capsule,
-                        10.0,
-                    )
-                        .unwrap();
-
-                    if contact_result.is_none() || contact_result.unwrap().dist > 0.1 {
-                        player.velocity.y += 9.8 * delta_time
-                    } else {
-                        player.velocity.y = 0.0;
-                        position.y = contact_result.unwrap().point1.y;
-                    }
-                    animation_change = if player.velocity.magnitude() > 0.1{
-                        player.last_rotation = rotation;
-                        delta_time * player.velocity.magnitude().clamp(0.0,1.0)
-                    }else{
-                        0.0
-                    }
-
-                }
+            let friction = Vector3::new(10.0, 0.1, 10.0);
+            let acceleration = 100.0;
+            if self.inputs.left_click {
+                position.y = -2.0 * (WORLD_SIZE_Y as f64);
+                self.velocity.y = 0.0;
+                self.inputs.left_click = false;
             }
-            self.objects[i].position = position;
-            self.objects[i].rotation = rotation;
-            match self.objects[i].animation_handler.as_mut() {
-                None => {}
-                Some(animation_handler) => animation_handler.process(animation_change),
+
+            self.velocity += (self.inputs.up * directions::ISOMETRIC_UP
+                + self.inputs.down * directions::ISOMETRIC_DOWN
+                + self.inputs.left * directions::ISOMETRIC_LEFT
+                + self.inputs.right * directions::ISOMETRIC_RIGHT)
+                .try_normalize(0.1)
+                .unwrap_or(Vector3::zeros())
+                * acceleration
+                * delta_time;
+
+            *rotation = if self.velocity.magnitude() > 0.1 {
+                UnitQuaternion::face_towards(&self.velocity, &Vector3::new(0.0, 1.0, 0.0))
+            } else {
+                self.last_rotation
+            };
+
+            self.velocity -= self.velocity.component_mul(&friction) * delta_time.min(1.0);
+
+            *position += self.velocity * delta_time;
+
+            let player_capsule = Capsule::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.0, -Player::HEIGHT.y, 0.0),
+                0.5,
+            );
+
+            let player_isometry =
+                Isometry3::from_parts(Translation3::from(*position), *rotation);
+
+            let contact_result = contact(
+                &world_isometry,
+                world.collision.as_ref().unwrap(),
+                &player_isometry,
+                &player_capsule,
+                10.0,
+            )
+                .unwrap();
+
+            if contact_result.is_none() || contact_result.unwrap().dist > 0.1 {
+                self.velocity.y += 9.8 * delta_time
+            } else {
+                self.velocity.y = 0.0;
+                position.y = contact_result.unwrap().point1.y;
+            }
+        }
+    }
+    impl Player {
+        const HEIGHT: Vector3<f64> = Vector3::new(0.0, 1.7, 0.0);
+    }
+
+    impl Game {
+        pub fn new() -> Self {
+            let mut world = World::new_random();
+
+            let game = Self{
+                game_start: Instant::now(),
+                game_objects: SlotMap::with_key(),
+                last_frame_instant: Instant::now(),
+                world,
+            };
+            game
+        }
+
+        pub fn process(&mut self){
+            let delta_time = self.last_frame_instant.elapsed().as_secs_f64();
+            self.last_frame_instant = std::time::Instant::now();
+
+
+            for object in self.game_objects.values_mut(){
+                match &mut object.object_type{
+                    ObjectType::None => {}
+                    ObjectType::Grip(_) => {}
+                    ObjectType::Player(player) => {player.process(delta_time, Isometry3::identity(),&self.world, &mut object.position, &mut object.rotation)
+                    }
+                }
             }
 
         }
 
+        // pub fn add_player(&mut self){
+        //     self.game_objects.insert(GameObject::new(ObjectType::Player(Player{
+        //         last_rotation: UnitQuaternion::identity(),
+        //         velocity: Vector3::zeros(),
+        //     })))
+        // }
 
-        self.camera.position =
-            self.objects[self.player_index].position - Player::HEIGHT*0.5 + Vector3::new(1.0, 1.0, 1.0).normalize() * 50.0;
 
-        self.update_renderer();
-        self.vulkan_data.transfer_data_to_gpu();
-        self.vulkan_data.draw_frame()
     }
 
+}
+pub mod client{
+    use nalgebra::{UnitQuaternion, Vector2, Vector3};
+    use slotmap::SlotMap;
+    use crate::game::GameObjectKey;
+    use crate::marching_cubes::World;
+    use crate::renderer::VulkanData;
+    use crate::support::Inputs;
 
-    fn update_renderer(&mut self) {
-        let clip = Matrix4::<f64>::identity();
-
-        let projection = self.vulkan_data.get_projection(self.inputs.zoom);
-        let projection_matrix = clip * projection.to_homogeneous();
-
-        let view_matrix = (Rotation3::from_euler_angles(0.0, self.inputs.angle, 0.0)
-            .to_homogeneous()
-            * (Matrix4::from(Translation3::from(self.camera.get_position()))
-                * self.camera.get_rotation().to_homogeneous()))
-        .try_inverse()
-        .unwrap();
-
-        for i in 0..self.objects.len() {
-            let render_object = &mut self.vulkan_data.objects[self.objects[i].render_object_index];
-            let model_matrix = (Matrix4::from(Translation3::from(self.objects[i].position))
-                * Matrix4::from(Rotation3::from(self.objects[i].rotation)))
-            .cast();
-            match self.objects[i].object_type{
-                ObjectType::Grip(is_gripped) => {
-                    const HAND_POSE_INDEX:usize = 17;
-                    if is_gripped{
-                        let player = &self.objects[self.player_index];
-                        let previous =  self.vulkan_data.storage_buffer_object.bone_sets[player.animation_handler.as_ref().unwrap().index +player.animation_handler.as_ref().unwrap().previous_frame].bones[HAND_POSE_INDEX].matrix;
-                        let next =  self.vulkan_data.storage_buffer_object.bone_sets[player.animation_handler.as_ref().unwrap().index +player.animation_handler.as_ref().unwrap().next_frame].bones[HAND_POSE_INDEX].matrix;
-                        let progress = self.objects[self.player_index].animation_handler.as_ref().unwrap().progress;
-                        let matrix = previous.cast() * (1.0 - progress) + next.cast() * progress;
-                        let matrix = (Translation3::from(player.position).to_homogeneous() * player.rotation.to_homogeneous()) * matrix;
-                        render_object.model = matrix.cast();
-                    }
-                }
-                _=>{
-                    render_object.model = model_matrix;
-                }
-            }
-
-
-            match &self.objects[i].animation_handler {
-                None => {}
-                Some(animation_handler) => {
-                    render_object.set_animation(animation_handler.index, animation_handler.progress, animation_handler.previous_frame, animation_handler.next_frame)
-                }
+    pub struct AnimationHandler {
+        pub index: usize,
+        pub previous_frame: usize,
+        pub next_frame: usize,
+        frame_count: usize,
+        frame_rate: f64,
+        pub progress: f64,
+    }
+    impl AnimationHandler {
+        fn new(index: usize, frame_count: usize) -> Self {
+            Self {
+                index,
+                previous_frame: 0,
+                next_frame: 1,
+                frame_count,
+                frame_rate: 60.0,
+                progress: 0.0,
             }
         }
-
-        self.vulkan_data.uniform_buffer_object.view = view_matrix.cast();
-        self.vulkan_data.uniform_buffer_object.proj = projection_matrix.cast();
-
-        self.vulkan_data.uniform_buffer_object.time = self.game_start.elapsed().as_secs_f32();
-        self.vulkan_data.uniform_buffer_object.player_position = self.objects[self.player_index].position.cast();
-        self.vulkan_data.uniform_buffer_object.exposure = self.inputs.exposure as f32;
-        // self.vulkan_data.uniform_buffer_object.time = 0.5;
-        self.vulkan_data.uniform_buffer_object.mouse_position = Vector2::new(
-            (self.mouse_position.x) as f32,
-            (self.mouse_position.y) as f32,
-        );
+        fn process(&mut self, delta_time: f64) {
+            self.progress += delta_time * self.frame_rate;
+            if self.progress > 1.0 {
+                self.progress = 0.0;
+                self.previous_frame = (self.previous_frame + 1) % self.frame_count;
+                self.next_frame = (self.next_frame + 1) % self.frame_count;
+            }
+        }
+        fn switch_animation(&mut self, vulkan_data: &VulkanData, render_object_index: usize, animation_index: usize){
+            self.previous_frame = 0;
+            self.next_frame = 1;
+            self.frame_count = vulkan_data.objects[render_object_index].get_animation_length(animation_index);
+            self.progress = 0.0
+        }
     }
+
+    pub enum ObjectType {
+        None,
+        Grip(bool),
+        Player,
+    }
+    pub struct GameObject {
+        pub position: Vector3<f64>,
+        pub rotation: UnitQuaternion<f64>,
+        pub object_type: ObjectType,
+        pub render_object_index: usize,
+        pub animation_handler: Option<AnimationHandler>,
+    }
+
+    pub struct Game {
+        pub game_objects: SlotMap<GameObjectKey, GameObject>,
+        pub world: World,
+        pub inputs: Inputs,
+        pub mouse_position: Vector2<f64>,
+    }
+    impl Game{
+        pub fn new() -> Self{
+            let world =  World::new_random();
+
+            Self{
+                game_objects: SlotMap::with_key(),
+                world,
+                inputs: Inputs::new(),
+                mouse_position: Vector2::zeros()
+            }
+        }
+        pub fn process(&mut self, delta_time: f64){
+            //Do stuff
+        }
+    }
+
 }
+
+pub mod sendable{
+    use nalgebra::{UnitQuaternion, Vector3};
+    use crate::game::GameObjectKey;
+    use crate::marching_cubes::Voxel;
+    use serde::{Serialize, Deserialize};
+    use slotmap::SlotMap;
+
+    #[derive(Serialize, Deserialize, Clone, Debug)]
+    pub struct World{
+        voxels: Vec<Voxel>,
+    }
+
+
+    #[derive(Serialize, Deserialize, Copy,Clone, Debug)]
+    pub enum ObjectType {
+        None,
+        Grip,
+        Player,
+    }
+
+    #[derive(Serialize, Deserialize, Copy, Clone, Debug)]
+    pub struct GameObject{
+        pub position: Vector3<f64>,
+        pub rotation: UnitQuaternion<f64>,
+        pub object_type: ObjectType
+    }
+
+
+    #[derive(Serialize, Deserialize, Clone)]
+    pub struct Game {
+        world: Option<World>,
+        game_objects: SlotMap<GameObjectKey, GameObject>,
+    }
+
+}
+
+
+
+

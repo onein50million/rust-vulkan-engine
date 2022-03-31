@@ -1,15 +1,45 @@
 use erupt::vk;
 use nalgebra::{Matrix4, Translation3, Vector2, Vector3, Vector4};
+use serde::{Serialize, Deserialize};
 
 
+pub const NETWORK_TICK_RATE: f64 = 10.0;
+pub const FRAMERATE_TARGET: f64 = 280.0;
+pub const NUM_RANDOM: usize = 100;
+pub const FRAME_SAMPLES: usize = 100;
+pub const NUM_MODELS: usize = 1000;
+pub const NUM_LIGHTS: usize = 1;
 
 
-
-pub(crate) const FRAMERATE_TARGET: f64 = 280.0;
-pub(crate) const NUM_RANDOM: usize = 100;
-pub(crate) const FRAME_SAMPLES: usize = 100;
-pub(crate) const NUM_MODELS: usize = 1000;
-pub(crate) const NUM_LIGHTS: usize = 1;
+#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
+pub struct Inputs {
+    pub up: f64,
+    pub down: f64,
+    pub left: f64,
+    pub right: f64,
+    pub map_mode: u8,
+    pub zoom: f64,
+    pub exposure: f64,
+    pub angle: f64,
+    pub panning: bool,
+    pub left_click: bool,
+}
+impl Inputs {
+    pub fn new() -> Self {
+        return Inputs {
+            left: 0.0,
+            right: 0.0,
+            up: 0.0,
+            down: 0.0,
+            map_mode: 0,
+            zoom: 1.0,
+            exposure: 1.0,
+            angle: 0.0,
+            panning: false,
+            left_click: false,
+        };
+    }
+}
 
 pub(crate) mod flags {
     pub(crate) const IS_CUBEMAP: u32 = 0b1;
@@ -69,8 +99,8 @@ impl Light {
 
 #[derive(Copy, Clone)]
 #[repr(C)]
-pub(crate) struct Bone {
-    pub(crate) matrix: Matrix4<f32>,
+pub struct Bone {
+    pub matrix: Matrix4<f32>,
 }
 impl Bone {
     pub(crate) fn new() -> Self {
@@ -85,19 +115,19 @@ pub(crate) const NUM_BONE_SETS: usize = 256;
 
 #[derive(Copy, Clone)]
 #[repr(C)]
-pub(crate) struct BoneSet {
+pub struct BoneSet {
     //One frame
     pub(crate) input_tangent: f32,
     pub(crate) output_tangent: f32,
     pub(crate) _padding1: f32,
     pub(crate) _padding2: f32,
-    pub(crate) bones: [Bone; NUM_BONES_PER_BONESET],
+    pub bones: [Bone; NUM_BONES_PER_BONESET],
 }
 
 #[derive(Copy, Clone)]
 #[repr(C)]
-pub(crate) struct ShaderStorageBufferObject {
-    pub(crate) bone_sets: [BoneSet; NUM_BONE_SETS],
+pub struct ShaderStorageBufferObject {
+    pub bone_sets: [BoneSet; NUM_BONE_SETS],
 }
 impl ShaderStorageBufferObject {
     pub(crate) fn new_boxed() -> Box<Self> {
@@ -125,19 +155,19 @@ impl ShaderStorageBufferObject {
 
 #[derive(Copy, Clone)]
 #[repr(C)]
-pub(crate) struct UniformBufferObject {
-    pub(crate) view: Matrix4<f32>,
-    pub(crate) proj: Matrix4<f32>,
+pub struct UniformBufferObject {
+    pub view: Matrix4<f32>,
+    pub proj: Matrix4<f32>,
     pub(crate) random: [Vector4<f32>; NUM_RANDOM], //std140 packing so it needs to be 16 bytes wide
     pub(crate) lights: [Light; NUM_LIGHTS],        //std140 packing so it needs to be 16 bytes wide
     pub(crate) player_index: u32,
     pub(crate) num_lights: u32,
     pub(crate) _map_mode: u32,
-    pub(crate) exposure: f32,
-    pub(crate) mouse_position: Vector2<f32>,
+    pub exposure: f32,
+    pub mouse_position: Vector2<f32>,
     pub(crate) screen_size: Vector2<f32>,
-    pub(crate) time: f32,
-    pub(crate) player_position: Vector3<f32>,
+    pub time: f32,
+    pub player_position: Vector3<f32>,
 }
 #[derive(Debug)]
 #[repr(C)]
