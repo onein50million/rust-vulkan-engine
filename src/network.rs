@@ -1,8 +1,7 @@
-use std::convert::TryInto;
-use bincode::config::Configuration;
-use serde::{Serialize, Deserialize};
 use crate::support::Inputs;
-
+use bincode::config::Configuration;
+use serde::{Deserialize, Serialize};
+use std::convert::TryInto;
 
 /*
 Client requests Connection
@@ -23,39 +22,37 @@ loop {
 //     GenericFail
 // }
 
-
 #[derive(Copy, Clone, Debug)]
-pub enum ClientState{
+pub enum ClientState {
     Disconnected,
     ConnectionAwaiting,
     Connected,
 }
 
-
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum Packet{
-    RequestConnect{username: String},
+pub enum Packet {
+    RequestConnect { username: String },
     RequestAccepted,
     RequestDenied,
     RequestGameWorld,
     Input(Inputs),
 }
 
-impl Packet{
-    pub fn to_bytes(&self) -> Vec<u8>{
+impl Packet {
+    pub fn to_bytes(&self) -> Vec<u8> {
         let config = bincode::config::standard().with_big_endian();
 
-        bincode::serde::encode_to_vec(self,config).unwrap()
+        bincode::serde::encode_to_vec(self, config).unwrap()
     }
-    pub fn from_bytes(bytes: &[u8]) -> Option<Self>{
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         let config = bincode::config::standard().with_big_endian();
 
-        match bincode::serde::decode_from_slice(bytes, config){
+        match bincode::serde::decode_from_slice(bytes, config) {
             Err(_) => {
                 println!("Invalid packet");
-                None },
-            Ok(result) => Some(result.0)
+                None
+            }
+            Ok(result) => Some(result.0),
         }
     }
 }

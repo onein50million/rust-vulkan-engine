@@ -6,10 +6,11 @@ use erupt::{vk, DeviceLoader, EntryLoader, ExtendableFromConst, InstanceLoader, 
 
 use gltf::animation::util::{ReadOutputs, Rotations};
 
-
 use image::{GenericImageView, ImageFormat};
 use nalgebra::Perspective3;
-use nalgebra::{Matrix4, Point3, Quaternion, Scale3, Translation3, UnitQuaternion, Vector2, Vector3, Vector4};
+use nalgebra::{
+    Matrix4, Point3, Quaternion, Scale3, Translation3, UnitQuaternion, Vector2, Vector3, Vector4,
+};
 
 use std::convert::TryInto;
 use std::default::Default;
@@ -21,7 +22,6 @@ use std::mem::size_of;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-
 use winit::window::Window;
 
 //TODO: Generate JSON descriptor set info and parse that instead of having to manually keep everything up to date
@@ -30,12 +30,12 @@ use winit::window::Window;
 const BASE_VOXEL_SIZE: f32 = 128.0;
 const MIP_LEVELS: u32 = 6;
 const MSAA_ENABLED: bool = false;
-const UI_BUFFER_LENGTH: usize = 8192*32;
+const UI_BUFFER_LENGTH: usize = 8192 * 32;
 
 #[derive(Debug, Copy, Clone)]
 pub enum DanielError {
     Minimized,
-    SwapchainNotCreated
+    SwapchainNotCreated,
 }
 
 #[derive(Copy, Clone)]
@@ -45,7 +45,7 @@ struct Keyframe {
     rotation: Option<UnitQuaternion<f32>>,
     scale: Option<Scale3<f32>>,
 }
-impl Keyframe{
+impl Keyframe {
     fn to_homogeneous(&self) -> Matrix4<f32> {
         let translation = self.translation.unwrap_or_default();
         let rotation = self.rotation.unwrap_or_default();
@@ -108,18 +108,19 @@ impl AnimationKeyframes {
     //     }
     fn get_closest_below(&self, target_frame_time: f32) -> Option<usize> {
         let output = ((self.keyframes.len() as f32) * (target_frame_time / self.end_time)) as usize;
-        if output >= 0 && output < self.keyframes.len(){
+        if output >= 0 && output < self.keyframes.len() {
             Some(output)
-        }else{
+        } else {
             None
         }
     }
 
     fn get_closest_above(&self, target_frame_time: f32) -> Option<usize> {
-        let output = (((self.keyframes.len() as f32) * (target_frame_time / self.end_time)).ceil()) as usize;
-        if output >= 0 && output < self.keyframes.len(){
+        let output =
+            (((self.keyframes.len() as f32) * (target_frame_time / self.end_time)).ceil()) as usize;
+        if output >= 0 && output < self.keyframes.len() {
             Some(output)
-        }else{
+        } else {
             None
         }
     }
@@ -128,60 +129,56 @@ impl AnimationKeyframes {
         let below = self.get_closest_below(index);
         let above = self.get_closest_above(index);
         match (below, above) {
-            (None, None) => { Matrix4::identity() }
-            (Some(below), None) => { self.keyframes[below].to_homogeneous() }
+            (None, None) => Matrix4::identity(),
+            (Some(below), None) => self.keyframes[below].to_homogeneous(),
             // (None, Some(above)) => { self.keyframes[above].to_homogeneous() }
-            (None, Some(above)) => { self.keyframes[above].to_homogeneous() }
+            (None, Some(above)) => self.keyframes[above].to_homogeneous(),
             (Some(below), Some(above)) => {
                 self.interpolate(above, below, index).to_homogeneous()
                 // self.keyframes[below].to_homogeneous()
             }
         }
     }
-    fn interpolate(&self, first: usize, second: usize, frame_time: f32) -> Keyframe{
+    fn interpolate(&self, first: usize, second: usize, frame_time: f32) -> Keyframe {
         let first = self.keyframes[first];
         let second = self.keyframes[second];
 
-        let mapped_range = map_range_linear(frame_time, first.frame_time, second.frame_time, 0.0, 1.0);
+        let mapped_range =
+            map_range_linear(frame_time, first.frame_time, second.frame_time, 0.0, 1.0);
         let mapped_range = match mapped_range.is_nan() {
-             true => 0.5,
-             false => mapped_range
+            true => 0.5,
+            false => mapped_range,
         };
 
-
         let translation = Some(match (first.translation, second.translation) {
-            (None, None) => { Translation3::identity() }
-            (Some(first), None) => { first }
-            (None, Some(second)) => { second }
-            (Some(first), Some(second)) => {
-                Translation3::from(first.vector * (1.0 - mapped_range) + second.vector * mapped_range)
-            }
+            (None, None) => Translation3::identity(),
+            (Some(first), None) => first,
+            (None, Some(second)) => second,
+            (Some(first), Some(second)) => Translation3::from(
+                first.vector * (1.0 - mapped_range) + second.vector * mapped_range,
+            ),
         });
         let rotation = Some(match (first.rotation, second.rotation) {
-            (None, None) => { UnitQuaternion::identity() }
-            (Some(first), None) => { first }
-            (None, Some(second)) => { second }
-            (Some(first), Some(second)) => {
-                first.slerp(&second, mapped_range)
-            }
+            (None, None) => UnitQuaternion::identity(),
+            (Some(first), None) => first,
+            (None, Some(second)) => second,
+            (Some(first), Some(second)) => first.slerp(&second, mapped_range),
         });
         let scale = Some(match (first.scale, second.scale) {
-            (None, None) => { Scale3::identity() }
-            (Some(first), None) => { first }
-            (None, Some(second)) => { second }
+            (None, None) => Scale3::identity(),
+            (Some(first), None) => first,
+            (None, Some(second)) => second,
             (Some(first), Some(second)) => {
                 Scale3::from(first.vector * (1.0 - mapped_range) + second.vector * mapped_range)
             }
         });
 
-
-        Keyframe{
+        Keyframe {
             frame_time,
             translation,
             rotation,
             scale,
         }
-
     }
 
     fn frametime(&self, index: usize) -> f32 {
@@ -261,7 +258,6 @@ impl UiData {
     pub fn update_buffers(&mut self, vertices: &[egui::epaint::Vertex], indices: &[u32]) {
         assert!(vertices.len() < UI_BUFFER_LENGTH);
         assert!(indices.len() < UI_BUFFER_LENGTH);
-
 
         // println!("{:?}", vertices[0]);
         unsafe {
@@ -636,13 +632,13 @@ impl CombinedImage {
 
         let mut regions = vec![];
         println!("Width: {:}, Height: {:}", width, height);
-        let face_order = match layer_count{
+        let face_order = match layer_count {
             1 => vec![0],
             // 6 => vec![0,1,4,5,2,3],
-            6 => vec![0,1,2,3,4,5],
+            6 => vec![0, 1, 2, 3, 4, 5],
             // 6 => vec![2,3,4,5,0,1],
             // 6 => vec![0,0,0,0,0,0],
-            _ => unimplemented!()
+            _ => unimplemented!(),
         };
         for (face_index, face) in face_order.into_iter().enumerate() {
             regions.push(
@@ -727,9 +723,9 @@ impl TextureSet {
     }
 }
 
-pub(crate) struct AnimationObject{
+pub(crate) struct AnimationObject {
     pub(crate) frame_start: usize,
-    pub(crate) frame_count: usize
+    pub(crate) frame_count: usize,
 }
 
 pub struct RenderObject {
@@ -781,10 +777,10 @@ impl RenderObject {
             }
         }
 
-        let (previous_frame, next_frame) = if animations.len() > 0{
+        let (previous_frame, next_frame) = if animations.len() > 0 {
             (animations[0].frame_start, animations[0].frame_start + 1)
-        }else{
-            (0,0)
+        } else {
+            (0, 0)
         };
 
         let mut object = RenderObject {
@@ -808,17 +804,23 @@ impl RenderObject {
             animation_progress: 0.0,
             is_view_proj_matrix_ignored: false,
         };
-        if object.animations.len() > 0{
-            object.set_animation(0,0.0,0,1);
+        if object.animations.len() > 0 {
+            object.set_animation(0, 0.0, 0, 1);
         }
         return object;
     }
-    pub fn set_animation(&mut self, animation_index: usize, progress: f64, previous_frame: usize, next_frame: usize){
+    pub fn set_animation(
+        &mut self,
+        animation_index: usize,
+        progress: f64,
+        previous_frame: usize,
+        next_frame: usize,
+    ) {
         self.previous_frame = self.animations[animation_index].frame_start + previous_frame;
         self.next_frame = self.animations[animation_index].frame_start + next_frame;
         self.animation_progress = progress;
     }
-    pub(crate) fn get_animation_length(&self,animation_index: usize) -> usize{
+    pub(crate) fn get_animation_length(&self, animation_index: usize) -> usize {
         self.animations[animation_index].frame_count
     }
 }
@@ -933,12 +935,10 @@ impl Cubemap {
             roughness_metalness_ao: None,
         };
 
-
-        let mut render_object = RenderObject::new(vulkan_data, vertices, indices,vec![], texture, true);
+        let mut render_object =
+            RenderObject::new(vulkan_data, vertices, indices, vec![], texture, true);
         render_object.is_view_proj_matrix_ignored = true;
-        let cubemap = Cubemap {
-            render_object,
-        };
+        let cubemap = Cubemap { render_object };
 
         return cubemap;
     }
@@ -1242,7 +1242,6 @@ impl VulkanData {
             });
         }
 
-        
         if MSAA_ENABLED {
             self.msaa_samples = self.get_max_usable_sample_count();
         } else {
@@ -1271,7 +1270,6 @@ impl VulkanData {
         let queue_create_infos = &[queue_create_info];
 
         let device_features = vk::PhysicalDeviceFeaturesBuilder::new().sampler_anisotropy(true);
-
 
         let mut extended_dynamic_state_features =
             vk::PhysicalDeviceExtendedDynamicStateFeaturesEXTBuilder::new()
@@ -1698,21 +1696,34 @@ impl VulkanData {
                 }
             }
             self.current_boneset += num_bone_sets;
-            out_animations.push(AnimationObject{
+            out_animations.push(AnimationObject {
                 frame_start,
-                frame_count: num_bone_sets
+                frame_count: num_bone_sets,
             })
         }
-        let render_object = RenderObject::new(self, vertices, indices, out_animations, texture, false);
+        let render_object =
+            RenderObject::new(self, vertices, indices, out_animations, texture, false);
         let output = self.objects.len();
         self.objects.push(render_object);
 
         return output;
     }
 
-    pub fn load_vertices_and_indices(&mut self, vertices: Vec<Vertex>, indices: Vec<usize>, is_globe: bool) -> usize{
+    pub fn load_vertices_and_indices(
+        &mut self,
+        vertices: Vec<Vertex>,
+        indices: Vec<usize>,
+        is_globe: bool,
+    ) -> usize {
         let indices = indices.iter().map(|index| *index as u32).collect();
-        let mut render_object = RenderObject::new(self, vertices, indices, vec![], TextureSet::new_empty(), false);
+        let mut render_object = RenderObject::new(
+            self,
+            vertices,
+            indices,
+            vec![],
+            TextureSet::new_empty(),
+            false,
+        );
         render_object.is_globe = is_globe;
         let output = self.objects.len();
         self.objects.push(render_object);
@@ -1736,7 +1747,8 @@ impl VulkanData {
         let mut mesh_transform = Matrix4::identity();
         // let vulkan_correction_transform =
         //     Matrix4::from_axis_angle(&Vector3::x_axis(), std::f32::consts::PI);
-        let vulkan_correction_transform = Matrix4::from(UnitQuaternion::from_euler_angles(0.0,0.0,PI));
+        let vulkan_correction_transform =
+            Matrix4::from(UnitQuaternion::from_euler_angles(0.0, 0.0, PI));
         // let vulkan_correction_transform = Matrix4::identity();
         // let vulkan_correction_transform = Scale3::new(1.0,-1.0,1.0).to_homogeneous();
         // let vulkan_correction_transform = Scale3::new(1.0,-1.0,1.0).to_homogeneous();
@@ -1746,7 +1758,7 @@ impl VulkanData {
             // let transformation_matrix = Matrix4::from(node.transform().matrix());
             // let transformation_matrix = Matrix4::identity();
             let transformation_matrix = Matrix4::identity();
-                // * vulkan_correction_transform;
+            // * vulkan_correction_transform;
 
             let _transformation_position = transformation_matrix.column(3).xyz();
             match node.mesh() {
@@ -1782,7 +1794,9 @@ impl VulkanData {
                         out_indices.extend_from_slice(&indices);
                         for i in 0..positions.len() {
                             let position = Vector3::from(positions[i]);
-                            let position = transformation_matrix.transform_point(&Point3::from(position)).coords;
+                            let position = transformation_matrix
+                                .transform_point(&Point3::from(position))
+                                .coords;
                             out_vertices.push(Vertex {
                                 position,
                                 normal: Vector3::zeros(),
@@ -1808,9 +1822,21 @@ impl VulkanData {
                                 let index2 = triangle[(i + 1) % 3] as usize;
                                 let index3 = triangle[(i + 2) % 3] as usize;
 
-                                let position3 = transformation_matrix.transform_point(&Point3::from(Vector3::from(positions[index3]))).coords;
-                                let position1 = transformation_matrix.transform_point(&Point3::from(Vector3::from(positions[index1]))).coords;
-                                let position2 = transformation_matrix.transform_point(&Point3::from(Vector3::from(positions[index2]))).coords;
+                                let position3 = transformation_matrix
+                                    .transform_point(&Point3::from(Vector3::from(
+                                        positions[index3],
+                                    )))
+                                    .coords;
+                                let position1 = transformation_matrix
+                                    .transform_point(&Point3::from(Vector3::from(
+                                        positions[index1],
+                                    )))
+                                    .coords;
+                                let position2 = transformation_matrix
+                                    .transform_point(&Point3::from(Vector3::from(
+                                        positions[index2],
+                                    )))
+                                    .coords;
 
                                 let edge1 = position2 - position1;
                                 let edge2 = position3 - position1;
@@ -1867,13 +1893,14 @@ impl VulkanData {
                     .map(|matrix| Matrix4::from(matrix))
                     .collect();
 
-                for (animation_index, animation) in gltf.animations().enumerate(){
+                for (animation_index, animation) in gltf.animations().enumerate() {
                     let mut bone_sets = vec![];
                     let animation_end = {
                         animation
                             .channels()
                             .map(|channel| {
-                                let reader = channel.reader(|buffer| Some(&buffers[buffer.index()]));
+                                let reader =
+                                    channel.reader(|buffer| Some(&buffers[buffer.index()]));
                                 reader.read_inputs().unwrap().reduce(f32::max).unwrap()
                             })
                             .reduce(f32::max)
@@ -1884,15 +1911,21 @@ impl VulkanData {
                         animation
                             .channels()
                             .map(|channel| {
-                                let reader = channel.reader(|buffer| Some(&buffers[buffer.index()]));
+                                let reader =
+                                    channel.reader(|buffer| Some(&buffers[buffer.index()]));
                                 reader.read_inputs().unwrap().count()
                             })
                             .max()
                             .unwrap()
                     };
 
-                    let mut animation_frames =
-                        vec![AnimationKeyframes { keyframes: vec![], end_time: animation_end }; gltf.nodes().len()];
+                    let mut animation_frames = vec![
+                        AnimationKeyframes {
+                            keyframes: vec![],
+                            end_time: animation_end
+                        };
+                        gltf.nodes().len()
+                    ];
 
                     animation.channels().for_each(|channel| {
                         let reader = channel.reader(|buffer| Some(&buffers[buffer.index()]));
@@ -1910,16 +1943,15 @@ impl VulkanData {
                             ReadOutputs::Rotations(rotations) => {
                                 match rotations.into_f32().unwrap() {
                                     Rotations::F32(inner_rotations) => {
-                                        let out_rotations = inner_rotations.map(|rotation| {
-                                            Keyframe {
+                                        let out_rotations =
+                                            inner_rotations.map(|rotation| Keyframe {
                                                 frame_time: f32::NAN,
                                                 translation: None,
                                                 rotation: Some(UnitQuaternion::from_quaternion(
                                                     Quaternion::from(rotation),
                                                 )),
                                                 scale: None,
-                                            }
-                                        });
+                                            });
                                         out_rotations.collect::<Vec<_>>()
                                     }
                                     _ => unreachable!(),
@@ -1953,16 +1985,13 @@ impl VulkanData {
                             })
                     });
 
-
                     for keyframe_index in 0..num_frames {
                         let current_frame_time =
                             (keyframe_index as f32 / num_frames as f32) * animation_end;
 
                         let mut node_global_transforms = gltf
                             .nodes()
-                            .map(|node| {
-                                animation_frames[node.index()].sample(current_frame_time)
-                            })
+                            .map(|node| animation_frames[node.index()].sample(current_frame_time))
                             .collect::<Vec<_>>();
 
                         let nodes = gltf.nodes().collect::<Vec<_>>();
@@ -1978,10 +2007,8 @@ impl VulkanData {
                                         matrix * node_global_transforms[child.index()];
                                 });
 
-                                next_indices.extend(nodes[index]
-                                                        .children()
-                                                        .map(|node| node.index()),
-                                );
+                                next_indices
+                                    .extend(nodes[index].children().map(|node| node.index()));
                             }
                             if next_indices.len() > 0 {
                                 current_indices = vec![];
@@ -1994,14 +2021,14 @@ impl VulkanData {
                         let mut bones = vec![];
                         for (joint_index, joint) in skin.joints().enumerate() {
                             let new_bone = Bone {
-                                matrix: vulkan_correction_transform * (mesh_transform.try_inverse().unwrap()
-                                    * node_global_transforms[joint.index()]
-                                    * inverse_bind_matrices[joint_index])
+                                matrix: vulkan_correction_transform
+                                    * (mesh_transform.try_inverse().unwrap()
+                                        * node_global_transforms[joint.index()]
+                                        * inverse_bind_matrices[joint_index]),
                             };
                             bones.push(new_bone);
                         }
                         bone_sets.push(bones);
-
                     }
                     out_animations.push(bone_sets)
                 }
@@ -2409,8 +2436,6 @@ impl VulkanData {
                             .sampler(self.cpu_images[0].image.sampler),
                     );
                 }
-
-
 
                 let bone_ssbo_infos = [vk::DescriptorBufferInfoBuilder::new()
                     .buffer(self.storage_buffer.unwrap())
@@ -3217,14 +3242,12 @@ impl VulkanData {
         return (buffer, buffer_memory);
     }
 
-    pub fn draw_frame(&mut self) -> Result<(), DanielError>{
-        if !self.swapchain_created{
-            match self.recreate_swapchain(){
+    pub fn draw_frame(&mut self) -> Result<(), DanielError> {
+        if !self.swapchain_created {
+            match self.recreate_swapchain() {
                 Ok(_) => {}
-                Err(_) => {return Err(DanielError::SwapchainNotCreated)}
+                Err(_) => return Err(DanielError::SwapchainNotCreated),
             }
-
-
         }
 
         let fences = [self.in_flight_fence.unwrap()];
@@ -3256,8 +3279,8 @@ impl VulkanData {
                 if e == vk::Result::ERROR_OUT_OF_DATE_KHR || e == vk::Result::SUBOPTIMAL_KHR {
                     unsafe { self.device.as_ref().unwrap().device_wait_idle() }.unwrap();
                     self.cleanup_swapchain();
-                    match self.recreate_swapchain(){
-                        Ok(_) => {return Ok(())}
+                    match self.recreate_swapchain() {
+                        Ok(_) => return Ok(()),
                         Err(error) => {
                             return Err(error);
                         }
@@ -4058,8 +4081,11 @@ impl VulkanData {
                 //         .cmd_set_depth_test_enable_ext(*command_buffer, false)
                 // };
 
-
-                self.cubemap.as_ref().unwrap().draw(self.device.as_ref().unwrap(), *command_buffer, self.pipeline_layout.unwrap());
+                self.cubemap.as_ref().unwrap().draw(
+                    self.device.as_ref().unwrap(),
+                    *command_buffer,
+                    self.pipeline_layout.unwrap(),
+                );
 
                 unsafe {
                     self.device
@@ -4165,8 +4191,7 @@ impl VulkanData {
             });
     }
 
-
-    pub(crate) fn recreate_swapchain(&mut self)-> Result<(), DanielError> {
+    pub(crate) fn recreate_swapchain(&mut self) -> Result<(), DanielError> {
         self.get_surface_capabilities();
 
         if self.surface_capabilities.unwrap().current_extent.height == 0
@@ -4175,7 +4200,7 @@ impl VulkanData {
             unsafe {
                 self.device.as_ref().unwrap().device_wait_idle().unwrap();
             }
-            return Err(DanielError::Minimized)
+            return Err(DanielError::Minimized);
         }
 
         self.create_color_resources();
@@ -4331,11 +4356,12 @@ impl VulkanData {
     }
 
     fn create_cubemap_resources(&mut self) {
-
-
         let cubemap_folder = PathBuf::from("cubemap_forest");
 
-        self.cubemap = Some(Cubemap::new(self, cubemap_folder.join("StandardCubeMap.hdr")));
+        self.cubemap = Some(Cubemap::new(
+            self,
+            cubemap_folder.join("StandardCubeMap.hdr"),
+        ));
 
         let base_cubemap = CombinedImage::new(
             self,
@@ -4909,7 +4935,8 @@ impl VulkanData {
         let aspect_ratio = surface_width / surface_height;
 
         return nalgebra::Perspective3::new(
-            aspect_ratio,90.0f64.to_radians(),
+            aspect_ratio,
+            90.0f64.to_radians(),
             1_000_000.0,
             20_000_000.0,
         );

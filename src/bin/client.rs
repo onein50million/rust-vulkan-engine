@@ -1,3 +1,5 @@
+use egui::plot::Value;
+use egui::plot::Values;
 use egui::Button;
 use egui::Color32;
 use egui::Frame;
@@ -9,23 +11,21 @@ use egui::Style;
 use egui::TopBottomPanel;
 use egui::Ui;
 use egui::Window;
-use egui::plot::Value;
-use egui::plot::Values;
-use nalgebra::Point3;
-use rust_vulkan_engine::game::client::GameObject;
-use rust_vulkan_engine::renderer::*;
-use rust_vulkan_engine::support::*;
 use egui_winit::winit::event::{ElementState, Event, VirtualKeyCode, WindowEvent};
 use egui_winit::winit::event_loop::{ControlFlow, EventLoop};
 use egui_winit::winit::window::WindowBuilder;
+use nalgebra::Point3;
+use nalgebra::{Matrix4, Rotation3, Translation3, UnitQuaternion, Vector2, Vector3};
+use rust_vulkan_engine::game::client::Game;
+use rust_vulkan_engine::game::client::GameObject;
+use rust_vulkan_engine::network::{ClientState, Packet};
+use rust_vulkan_engine::renderer::*;
+use rust_vulkan_engine::support::*;
 use rust_vulkan_engine::world::*;
 use std::env;
 use std::net::UdpSocket;
 use std::time::Instant;
-use nalgebra::{Matrix4, Rotation3, Translation3, UnitQuaternion, Vector2, Vector3};
 use winit::event::{MouseButton, MouseScrollDelta};
-use rust_vulkan_engine::game::client::{Game};
-use rust_vulkan_engine::network::{ClientState, Packet};
 //Coordinate system for future reference:
 //from starting location
 //up: negative y
@@ -35,35 +35,35 @@ use rust_vulkan_engine::network::{ClientState, Packet};
 //left: negative x
 //right: positive x
 
-
-struct Client{
+struct Client {
     socket: UdpSocket,
-    state: ClientState
+    state: ClientState,
 }
 
-impl Client{
-    fn process(&mut self, game: &mut Game){
+impl Client {
+    fn process(&mut self, game: &mut Game) {
         let mut buffer = [0; 1024];
-        while let Ok(num_bytes) = self.socket.recv(&mut buffer){
+        while let Ok(num_bytes) = self.socket.recv(&mut buffer) {
             let unprocessed_datagram = &mut buffer[..num_bytes];
-            match Packet::from_bytes(unprocessed_datagram){
-                None => {println!("Invalid packet received from server")}
-                Some(packet) => {
-                    match (self.state,packet){
-                        (ClientState::ConnectionAwaiting, Packet::RequestAccepted) => {
-                            self.state = ClientState::Connected;
-                            println!("Client connected");
-                        },
-                        (_, _) => {
-                            println!("Unknown state/packet combo")
-                        }
-                    }
+            match Packet::from_bytes(unprocessed_datagram) {
+                None => {
+                    println!("Invalid packet received from server")
                 }
+                Some(packet) => match (self.state, packet) {
+                    (ClientState::ConnectionAwaiting, Packet::RequestAccepted) => {
+                        self.state = ClientState::Connected;
+                        println!("Client connected");
+                    }
+                    (_, _) => {
+                        println!("Unknown state/packet combo")
+                    }
+                },
             }
         }
 
-        self.socket.send(&Packet::Input(game.inputs).to_bytes()).unwrap();
-
+        self.socket
+            .send(&Packet::Input(game.inputs).to_bytes())
+            .unwrap();
     }
 }
 
@@ -71,26 +71,34 @@ impl Client{
 //     fastrand::u64(..)
 // }
 
-fn add_plot(ui: &mut Ui, values: &[Value], heading: &str, num_samples: usize, start: usize){
+fn add_plot(ui: &mut Ui, values: &[Value], heading: &str, num_samples: usize, start: usize) {
     let values = &values[start..];
     let num_samples = num_samples.min(values.len());
-    let chunk_size = values.len()/num_samples;
-    let line = egui::plot::Line::new(Values::from_values_iter(values.chunks(chunk_size).map(|values|{
-        let mut sum = 0.0;
-        let mut month_sum = 0.0;
-        for value in values{
-            sum += value.y;
-            month_sum += value.x;
-        }
-        Value::new(month_sum/values.len() as f64, sum/values.len() as f64)
-    })));
+    let chunk_size = values.len() / num_samples;
+    let line = egui::plot::Line::new(Values::from_values_iter(values.chunks(chunk_size).map(
+        |values| {
+            let mut sum = 0.0;
+            let mut month_sum = 0.0;
+            for value in values {
+                sum += value.y;
+                month_sum += value.x;
+            }
+            Value::new(month_sum / values.len() as f64, sum / values.len() as f64)
+        },
+    )));
     ui.add(Label::new(heading).heading());
-    ui.add(egui::plot::Plot::new(1).line(line).view_aspect(1.0).allow_zoom(false).include_y(0.0).include_x(values[0].x).allow_drag(false));
+    ui.add(
+        egui::plot::Plot::new(1)
+            .line(line)
+            .view_aspect(1.0)
+            .allow_zoom(false)
+            .include_y(0.0)
+            .include_x(values[0].x)
+            .allow_drag(false),
+    );
 }
 
-
 fn main() {
-
     let mut frametime: std::time::Instant = std::time::Instant::now();
     let mut time_since_last_frame: f64 = 0.0; //seconds
 
@@ -110,12 +118,10 @@ fn main() {
     window.set_cursor_visible(true);
     let mut state = egui_winit::State::new(&window);
 
-
     let mut vulkan_data = VulkanData::new();
     println!("Vulkan Data created");
     vulkan_data.init_vulkan(&window);
     println!("Vulkan Data initialized");
-
 
     let world = World::new();
 
@@ -128,13 +134,12 @@ fn main() {
     );
 
     /* Dummy objects to fill offsets */
-    vulkan_data.load_folder("models/planet/deep_water".parse().unwrap()); 
+    vulkan_data.load_folder("models/planet/deep_water".parse().unwrap());
     vulkan_data.load_folder("models/planet/shallow_water".parse().unwrap());
     vulkan_data.load_folder("models/planet/foliage".parse().unwrap());
     vulkan_data.load_folder("models/planet/desert".parse().unwrap());
     vulkan_data.load_folder("models/planet/mountain".parse().unwrap());
     vulkan_data.load_folder("models/planet/snow".parse().unwrap());
-
 
     // let planet_render_object_index = VulkanData::load_vertices_and_indices(
     //     &mut vulkan_data,
@@ -142,46 +147,49 @@ fn main() {
     //     world.get_indices()
     // );
     vulkan_data.update_vertex_and_index_buffers();
-    
-    let mut game = Game::new(
-        planet_render_object_index,
-        world
-    );
+
+    let mut game = Game::new(planet_render_object_index, world);
     println!("Game created");
     let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
     socket.connect("127.0.0.1:2022").unwrap();
     socket.set_nonblocking(true).unwrap();
-    let mut client = Client{
+    let mut client = Client {
         socket,
-        state: ClientState::Disconnected
+        state: ClientState::Disconnected,
     };
 
     //Do some simulation to see if state stabilizes
-    let months = 12*10000;
+    let months = 12 * 10000;
     let mut population_history = Vec::with_capacity(months);
     let mut price_histories = vec![Vec::with_capacity(months); Good::VARIANT_COUNT];
-    for month in 0..months{
-        population_history.push(
-            Value::new(month as f64,
-            game.world.provinces[0].pops.population()));
-        
+    for month in 0..months {
+        population_history.push(Value::new(
+            month as f64,
+            game.world.provinces[0].pops.population(),
+        ));
 
-        for good_index in 0..Good::VARIANT_COUNT{
+        for good_index in 0..Good::VARIANT_COUNT {
             price_histories[good_index].push(Value::new(
                 month as f64,
-                game.world.provinces[0].market.price[good_index]
+                game.world.provinces[0].market.price[good_index],
             ));
         }
-        game.world.process(1.0/12.0);
+        game.world.process(1.0 / 12.0);
     }
 
-    client.socket.send(&Packet::RequestConnect{ username: "daniel".to_string()}.to_bytes()).unwrap();
+    client
+        .socket
+        .send(
+            &Packet::RequestConnect {
+                username: "daniel".to_string(),
+            }
+            .to_bytes(),
+        )
+        .unwrap();
     client.state = ClientState::ConnectionAwaiting;
-
 
     let mut current_month = months;
     let mut texture_version = 0;
-
 
     let mut population_graph_window_open = false;
     let mut price_graph_window_open = false;
@@ -203,54 +211,57 @@ fn main() {
         //     })
         // });
 
-
-        TopBottomPanel::top("get_unique_id()").show(&ctx, |ui|{
+        TopBottomPanel::top("get_unique_id()").show(&ctx, |ui| {
             ui.label("hello world!");
-            ui.horizontal(|ui|{
+            ui.horizontal(|ui| {
                 ui.checkbox(&mut population_graph_window_open, "Population Plot");
                 ui.checkbox(&mut pop_table_open, "Pops Table");
                 ui.checkbox(&mut price_graph_window_open, "Price Plots");
             });
         });
 
-        if population_graph_window_open{
-            Window::new("Population Plot").show(&ctx, |ui|{
+        if population_graph_window_open {
+            Window::new("Population Plot").show(&ctx, |ui| {
                 ui.label("hello!");
                 add_plot(ui, &population_history, "Total Population", 1000, 0);
             });
         }
-        if price_graph_window_open{
-            Window::new("Price Plots").show(&ctx, |ui|{
-                ScrollArea::vertical().show(ui, |ui|{
-                    for good_index in 0..Good::VARIANT_COUNT{
+        if price_graph_window_open {
+            Window::new("Price Plots").show(&ctx, |ui| {
+                ScrollArea::vertical().show(ui, |ui| {
+                    for good_index in 0..Good::VARIANT_COUNT {
                         let good = Good::try_from(good_index).unwrap();
-                            add_plot(ui, &price_histories[good_index], &format!("{:?} Price", good), 1000, 0);    
+                        add_plot(
+                            ui,
+                            &price_histories[good_index],
+                            &format!("{:?} Price", good),
+                            1000,
+                            0,
+                        );
                     }
                 });
-
             });
-
         }
-        if pop_table_open{
-            Window::new("Pop Table").show(&ctx, |ui|{
-                Grid::new(0).striped(true).show(ui, |ui|{
-                    ui.label("Culture");       
-                    ui.label("Industry");       
+        if pop_table_open {
+            Window::new("Pop Table").show(&ctx, |ui| {
+                Grid::new(0).striped(true).show(ui, |ui| {
+                    ui.label("Culture");
+                    ui.label("Industry");
                     ui.label("Population");
                     ui.label("Money");
-                    for good_index in 0..Good::VARIANT_COUNT{
+                    for good_index in 0..Good::VARIANT_COUNT {
                         ui.label(format!("Owned {:?}", Good::try_from(good_index).unwrap()));
                     }
-                    ui.end_row();     
-                    for (i, slice) in game.world.provinces[0].pops.pop_slices.iter().enumerate(){
+                    ui.end_row();
+                    for (i, slice) in game.world.provinces[0].pops.pop_slices.iter().enumerate() {
                         let culture = Culture::try_from(i / Industry::VARIANT_COUNT).unwrap();
                         let industry = Industry::try_from(i % Industry::VARIANT_COUNT).unwrap();
-                        ui.label(format!("{:?}", culture));       
-                        ui.label(format!("{:?}", industry));       
-                        ui.label(format!("{:.0}",slice.population));
-                        ui.label(format!("{:.2}",slice.money));
-                        for good_index in 0..Good::VARIANT_COUNT{
-                            ui.label(format!("{:.2}",slice.owned_goods[good_index]));
+                        ui.label(format!("{:?}", culture));
+                        ui.label(format!("{:?}", industry));
+                        ui.label(format!("{:.0}", slice.population));
+                        ui.label(format!("{:.2}", slice.money));
+                        for good_index in 0..Good::VARIANT_COUNT {
+                            ui.label(format!("{:.2}", slice.owned_goods[good_index]));
                         }
                         ui.end_row();
                     }
@@ -268,7 +279,12 @@ fn main() {
         let mut current_index_offset = 0;
         for mesh in clipped_meshes {
             vertices.extend_from_slice(&mesh.1.vertices);
-            indices.extend(mesh.1.indices.iter().map(|index| index + current_index_offset as u32));
+            indices.extend(
+                mesh.1
+                    .indices
+                    .iter()
+                    .map(|index| index + current_index_offset as u32),
+            );
             current_index_offset += mesh.1.vertices.len();
         }
 
@@ -312,7 +328,7 @@ fn main() {
                             MouseScrollDelta::LineDelta(_, vertical_lines) => {
                                 game.inputs.zoom = (game.inputs.zoom
                                     * 1.1f64.powf(vertical_lines as f64))
-                                    .max(1.0);
+                                .max(1.0);
                             }
                             _ => {}
                         },
@@ -399,10 +415,11 @@ fn main() {
                     average_frametime /= FRAME_SAMPLES as f64;
 
                     window.set_title(format!("Frametimes: {:}", average_frametime).as_str());
-                    population_history.push(
-                        Value::new(current_month as f64,
-                        game.world.provinces[0].pops.population()));
-                    game.process(1.0/12.0);
+                    population_history.push(Value::new(
+                        current_month as f64,
+                        game.world.provinces[0].pops.population(),
+                    ));
+                    game.process(1.0 / 12.0);
                     current_month += 1;
                     update_renderer(&game, &mut vulkan_data);
                     vulkan_data.transfer_data_to_gpu();
@@ -438,7 +455,7 @@ fn update_renderer(game: &Game, vulkan_data: &mut VulkanData) {
     let render_object = &mut vulkan_data.objects[game.planet.render_object_index];
     let model_matrix = (Matrix4::from(Translation3::from(game.planet.position))
         * Matrix4::from(Rotation3::from(game.planet.rotation)))
-        .cast();
+    .cast();
     render_object.model = model_matrix;
 
     vulkan_data.uniform_buffer_object.view = view_matrix.cast();
@@ -453,8 +470,6 @@ fn update_renderer(game: &Game, vulkan_data: &mut VulkanData) {
         (game.mouse_position.y) as f32,
     );
 }
-
-
 
 fn close_app(vulkan_data: &mut VulkanData, control_flow: &mut ControlFlow) {
     *control_flow = ControlFlow::Exit;

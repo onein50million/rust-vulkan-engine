@@ -1,4 +1,3 @@
-
 /*
 Some random ideas:
 
@@ -12,7 +11,6 @@ Server object: calculated purely on server, client just copies data from server
 Client predicted: Uses client side prediction to reduce latency
 Client only (Animations, particles)
  */
-
 
 mod directions {
     use nalgebra::Vector3;
@@ -34,9 +32,9 @@ mod directions {
         Vector3::new(FRAC_1_SQRT_2, 0.0, -FRAC_1_SQRT_2);
 }
 
-pub(crate) mod server{
-    use std::time::Instant;
+pub(crate) mod server {
     use nalgebra::{UnitQuaternion, Vector3};
+    use std::time::Instant;
     pub struct GameObject {
         pub position: Vector3<f64>,
         pub rotation: UnitQuaternion<f64>,
@@ -48,17 +46,16 @@ pub(crate) mod server{
                 rotation: UnitQuaternion::from_axis_angle(&Vector3::z_axis(), 0.0),
             };
         }
-
     }
     struct Game {
         game_start: Instant,
         last_frame_instant: Instant,
-        planet: GameObject
+        planet: GameObject,
     }
 
     impl Game {
         pub fn new() -> Self {
-            let game = Self{
+            let game = Self {
                 game_start: Instant::now(),
                 last_frame_instant: Instant::now(),
                 planet: GameObject::new(),
@@ -66,21 +63,20 @@ pub(crate) mod server{
             game
         }
 
-        pub fn process(&mut self){
+        pub fn process(&mut self) {
             let delta_time = self.last_frame_instant.elapsed().as_secs_f64();
             self.last_frame_instant = std::time::Instant::now();
         }
     }
-
 }
-pub mod client{
+pub mod client {
     use std::f64::consts::PI;
     use std::time::Instant;
 
-    use nalgebra::{UnitQuaternion, Vector2, Vector3, Matrix4, Translation3};
     use crate::renderer::VulkanData;
     use crate::support::Inputs;
     use crate::world::World;
+    use nalgebra::{Matrix4, Translation3, UnitQuaternion, Vector2, Vector3};
 
     pub struct AnimationHandler {
         pub index: usize,
@@ -109,36 +105,47 @@ pub mod client{
                 self.next_frame = (self.next_frame + 1) % self.frame_count;
             }
         }
-        fn switch_animation(&mut self, vulkan_data: &VulkanData, render_object_index: usize, animation_index: usize){
+        fn switch_animation(
+            &mut self,
+            vulkan_data: &VulkanData,
+            render_object_index: usize,
+            animation_index: usize,
+        ) {
             self.previous_frame = 0;
             self.next_frame = 1;
-            self.frame_count = vulkan_data.objects[render_object_index].get_animation_length(animation_index);
+            self.frame_count =
+                vulkan_data.objects[render_object_index].get_animation_length(animation_index);
             self.progress = 0.0
         }
     }
 
-
     pub struct Camera {
         latitude: f64,
-        longitude: f64
+        longitude: f64,
     }
     impl Camera {
         fn new() -> Self {
-            Self {latitude: 0.0, longitude: 0.0 }
+            Self {
+                latitude: 0.0,
+                longitude: 0.0,
+            }
         }
-        fn get_rotation(&self) -> UnitQuaternion<f64>{
-            return UnitQuaternion::face_towards(&(self.get_position()), &Vector3::new(0.0, -1.0, 0.0))
+        fn get_rotation(&self) -> UnitQuaternion<f64> {
+            return UnitQuaternion::face_towards(
+                &(self.get_position()),
+                &Vector3::new(0.0, -1.0, 0.0),
+            );
         }
-        fn get_position(&self) -> Vector3<f64>{
-            return UnitQuaternion::from_euler_angles(0.0, self.longitude, 0.0)*
-            UnitQuaternion::from_euler_angles(0.0, 0.0, self.latitude)
-                * Vector3::new(10_000_000.0,0.0,0.0);
+        fn get_position(&self) -> Vector3<f64> {
+            return UnitQuaternion::from_euler_angles(0.0, self.longitude, 0.0)
+                * UnitQuaternion::from_euler_angles(0.0, 0.0, self.latitude)
+                * Vector3::new(10_000_000.0, 0.0, 0.0);
         }
-        pub fn get_view_matrix(&self) -> Matrix4<f64>{
+        pub fn get_view_matrix(&self) -> Matrix4<f64> {
             (Matrix4::from(Translation3::from(self.get_position()))
                 * self.get_rotation().to_homogeneous())
-                .try_inverse()
-                .unwrap()
+            .try_inverse()
+            .unwrap()
         }
     }
 
@@ -157,14 +164,13 @@ pub mod client{
         pub planet: GameObject,
         pub start_time: Instant,
         pub camera: Camera,
-        
     }
-    impl Game{
-        pub fn new(planet_render_index: usize, world: World) -> Self{
-            Self{
+    impl Game {
+        pub fn new(planet_render_index: usize, world: World) -> Self {
+            Self {
                 inputs: Inputs::new(),
                 mouse_position: Vector2::zeros(),
-                planet: GameObject{
+                planet: GameObject {
                     position: Vector3::zeros(),
                     rotation: UnitQuaternion::identity(),
                     render_object_index: planet_render_index,
@@ -176,20 +182,16 @@ pub mod client{
                 world,
             }
         }
-        pub fn process(&mut self, delta_time: f64){
-
+        pub fn process(&mut self, delta_time: f64) {
             self.world.process(delta_time);
 
             let delta_mouse = self.last_mouse_position - self.mouse_position;
-            self.last_mouse_position = self.mouse_position;    
-            if self.inputs.panning{
-                self.camera.latitude = (self.camera.latitude - 0.001*delta_mouse.y).clamp(-PI/2.01, PI/2.01);
-                self.camera.longitude -= delta_mouse.x *0.001;
+            self.last_mouse_position = self.mouse_position;
+            if self.inputs.panning {
+                self.camera.latitude =
+                    (self.camera.latitude - 0.001 * delta_mouse.y).clamp(-PI / 2.01, PI / 2.01);
+                self.camera.longitude -= delta_mouse.x * 0.001;
             }
         }
     }
-
 }
-
-
-

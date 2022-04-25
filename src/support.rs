@@ -1,7 +1,6 @@
 use erupt::vk;
 use nalgebra::{Matrix4, Translation3, Vector2, Vector3, Vector4};
-use serde::{Serialize, Deserialize};
-
+use serde::{Deserialize, Serialize};
 
 pub const NETWORK_TICK_RATE: f64 = 10.0;
 pub const FRAMERATE_TARGET: f64 = 280.0;
@@ -9,7 +8,6 @@ pub const NUM_RANDOM: usize = 100;
 pub const FRAME_SAMPLES: usize = 100;
 pub const NUM_MODELS: usize = 1000;
 pub const NUM_LIGHTS: usize = 1;
-
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub struct Inputs {
@@ -56,7 +54,7 @@ pub struct Vertex {
     pub normal: Vector3<f32>,
     pub tangent: Vector4<f32>,
     pub texture_coordinate: Vector2<f32>,
-    pub texture_type: u32, //Texture index for multiple textures 
+    pub texture_type: u32, //Texture index for multiple textures
     pub bone_indices: Vector4<u32>,
     pub bone_weights: Vector4<f32>,
     pub elevation: f32,

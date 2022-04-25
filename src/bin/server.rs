@@ -1,38 +1,33 @@
-use rust_vulkan_engine::support::Inputs;
 use rust_vulkan_engine::network::{ClientState, Packet};
+use rust_vulkan_engine::support::Inputs;
 use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Instant;
 
-
-pub struct Client{
+pub struct Client {
     address: SocketAddr,
     state: ClientState,
     username: String,
-    pub (crate) inputs: Inputs,
+    pub(crate) inputs: Inputs,
 }
-impl Client{
-    fn new(address: SocketAddr) -> Self{
-        let out = Self{
+impl Client {
+    fn new(address: SocketAddr) -> Self {
+        let out = Self {
             address,
             state: ClientState::Connected,
             username: "".to_string(),
-            inputs: Inputs::new()
+            inputs: Inputs::new(),
         };
         out
     }
-    fn process_packet(&mut self, packet: Packet, socket: &UdpSocket){
-        match packet{
-            Packet::RequestConnect{username} => {
+    fn process_packet(&mut self, packet: Packet, socket: &UdpSocket) {
+        match packet {
+            Packet::RequestConnect { username } => {
                 self.state = ClientState::Connected;
                 let send_data = Packet::RequestAccepted;
 
                 let send_data = send_data.to_bytes();
-                socket.send_to(
-                    &send_data,
-                    self.address
-                ).unwrap();
-
+                socket.send_to(&send_data, self.address).unwrap();
             }
             Packet::RequestAccepted => {}
             Packet::RequestDenied => {}
@@ -48,34 +43,36 @@ struct Server {
     start_time: Instant,
 }
 impl Server {
-    fn new()-> Self{
+    fn new() -> Self {
         let socket = UdpSocket::bind("127.0.0.1:2022").unwrap();
         socket.set_nonblocking(true);
-        Self{
+        Self {
             clients: HashMap::new(),
             socket,
-            start_time: Instant::now()
+            start_time: Instant::now(),
         }
     }
-    fn process(&mut self){
+    fn process(&mut self) {
         let mut buffer = [0; 1024];
-        while let Ok((num_bytes, source_address)) = self.socket.recv_from(&mut buffer){
+        while let Ok((num_bytes, source_address)) = self.socket.recv_from(&mut buffer) {
             let unprocessed_datagram = &mut buffer[..num_bytes];
-            match Packet::from_bytes(unprocessed_datagram){
+            match Packet::from_bytes(unprocessed_datagram) {
                 None => {}
                 Some(packet) => {
-                    self.clients.entry(source_address).or_insert(Client::new(source_address)).process_packet(packet, &self.socket);
+                    self.clients
+                        .entry(source_address)
+                        .or_insert(Client::new(source_address))
+                        .process_packet(packet, &self.socket);
                 }
             }
         }
     }
 }
 
-
 fn main() {
-    let mut server =  Server::new();
+    let mut server = Server::new();
 
-    loop{
+    loop {
         server.process();
     }
 }
