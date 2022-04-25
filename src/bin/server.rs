@@ -1,8 +1,5 @@
 use rust_vulkan_engine::support::Inputs;
-use rust_vulkan_engine::game::GameObjectKey;
 use rust_vulkan_engine::network::{ClientState, Packet};
-use std::borrow::BorrowMut;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Instant;
@@ -12,7 +9,6 @@ pub struct Client{
     address: SocketAddr,
     state: ClientState,
     username: String,
-    pub (crate) controlled: Option<GameObjectKey>,
     pub (crate) inputs: Inputs,
 }
 impl Client{
@@ -21,7 +17,6 @@ impl Client{
             address,
             state: ClientState::Connected,
             username: "".to_string(),
-            controlled: None,
             inputs: Inputs::new()
         };
         out
@@ -42,9 +37,7 @@ impl Client{
             Packet::RequestAccepted => {}
             Packet::RequestDenied => {}
             Packet::RequestGameWorld => {}
-            Packet::GameWorld(_) => {}
             Packet::Input(_) => {}
-            Packet::GameObject { .. } => {}
         }
     }
 }

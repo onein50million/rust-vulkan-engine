@@ -1,8 +1,6 @@
 use std::convert::TryInto;
 use bincode::config::Configuration;
-use crate::game::sendable::{GameObject, World};
 use serde::{Serialize, Deserialize};
-use crate::game::GameObjectKey;
 use crate::support::Inputs;
 
 
@@ -41,9 +39,7 @@ pub enum Packet{
     RequestAccepted,
     RequestDenied,
     RequestGameWorld,
-    GameWorld(World),
     Input(Inputs),
-    GameObject{key: GameObjectKey, object: GameObject}
 }
 
 impl Packet{

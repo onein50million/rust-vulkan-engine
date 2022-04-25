@@ -17,9 +17,13 @@ const int DESERT_OFFSET = 4;
 const int MOUNTAIN_OFFSET = 5;
 const int SNOW_OFFSET = 6;
 
+const mat3 CORRECTION_MATRIX = mat3(1.0000000,  0.0000000,  0.0000000,
+0.0000000,  0.0000000, 1.0000000,
+0.0000000,  -1.0000000,  0.0000000);
+
 
 layout(binding = 1) uniform sampler2D texSampler[NUM_MODELS];
-
+layout(binding = 3) uniform samplerCube cubemaps[NUM_MODELS];
 layout(binding = 4) uniform sampler2D normal_maps[NUM_MODELS];
 layout(binding = 5) uniform sampler2D rough_metal_ao_maps[NUM_MODELS];
 
@@ -36,10 +40,18 @@ layout(location = 3) in vec2 fragTexCoord;
 
 layout(location = 4) in vec3 worldPosition;
 layout(location = 5) flat in uint textureType;
+layout(location = 6) in float fragElevation;
 
 layout(location = 0) out vec4 outColor;
 
 const float EXPOSURE = 0.5;
+
+
+vec3 unproject_point(vec3 point){
+    mat4 transform = ubos.proj;
+    float inverse_denom = transform[2][3] / (point.z + transform[2][2]);
+    return vec3(point.x * inverse_denom / transform[0][0],point.y * inverse_denom / transform[1][1],-inverse_denom);
+}
 
 vec3 fresnelSchlick(float cos_theta, vec3 normal_incidence){
     return normal_incidence + (1.0 - normal_incidence) * pow(clamp(1.0 - cos_theta, 0.0, 1.0),5.0);
@@ -102,7 +114,7 @@ vec3 triplanar_normal(in sampler2D in_sampler, vec3 position,vec3 world_normal,v
 }
 
 SampleSet load_sample_set(int texture_offset, vec3 offset){
-    float scale = 1.0;
+    float scale = 1.0/6378137.0;
     vec3 normal = triplanar_normal(normal_maps[pushConstant.texture_index+texture_offset],worldPosition, fragNormal,fragNormal,scale, offset).rgb;
     vec4 albedo = triplanar_sample(texSampler[pushConstant.texture_index+texture_offset],worldPosition, normal, scale, offset);
     albedo.a = 1.0;
@@ -136,7 +148,16 @@ void main() {
     ubos.player_position_z
     );
 
-    if ((pushConstant.bitfield&IS_GLOBE) > 0){ //triplanar mapping
+    if ((pushConstant.bitfield&IS_CUBEMAP) > 0) {
+        // vec3 view_direction = (inverse(ubos.view) * vec4(gl_FragCoord.xy,1.0,0.0)).xyz;
+        vec3 scren_space_direction = vec3(fragTexCoord*2.0 - 1.0,1.0);
+        vec3 view_direction = CORRECTION_MATRIX * normalize((inverse(ubos.view) * vec4(unproject_point(scren_space_direction),0.0)).xyz);
+
+        outColor = vec4(texture(cubemaps[pushConstant.texture_index], view_direction).rgb, 1.0);
+        // outColor = vec4(view_direction, 1.0);
+        return;
+    }
+    else if ((pushConstant.bitfield&IS_GLOBE) > 0){ //triplanar mapping
 
         SampleSet deep_water_set = load_sample_set(DEEP_WATER_OFFSET,vec3(0.0));
         SampleSet shallow_water_set = load_sample_set(SHALLOW_WATER_OFFSET,vec3(0.0));
@@ -147,10 +168,21 @@ void main() {
 
         float deep_water_weight = 0.0;
         float shallow_water_weight = 0.0;
-        float foliage_weight = 1.0;
+        float foliage_weight = 0.0;
         float desert_weight = 0.0;
         float mountain_weight = 0.0;
         float snow_weight = 0.0;
+
+        if (fragElevation > 3000.0){
+            snow_weight = 1.0;
+        }
+        else if (fragElevation > 1000.0){
+            mountain_weight = 1.0;
+        }else if (fragElevation > 0.0){
+            foliage_weight = 1.0;
+        }else{
+            deep_water_weight = 1.0;
+        }
 
         SampleSet sample_sets[] = {
         deep_water_set,

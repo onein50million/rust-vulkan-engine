@@ -14,6 +14,7 @@ const int IS_CUBEMAP = 1;
 const int IS_HIGHLIGHTED = 2;
 const int IS_VIEWMODEL = 4;
 const int IS_GLOBE = 8;
+const int IS_VIEW_PROJ_MATRIX_IGNORED = 16;
 struct Light{
     vec4 position;
     vec4 color;
@@ -42,7 +43,6 @@ layout(binding = 0, std140) uniform UniformBufferObject {
     float player_position_x;
     float player_position_y;
     float player_position_z;
-
 } ubos;
 
 struct Bone {

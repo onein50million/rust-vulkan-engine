@@ -1,15 +1,30 @@
-use rust_vulkan_engine::game::*;
+use egui::Button;
+use egui::Color32;
+use egui::Frame;
+use egui::Grid;
+use egui::Label;
+use egui::Rgba;
+use egui::ScrollArea;
+use egui::Style;
+use egui::TopBottomPanel;
+use egui::Ui;
+use egui::Window;
+use egui::plot::Value;
+use egui::plot::Values;
+use nalgebra::Point3;
+use rust_vulkan_engine::game::client::GameObject;
 use rust_vulkan_engine::renderer::*;
 use rust_vulkan_engine::support::*;
 use egui_winit::winit::event::{ElementState, Event, VirtualKeyCode, WindowEvent};
 use egui_winit::winit::event_loop::{ControlFlow, EventLoop};
 use egui_winit::winit::window::WindowBuilder;
+use rust_vulkan_engine::world::*;
 use std::env;
 use std::net::UdpSocket;
-use nalgebra::{Matrix4, Point3, Rotation3, Translation3, UnitQuaternion, Vector2, Vector3};
-use slotmap::SlotMap;
+use std::time::Instant;
+use nalgebra::{Matrix4, Rotation3, Translation3, UnitQuaternion, Vector2, Vector3};
 use winit::event::{MouseButton, MouseScrollDelta};
-use rust_vulkan_engine::game::client::{Game, ObjectType};
+use rust_vulkan_engine::game::client::{Game};
 use rust_vulkan_engine::network::{ClientState, Packet};
 //Coordinate system for future reference:
 //from starting location
@@ -27,7 +42,7 @@ struct Client{
 }
 
 impl Client{
-    fn process(&mut self, game: &mut Game, renderer: &mut VulkanData, inputs: &Inputs){
+    fn process(&mut self, game: &mut Game){
         let mut buffer = [0; 1024];
         while let Ok(num_bytes) = self.socket.recv(&mut buffer){
             let unprocessed_datagram = &mut buffer[..num_bytes];
@@ -39,10 +54,6 @@ impl Client{
                             self.state = ClientState::Connected;
                             println!("Client connected");
                         },
-                        (ClientState::Connected, Packet::GameObject{key, object}) => {
-                            game.game_objects[key].position = object.position;
-                            //TODO rest of object transfer
-                        },
                         (_, _) => {
                             println!("Unknown state/packet combo")
                         }
@@ -51,11 +62,31 @@ impl Client{
             }
         }
 
-        self.socket.send(&Packet::Input(*inputs).to_bytes()).unwrap();
+        self.socket.send(&Packet::Input(game.inputs).to_bytes()).unwrap();
 
     }
 }
 
+// fn get_unique_id() -> u64{
+//     fastrand::u64(..)
+// }
+
+fn add_plot(ui: &mut Ui, values: &[Value], heading: &str, num_samples: usize, start: usize){
+    let values = &values[start..];
+    let num_samples = num_samples.min(values.len());
+    let chunk_size = values.len()/num_samples;
+    let line = egui::plot::Line::new(Values::from_values_iter(values.chunks(chunk_size).map(|values|{
+        let mut sum = 0.0;
+        let mut month_sum = 0.0;
+        for value in values{
+            sum += value.y;
+            month_sum += value.x;
+        }
+        Value::new(month_sum/values.len() as f64, sum/values.len() as f64)
+    })));
+    ui.add(Label::new(heading).heading());
+    ui.add(egui::plot::Plot::new(1).line(line).view_aspect(1.0).allow_zoom(false).include_y(0.0).include_x(values[0].x).allow_drag(false));
+}
 
 
 fn main() {
@@ -85,20 +116,76 @@ fn main() {
     vulkan_data.init_vulkan(&window);
     println!("Vulkan Data initialized");
 
-    let mut game = Game::new();
+
+    let world = World::new();
+
+    let planet_mesh = rust_vulkan_engine::planet_gen::get_planet(World::RADIUS as f32);
+    let planet_render_object_index = VulkanData::load_vertices_and_indices(
+        &mut vulkan_data,
+        planet_mesh.vertices,
+        planet_mesh.indices,
+        true,
+    );
+
+    /* Dummy objects to fill offsets */
+    vulkan_data.load_folder("models/planet/deep_water".parse().unwrap()); 
+    vulkan_data.load_folder("models/planet/shallow_water".parse().unwrap());
+    vulkan_data.load_folder("models/planet/foliage".parse().unwrap());
+    vulkan_data.load_folder("models/planet/desert".parse().unwrap());
+    vulkan_data.load_folder("models/planet/mountain".parse().unwrap());
+    vulkan_data.load_folder("models/planet/snow".parse().unwrap());
+
+
+    // let planet_render_object_index = VulkanData::load_vertices_and_indices(
+    //     &mut vulkan_data,
+    //     world.get_vertices(),
+    //     world.get_indices()
+    // );
+    vulkan_data.update_vertex_and_index_buffers();
+    
+    let mut game = Game::new(
+        planet_render_object_index,
+        world
+    );
     println!("Game created");
     let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
     socket.connect("127.0.0.1:2022").unwrap();
-    socket.set_nonblocking(true);
+    socket.set_nonblocking(true).unwrap();
     let mut client = Client{
         socket,
         state: ClientState::Disconnected
     };
 
+    //Do some simulation to see if state stabilizes
+    let months = 12*10000;
+    let mut population_history = Vec::with_capacity(months);
+    let mut price_histories = vec![Vec::with_capacity(months); Good::VARIANT_COUNT];
+    for month in 0..months{
+        population_history.push(
+            Value::new(month as f64,
+            game.world.provinces[0].pops.population()));
+        
+
+        for good_index in 0..Good::VARIANT_COUNT{
+            price_histories[good_index].push(Value::new(
+                month as f64,
+                game.world.provinces[0].market.price[good_index]
+            ));
+        }
+        game.world.process(1.0/12.0);
+    }
+
     client.socket.send(&Packet::RequestConnect{ username: "daniel".to_string()}.to_bytes()).unwrap();
     client.state = ClientState::ConnectionAwaiting;
 
+
+    let mut current_month = months;
     let mut texture_version = 0;
+
+
+    let mut population_graph_window_open = false;
+    let mut price_graph_window_open = false;
+    let mut pop_table_open = false;
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
 
@@ -106,13 +193,70 @@ fn main() {
         ctx.begin_frame(raw_input);
 
         if ctx.texture().version != texture_version {
-            println!("UI Texture changed");
             texture_version = ctx.texture().version;
             vulkan_data.update_ui_texture(ctx.texture());
         }
 
         // egui::SidePanel::left("my_left_panel").show(&ctx, |ui| {
+        //     ScrollArea::vertical().show(ui, |ui|{
+        //         ui.add(egui::Label::new(format!("{:}", game.world.provinces[0])))
+        //     })
         // });
+
+
+        TopBottomPanel::top("get_unique_id()").show(&ctx, |ui|{
+            ui.label("hello world!");
+            ui.horizontal(|ui|{
+                ui.checkbox(&mut population_graph_window_open, "Population Plot");
+                ui.checkbox(&mut pop_table_open, "Pops Table");
+                ui.checkbox(&mut price_graph_window_open, "Price Plots");
+            });
+        });
+
+        if population_graph_window_open{
+            Window::new("Population Plot").show(&ctx, |ui|{
+                ui.label("hello!");
+                add_plot(ui, &population_history, "Total Population", 1000, 0);
+            });
+        }
+        if price_graph_window_open{
+            Window::new("Price Plots").show(&ctx, |ui|{
+                ScrollArea::vertical().show(ui, |ui|{
+                    for good_index in 0..Good::VARIANT_COUNT{
+                        let good = Good::try_from(good_index).unwrap();
+                            add_plot(ui, &price_histories[good_index], &format!("{:?} Price", good), 1000, 0);    
+                    }
+                });
+
+            });
+
+        }
+        if pop_table_open{
+            Window::new("Pop Table").show(&ctx, |ui|{
+                Grid::new(0).striped(true).show(ui, |ui|{
+                    ui.label("Culture");       
+                    ui.label("Industry");       
+                    ui.label("Population");
+                    ui.label("Money");
+                    for good_index in 0..Good::VARIANT_COUNT{
+                        ui.label(format!("Owned {:?}", Good::try_from(good_index).unwrap()));
+                    }
+                    ui.end_row();     
+                    for (i, slice) in game.world.provinces[0].pops.pop_slices.iter().enumerate(){
+                        let culture = Culture::try_from(i / Industry::VARIANT_COUNT).unwrap();
+                        let industry = Industry::try_from(i % Industry::VARIANT_COUNT).unwrap();
+                        ui.label(format!("{:?}", culture));       
+                        ui.label(format!("{:?}", industry));       
+                        ui.label(format!("{:.0}",slice.population));
+                        ui.label(format!("{:.2}",slice.money));
+                        for good_index in 0..Good::VARIANT_COUNT{
+                            ui.label(format!("{:.2}",slice.owned_goods[good_index]));
+                        }
+                        ui.end_row();
+                    }
+                })
+            });
+        }
         // println!("egui texture version: {:?}", ctx.texture().version);
 
         let (output, shapes) = ctx.end_frame();
@@ -120,9 +264,12 @@ fn main() {
 
         let mut vertices = vec![];
         let mut indices = vec![];
+
+        let mut current_index_offset = 0;
         for mesh in clipped_meshes {
             vertices.extend_from_slice(&mesh.1.vertices);
-            indices.extend_from_slice(&mesh.1.indices);
+            indices.extend(mesh.1.indices.iter().map(|index| index + current_index_offset as u32));
+            current_index_offset += mesh.1.vertices.len();
         }
 
         // println!("vertex length: {:}", vertices.len());
@@ -237,7 +384,7 @@ fn main() {
                 frametime = std::time::Instant::now();
 
                 //Network loop
-                client.process();
+                client.process(&mut game);
 
                 if time_since_last_frame > 1.0 / FRAMERATE_TARGET {
                     let delta_time = last_tick.elapsed().as_secs_f64();
@@ -252,7 +399,11 @@ fn main() {
                     average_frametime /= FRAME_SAMPLES as f64;
 
                     window.set_title(format!("Frametimes: {:}", average_frametime).as_str());
-                    game.process(delta_time);
+                    population_history.push(
+                        Value::new(current_month as f64,
+                        game.world.provinces[0].pops.population()));
+                    game.process(1.0/12.0);
+                    current_month += 1;
                     update_renderer(&game, &mut vulkan_data);
                     vulkan_data.transfer_data_to_gpu();
                     let _draw_frame_result = vulkan_data.draw_frame();
@@ -271,32 +422,24 @@ fn update_renderer(game: &Game, vulkan_data: &mut VulkanData) {
     let projection = vulkan_data.get_projection(game.inputs.zoom);
     let projection_matrix = clip * projection.to_homogeneous();
 
-    let view_matrix: Matrix4<f64> = (Rotation3::from_euler_angles(0.0, game.inputs.angle, 0.0)
-        .to_homogeneous()
-        * (Translation3::new(0.0,-10.0,0.0).to_homogeneous()
-        * UnitQuaternion::face_towards(
-        &Vector3::new(1.0, 1.0, 1.0),
-        &Vector3::new(0.0, -1.0, 0.0),
-    ).to_homogeneous()))
-        .try_inverse()
-        .unwrap();
+    // let view_matrix: Matrix4<f64> = (Rotation3::from_euler_angles(0.0, game.inputs.angle, 0.0)
+    //     .to_homogeneous()
+    //     * (Translation3::new(0.0,-10.0,0.0).to_homogeneous()
+    //     * UnitQuaternion::face_towards(
+    //     &Vector3::new(1.0, 1.0, 1.0),
+    //     &Vector3::new(0.0, -1.0, 0.0),
+    // ).to_homogeneous()))
+    //     .try_inverse()
+    //     .unwrap();
 
+    // let time = game.start_time.elapsed().as_secs_f64();
+    let view_matrix = game.camera.get_view_matrix();
 
-    for game_object in game.game_objects.values(){
-        let render_object = &mut vulkan_data.objects[game_object.render_object_index];
-        let model_matrix = (Matrix4::from(Translation3::from(game_object.position))
-            * Matrix4::from(Rotation3::from(game_object.rotation)))
-            .cast();
-        render_object.model = model_matrix;
-
-        match &game_object.animation_handler {
-            None => {}
-            Some(animation_handler) => {
-                render_object.set_animation(animation_handler.index, animation_handler.progress, animation_handler.previous_frame, animation_handler.next_frame)
-            }
-        }
-
-    }
+    let render_object = &mut vulkan_data.objects[game.planet.render_object_index];
+    let model_matrix = (Matrix4::from(Translation3::from(game.planet.position))
+        * Matrix4::from(Rotation3::from(game.planet.rotation)))
+        .cast();
+    render_object.model = model_matrix;
 
     vulkan_data.uniform_buffer_object.view = view_matrix.cast();
     vulkan_data.uniform_buffer_object.proj = projection_matrix.cast();

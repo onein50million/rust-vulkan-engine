@@ -46,18 +46,20 @@ pub(crate) mod flags {
     pub(crate) const IS_HIGHLIGHTED: u32 = 0b10;
     pub(crate) const IS_VIEWMODEL: u32 = 0b100;
     pub(crate) const IS_GLOBE: u32 = 0b1000;
+    pub(crate) const IS_VIEW_PROJ_MATRIX_IGNORED: u32 = 0b10000;
 }
 
 #[derive(Copy, Clone)]
 #[repr(C)]
-pub(crate) struct Vertex {
-    pub(crate) position: Vector3<f32>,
-    pub(crate) normal: Vector3<f32>,
-    pub(crate) tangent: Vector4<f32>,
-    pub(crate) texture_coordinate: Vector2<f32>,
-    pub(crate) texture_type: u32, //Texture index for multiple textures I think
-    pub(crate) bone_indices: Vector4<u32>,
-    pub(crate) bone_weights: Vector4<f32>,
+pub struct Vertex {
+    pub position: Vector3<f32>,
+    pub normal: Vector3<f32>,
+    pub tangent: Vector4<f32>,
+    pub texture_coordinate: Vector2<f32>,
+    pub texture_type: u32, //Texture index for multiple textures 
+    pub bone_indices: Vector4<u32>,
+    pub bone_weights: Vector4<f32>,
+    pub elevation: f32,
 }
 
 impl Vertex {
@@ -74,6 +76,7 @@ impl Vertex {
             texture_type: 0,
             bone_indices: Vector4::new(0, 0, 0, 0),
             bone_weights: Vector4::new(0.0, 0.0, 0.0, 0.0),
+            elevation: 0.0,
         };
     }
 }
@@ -223,6 +226,11 @@ impl Vertex {
                 .location(6)
                 .format(vk::Format::R32G32B32A32_SFLOAT)
                 .offset(68),
+            vk::VertexInputAttributeDescriptionBuilder::new()
+                .binding(0)
+                .location(7)
+                .format(vk::Format::R32_SFLOAT)
+                .offset(84),
         ];
 
         return attribute_descriptions

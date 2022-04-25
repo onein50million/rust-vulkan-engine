@@ -1,26 +1,5 @@
 #version 450
-const int NUM_RANDOM = 100;
-const int NUM_LIGHTS = 1;
-
-struct Light{
-    vec4 position;
-    vec4 color;
-};
-
-layout(binding = 0, std140) uniform UniformBufferObject {
-    vec4 random[NUM_RANDOM];
-    Light lights[NUM_LIGHTS];
-    uint player_index;
-    uint num_lights;
-    uint map_mode;
-    float exposure;
-    vec2 mouse_position;
-    vec2 screen_size;
-    float time;
-    float player_position_x;
-    float player_position_y;
-    float player_position_z;
-} ubos;
+#include "extras.glsl"
 
 layout(location = 0) in vec2 uiPosition;
 layout(location = 1) in vec2 uiUV;

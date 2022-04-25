@@ -8,7 +8,8 @@ use gltf::animation::util::{ReadOutputs, Rotations};
 
 
 use image::{GenericImageView, ImageFormat};
-use nalgebra::{Matrix4, Orthographic3, Point3, Quaternion, Scale3, Translation3, UnitQuaternion, Vector2, Vector3, Vector4};
+use nalgebra::Perspective3;
+use nalgebra::{Matrix4, Point3, Quaternion, Scale3, Translation3, UnitQuaternion, Vector2, Vector3, Vector4};
 
 use std::convert::TryInto;
 use std::default::Default;
@@ -29,7 +30,7 @@ use winit::window::Window;
 const BASE_VOXEL_SIZE: f32 = 128.0;
 const MIP_LEVELS: u32 = 6;
 const MSAA_ENABLED: bool = false;
-const UI_BUFFER_LENGTH: usize = 8192;
+const UI_BUFFER_LENGTH: usize = 8192*32;
 
 #[derive(Debug, Copy, Clone)]
 pub enum DanielError {
@@ -261,6 +262,8 @@ impl UiData {
         assert!(vertices.len() < UI_BUFFER_LENGTH);
         assert!(indices.len() < UI_BUFFER_LENGTH);
 
+
+        // println!("{:?}", vertices[0]);
         unsafe {
             self.vertex_pointer
                 .unwrap()
@@ -738,6 +741,7 @@ pub struct RenderObject {
     texture_type: vk::ImageViewType,
     is_highlighted: bool,
     pub(crate) is_globe: bool,
+    pub(crate) is_view_proj_matrix_ignored: bool,
     pub(crate) is_viewmodel: bool,
     pub model: Matrix4<f32>,
     pub(crate) animations: Vec<AnimationObject>,
@@ -802,6 +806,7 @@ impl RenderObject {
             previous_frame,
             next_frame,
             animation_progress: 0.0,
+            is_view_proj_matrix_ignored: false,
         };
         if object.animations.len() > 0{
             object.set_animation(0,0.0,0,1);
@@ -845,6 +850,11 @@ impl Drawable for RenderObject {
             };
             bitfield |= if self.is_globe {
                 super::support::flags::IS_GLOBE
+            } else {
+                0
+            };
+            bitfield |= if self.is_view_proj_matrix_ignored {
+                super::support::flags::IS_VIEW_PROJ_MATRIX_IGNORED
             } else {
                 0
             };
@@ -902,22 +912,14 @@ trait Drawable {
         pipeline_layout: vk::PipelineLayout,
     );
 }
-pub(crate) struct Cubemap {
-    render_object: RenderObject,
+pub struct Cubemap {
+    pub render_object: RenderObject,
 }
 
 impl Cubemap {
     fn new(vulkan_data: &mut VulkanData, texture_path: std::path::PathBuf) -> Self {
-        let indices = CUBEMAP_INDICES.to_vec();
-        let vertices = [
-            POSITIVE_X_VERTICES,
-            NEGATIVE_X_VERTICES,
-            POSITIVE_Y_VERTICES,
-            NEGATIVE_Y_VERTICES,
-            POSITIVE_Z_VERTICES,
-            NEGATIVE_Z_VERTICES,
-        ]
-        .concat();
+        let indices = QUAD_INDICES.to_vec();
+        let vertices = FULLSCREEN_QUAD_VERTICES.to_vec();
 
         let texture = TextureSet {
             albedo: CombinedImage::new(
@@ -931,8 +933,11 @@ impl Cubemap {
             roughness_metalness_ao: None,
         };
 
+
+        let mut render_object = RenderObject::new(vulkan_data, vertices, indices,vec![], texture, true);
+        render_object.is_view_proj_matrix_ignored = true;
         let cubemap = Cubemap {
-            render_object: RenderObject::new(vulkan_data, vertices, indices,vec![], texture, true),
+            render_object,
         };
 
         return cubemap;
@@ -1237,6 +1242,7 @@ impl VulkanData {
             });
         }
 
+        
         if MSAA_ENABLED {
             self.msaa_samples = self.get_max_usable_sample_count();
         } else {
@@ -1265,6 +1271,7 @@ impl VulkanData {
         let queue_create_infos = &[queue_create_info];
 
         let device_features = vk::PhysicalDeviceFeaturesBuilder::new().sampler_anisotropy(true);
+
 
         let mut extended_dynamic_state_features =
             vk::PhysicalDeviceExtendedDynamicStateFeaturesEXTBuilder::new()
@@ -1642,7 +1649,7 @@ impl VulkanData {
         }
     }
 
-    pub(crate) fn load_folder(&mut self, folder: PathBuf) -> usize {
+    pub fn load_folder(&mut self, folder: PathBuf) -> usize {
         let albedo_path = folder.join("albedo.png");
         let albedo = CombinedImage::new(
             self,
@@ -1700,6 +1707,15 @@ impl VulkanData {
         let output = self.objects.len();
         self.objects.push(render_object);
 
+        return output;
+    }
+
+    pub fn load_vertices_and_indices(&mut self, vertices: Vec<Vertex>, indices: Vec<usize>, is_globe: bool) -> usize{
+        let indices = indices.iter().map(|index| *index as u32).collect();
+        let mut render_object = RenderObject::new(self, vertices, indices, vec![], TextureSet::new_empty(), false);
+        render_object.is_globe = is_globe;
+        let output = self.objects.len();
+        self.objects.push(render_object);
         return output;
     }
 
@@ -1775,6 +1791,7 @@ impl VulkanData {
                                 texture_type,
                                 bone_indices: Vector4::new(0, 0, 0, 0),
                                 bone_weights: Vector4::new(0.0, 0.0, 0.0, 0.0),
+                                elevation: 0.0,
                             });
                         }
 
@@ -2138,6 +2155,11 @@ impl VulkanData {
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
             vk::DescriptorSetLayoutBindingBuilder::new()
+                .binding(3)
+                .descriptor_count(NUM_MODELS as u32)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBindingBuilder::new()
                 .binding(4)
                 .descriptor_count(NUM_MODELS as u32)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
@@ -2308,7 +2330,24 @@ impl VulkanData {
                             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
                     );
                 }
-
+                let mut cubemap_infos = vec![];
+                for cubemap in &self.cubemaps {
+                    cubemap_infos.push(
+                        vk::DescriptorImageInfoBuilder::new()
+                            .image_view(cubemap.image_view)
+                            .sampler(cubemap.sampler)
+                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+                    );
+                }
+                let cubemaps_left = NUM_MODELS - cubemap_infos.len();
+                for _ in 0..cubemaps_left {
+                    cubemap_infos.push(
+                        vk::DescriptorImageInfoBuilder::new()
+                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                            .image_view(self.cubemaps[0].image_view)
+                            .sampler(self.cubemaps[0].sampler),
+                    );
+                }
                 let mut irradiance_infos = vec![];
                 for cubemap in &self.irradiance_maps {
                     irradiance_infos.push(
@@ -2371,6 +2410,8 @@ impl VulkanData {
                     );
                 }
 
+
+
                 let bone_ssbo_infos = [vk::DescriptorBufferInfoBuilder::new()
                     .buffer(self.storage_buffer.unwrap())
                     .range(size_of::<ShaderStorageBufferObject>() as vk::DeviceSize)
@@ -2395,6 +2436,12 @@ impl VulkanData {
                         .dst_array_element(0)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(&bone_ssbo_infos),
+                    vk::WriteDescriptorSetBuilder::new()
+                        .dst_set(*descriptor_set)
+                        .dst_binding(3)
+                        .dst_array_element(0)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .image_info(&cubemap_infos),
                     vk::WriteDescriptorSetBuilder::new()
                         .dst_set(*descriptor_set)
                         .dst_binding(4)
@@ -2591,7 +2638,7 @@ impl VulkanData {
                 };
             }
         }
-        let image_format = vk::Format::R8_UNORM;
+        let image_format = vk::Format::R8_UINT;
 
         let image_info = vk::ImageCreateInfoBuilder::new()
             .image_type(vk::ImageType::_2D)
@@ -2647,8 +2694,8 @@ impl VulkanData {
         .unwrap();
 
         let sampler_info = vk::SamplerCreateInfoBuilder::new()
-            .mag_filter(vk::Filter::LINEAR)
-            .min_filter(vk::Filter::LINEAR)
+            .mag_filter(vk::Filter::NEAREST)
+            .min_filter(vk::Filter::NEAREST)
             .address_mode_u(vk::SamplerAddressMode::REPEAT)
             .address_mode_v(vk::SamplerAddressMode::REPEAT)
             .address_mode_w(vk::SamplerAddressMode::REPEAT)
@@ -2689,7 +2736,7 @@ impl VulkanData {
         unsafe {
             staging_buffer_allocation_info
                 .get_mapped_data()
-                .copy_from_nonoverlapping(texture.pixels.as_ptr(), texture.pixels.len())
+                .copy_from_nonoverlapping(texture.pixels.as_ptr(), texture.pixels.len());
         };
         self.transition_image_layout(
             image,
@@ -2892,7 +2939,7 @@ impl VulkanData {
                 .binding(0)
                 .location(1)
                 .format(vk::Format::R32G32_SFLOAT)
-                .offset(8), //might be off, could be fun to see what happens when it's off
+                .offset(8),
             vk::VertexInputAttributeDescriptionBuilder::new()
                 .binding(0)
                 .location(2)
@@ -2980,7 +3027,7 @@ impl VulkanData {
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfoBuilder::new()
             .depth_test_enable(false)
             .depth_write_enable(false)
-            .depth_compare_op(vk::CompareOp::LESS)
+            .depth_compare_op(vk::CompareOp::ALWAYS)
             .depth_bounds_test_enable(false)
             .min_depth_bounds(0.0)
             .max_depth_bounds(1.0)
@@ -3067,7 +3114,7 @@ impl VulkanData {
         };
     }
 
-    pub(crate) fn update_vertex_and_index_buffers(&mut self) {
+    pub fn update_vertex_and_index_buffers(&mut self) {
         if self.vertex_buffer.is_some() || self.vertex_buffer_memory.is_some() {
             self.destroy_vertex_buffer();
             self.create_vertex_buffer();
@@ -3672,7 +3719,7 @@ impl VulkanData {
             .depth_clamp_enable(false)
             .rasterizer_discard_enable(false)
             .polygon_mode(vk::PolygonMode::FILL)
-            .cull_mode(vk::CullModeFlags::BACK) //TODO: Fix skybox so that it doesn't get culled with the backfaces
+            .cull_mode(vk::CullModeFlags::BACK)
             .front_face(vk::FrontFace::CLOCKWISE)
             .depth_bias_enable(false)
             .line_width(1.0f32);
@@ -4004,12 +4051,15 @@ impl VulkanData {
                     )
                 };
 
-                unsafe {
-                    self.device
-                        .as_ref()
-                        .unwrap()
-                        .cmd_set_depth_test_enable_ext(*command_buffer, false)
-                };
+                // unsafe {
+                //     self.device
+                //         .as_ref()
+                //         .unwrap()
+                //         .cmd_set_depth_test_enable_ext(*command_buffer, false)
+                // };
+
+
+                self.cubemap.as_ref().unwrap().draw(self.device.as_ref().unwrap(), *command_buffer, self.pipeline_layout.unwrap());
 
                 unsafe {
                     self.device
@@ -4281,7 +4331,11 @@ impl VulkanData {
     }
 
     fn create_cubemap_resources(&mut self) {
+
+
         let cubemap_folder = PathBuf::from("cubemap_forest");
+
+        self.cubemap = Some(Cubemap::new(self, cubemap_folder.join("StandardCubeMap.hdr")));
 
         let base_cubemap = CombinedImage::new(
             self,
@@ -4292,7 +4346,7 @@ impl VulkanData {
         )
         .unwrap();
 
-        let target_cubemap = self.create_blank_cubemap(32, 32, 1);
+        let target_cubemap = self.create_blank_cubemap(16, 16, 1);
         let combined_descriptors = [
             CombinedDescriptor {
                 descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
@@ -4313,6 +4367,7 @@ impl VulkanData {
                 },
             },
         ];
+        println!("Running irradiance shader");
         self.run_arbitrary_compute_shader(
             self.load_shader("shaders/irradiance.spv".parse().unwrap()),
             1u32,
@@ -4361,7 +4416,7 @@ impl VulkanData {
         let target_cubemap = self.create_blank_cubemap(1024, 1024, roughness_mipmaps);
 
         for i in 0..roughness_mipmaps {
-            println!("Running shader for mip level {:}", i);
+            println!("Running environment shader for mip level {:}", i);
 
             let image_view_create_info = vk::ImageViewCreateInfoBuilder::new()
                 .image(target_cubemap.image)
@@ -4848,27 +4903,16 @@ impl VulkanData {
         self.index_buffer_memory = None;
     }
 
-    pub fn get_projection(&self, zoom: f64) -> nalgebra::Orthographic3<f64> {
+    pub fn get_projection(&self, zoom: f64) -> nalgebra::Perspective3<f64> {
         let surface_width = self.surface_capabilities.unwrap().current_extent.width as f64;
         let surface_height = self.surface_capabilities.unwrap().current_extent.height as f64;
         let aspect_ratio = surface_width / surface_height;
-        const TILE_HEIGHT: f64 = 10.0;
-        let tile_height = TILE_HEIGHT / zoom;
 
-        let projection = nalgebra::Orthographic3::new(
-            -tile_height * aspect_ratio,
-            tile_height * aspect_ratio,
-            tile_height,
-            -tile_height,
-            1_000.0,
-            0.01,
+        return nalgebra::Perspective3::new(
+            aspect_ratio,90.0f64.to_radians(),
+            1_000_000.0,
+            20_000_000.0,
         );
-
-
-        return projection;
-    }
-    pub(crate) fn get_cubemap_projection(&self, zoom: f64) -> Orthographic3<f64> {
-        return self.get_projection(zoom);
     }
     pub fn transfer_data_to_gpu(&mut self) {
         let random: [f32; NUM_RANDOM] =
