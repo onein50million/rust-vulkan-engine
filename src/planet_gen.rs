@@ -4,7 +4,7 @@ use gdal::errors::GdalError;
 use genmesh::generators::{IcoSphere, IndexedPolygon, SharedVertex};
 use nalgebra::{Vector2, Vector3, Vector4};
 use std::{
-    collections::{hash_map::Entry, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     fs::read_dir,
 };
 
@@ -27,10 +27,17 @@ struct VertexData {
     neighbours: Vec<usize>,
 }
 
+const NUM_BUCKETS: f32 = 8.0; //Number of buckets to quantize elevations into
+
+fn quantized_to_actual(quantized: i8, range: f32) -> f32{
+    (quantized as f32 / NUM_BUCKETS) * range
+
+}
+
 pub fn get_planet(radius: f32) -> MeshOutput {
     let sphere = IcoSphere::subdivide(3);
 
-    let rng = fastrand::Rng::new();
+    let _rng = fastrand::Rng::new();
     let mut vertices: Vec<_> = sphere
         .shared_vertex_iter()
         .map(|vertex| Vertex {
@@ -185,8 +192,8 @@ pub fn get_planet(radius: f32) -> MeshOutput {
     let mut vertex_data: Vec<_> = vertices
         .iter()
         .enumerate()
-        .map(|(index, vertex)| {
-            const NUM_NEIGHBOURS: usize = 3;
+        .map(|(_index, vertex)| {
+            const NUM_NEIGHBOURS: usize = 6;
             let mut closest_vertices = vertices.iter().enumerate().collect::<Vec<_>>();
 
             closest_vertices.sort_by_key(|potential_closest| {
@@ -207,52 +214,138 @@ pub fn get_planet(radius: f32) -> MeshOutput {
 
     dbg!(&vertex_data[5]);
 
-    let min_elevation = vertices
+    for vertex in &mut vertex_data{
+        let divisor = 2500.0;
+        if vertex.elevation < 0.0{
+            vertex.elevation = (vertex.elevation/divisor).ceil()*divisor;
+        }
+    }
+
+    let min_elevation = vertex_data
         .iter()
-        .fold(f32::INFINITY, |a, &b| a.min(b.elevation));
-    let max_elevation = vertices
+        .fold(f32::INFINITY, |a, b| a.min(b.elevation));
+    let max_elevation = vertex_data
         .iter()
-        .fold(f32::NEG_INFINITY, |a, &b| a.max(b.elevation));
+        .fold(f32::NEG_INFINITY, |a, b| a.max(b.elevation));
 
     for vertex in &mut vertex_data {
         vertex.quantized_elevation =
-            ((vertex.elevation / max_elevation.max(min_elevation.abs())) * 128.0) as i8
+            ((vertex.elevation / max_elevation.max(min_elevation.abs())) * NUM_BUCKETS) as i8
     }
 
-    let mut wave_function_collapse = ElevationWaveFunctionCollapse::new(&vertex_data);
+    let mut quantized_elevations = HashSet::new();
+    for vertex in &vertex_data{
+        quantized_elevations.insert(vertex.quantized_elevation);
+    }
+    let mut quantized_elevations: Vec<_> = quantized_elevations.iter().collect();
+    quantized_elevations.sort();
+    for elevation in quantized_elevations{
+        let actual = quantized_to_actual(*elevation, max_elevation.max(min_elevation.abs()));
+        println!("Quantized: {elevation} Actual: {actual}");
+    }
 
-    wave_function_collapse.collapse_cell(0);
+    let mut start_instant = std::time::Instant::now();
+    let mut current_try = 0;
+    'wave_function: loop {
+        current_try += 1; 
+        println!("Current try: {:}", current_try);
+        let mut wave_function_collapse = ElevationWaveFunctionCollapse::new(&vertex_data);
+    
+        // wave_function_collapse.collapse_cell(0);
 
-    loop {
-        let mut unfinished_cell_indices = HashSet::new();
-        for (index, (vertex, cell)) in vertices
-            .iter_mut()
-            .zip(wave_function_collapse.cells.iter())
-            .enumerate()
-        {
-            match cell.cell_state {
-                CellState::Collapsed(quantized_elevation) => {
-                    vertex.elevation = (quantized_elevation as f32 / 128.0)
-                        * max_elevation.max(min_elevation.abs());
-                    // vertex.position += vertex.position.normalize() * vertex.elevation * 1.0;
-                }
-                CellState::Superposition(_) => {
-                    unfinished_cell_indices.insert(index);
+
+        let mut cells_to_collapse = vec![0];
+        // let mut count = wave_function_collapse.cells.len()/32;
+        let mut count = 0;
+        // let mut count = usize::MAX;
+        let mut visited_cells = HashSet::new();
+        dbg!(count);
+        while count > 0{
+            // if fastrand::f64() > 0.9{
+            //     wave_function_collapse.collapse_cell_to_value(i,1).expect("failed to collapse");
+            // }
+            let mut new_cells_to_collapse: Vec<usize> = vec![];
+            let mut cells_collapsed = 0u32; 
+            for cell_index in &cells_to_collapse{
+                if !visited_cells.contains(cell_index){
+                    // println!("Collapsing {cell_index}");
+                    if fastrand::f32() > 0.25{
+                        wave_function_collapse.collapse_cell_to_value(*cell_index,1).expect("failed to collapse");
+                    }
+                    visited_cells.insert(*cell_index);
+                    new_cells_to_collapse.extend(wave_function_collapse.cells[*cell_index].neighbours.iter());
+                    cells_collapsed += 1;
+                    count -= 1;
+                    if count == 0{
+                        break;
+                    }    
                 }
             }
+            if cells_collapsed == 0{
+                break
+            }else{
+                cells_to_collapse = new_cells_to_collapse;
+            }
+
         }
-        if unfinished_cell_indices.len() > 0 {
-            let rand_index = fastrand::usize(0..unfinished_cell_indices.len());
-            wave_function_collapse
-                .collapse_cell(*unfinished_cell_indices.iter().nth(rand_index).unwrap());
-        } else {
-            break;
+
+        let mut num_collapses = 0;
+        loop {
+
+            let mut lowest_entropy_cells = vec![];
+            let mut lowest_entropy = wave_function_collapse.get_cell_entropy(0);
+            let mut unfinished_cell_indices = HashSet::new();
+            for (index, (vertex, cell)) in vertices
+                .iter_mut()
+                .zip(wave_function_collapse.cells.iter())
+                .enumerate()
+            {
+                let cell_entropy = wave_function_collapse.get_cell_entropy(index);
+                if cell_entropy > lowest_entropy{
+                    lowest_entropy = cell_entropy;
+                    lowest_entropy_cells = vec![index];
+                }else if cell_entropy == lowest_entropy{
+                    lowest_entropy_cells.push(index);
+                }
+
+                match cell.cell_state {
+                    CellState::Collapsed(quantized_elevation) => {
+                        // vertex.elevation = (quantized_elevation as f32 / 4.0)
+                        //     * max_elevation.max(min_elevation.abs());
+                        vertex.elevation = quantized_to_actual(quantized_elevation, max_elevation.max(min_elevation.abs()));
+                        // vertex.position += vertex.position.normalize() * vertex.elevation * 1.0;
+                    }
+                    CellState::Superposition(_) => {
+                        unfinished_cell_indices.insert(index);
+                    }
+                }
+            }
+            if start_instant.elapsed().as_secs_f64() > 1.0{
+                start_instant = std::time::Instant::now();
+                println!("{:} collapses to go", unfinished_cell_indices.len())
+            }
+            if unfinished_cell_indices.len() > 0 {
+                let rand_index = fastrand::usize(0..lowest_entropy_cells.len());
+                match wave_function_collapse
+                    .collapse_cell(*lowest_entropy_cells.iter().nth(rand_index).unwrap()){
+                        Ok(_) => {
+                            num_collapses += 1;
+                        },
+                        Err(_) => {
+                            println!("Wave function collapse failed");
+                            println!("Made it {:} collapses", num_collapses);
+                            continue 'wave_function;
+                        },
+                    }
+            } else {
+                break 'wave_function;
+            }
         }
     }
 
     for vertex in &mut vertices {
         vertex.normal = Vector3::zeros();
-        vertex.position *= radius + vertex.elevation * 100.0;
+        vertex.position *= radius + vertex.elevation * 1.0;
     }
 
     for triangle_index in (0..indices.len()).step_by(3) {
@@ -272,6 +365,12 @@ pub fn get_planet(radius: f32) -> MeshOutput {
     return MeshOutput { vertices, indices };
 }
 
+#[derive(Clone, Copy, Debug)]
+enum Error{
+    PropogationFailed
+}
+
+
 #[derive(Clone, Debug)]
 struct Cell {
     cell_state: CellState,
@@ -281,13 +380,50 @@ struct Cell {
 #[derive(Clone, Debug)]
 enum CellState {
     Collapsed(i8),              //Collapsed cell has only one value
-    Superposition(HashSet<i8>), //Cell is in a superposition of all possible values
+    Superposition(HashMap<i8, f32>), //Cell is in a superposition of all possible values
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Ratio{
+    RawSamples{
+        sample_count: u32
+    },
+    Data(f32)
+}
+impl Ratio{
+    fn add_sample(&mut self){
+        match self{
+            Ratio::RawSamples {sample_count } => {
+                *sample_count += 1;
+            },
+            Ratio::Data(_) => panic!("Already averaged"),
+        }
+    }
+    // fn average(&mut self){
+    //     match self{
+    //         AverageRatio::RawData { sum, sample_count } => {
+    //             let value = *sum as f32 / *sample_count as f32;
+    //             *self = AverageRatio::AveragedData(value);
+    //         },
+    //         AverageRatio::AveragedData(_) => panic!("Already Averaged"),
+    //     }
+    // }
+}
+
+fn balance_ratios(hashmap: &mut HashMap<i8, f32>){
+    
+    let ratio_sum: f32 = hashmap.values().sum();
+    assert_ne!(ratio_sum, 0.0);
+
+    for ratio in hashmap.values_mut(){
+        *ratio /= ratio_sum;
+    }
 }
 
 #[derive(Clone, Debug)]
 struct ElevationWaveFunctionCollapse {
     cells: Vec<Cell>,
-    elevation_mapping: HashMap<i8, HashSet<i8>>, //given quantized elevation it gives you the possible states
+    elevation_mapping: HashMap<i8, HashMap<i8, Ratio>>, //given quantized elevation it gives you the possible states and their probabilities
 }
 
 impl ElevationWaveFunctionCollapse {
@@ -296,21 +432,61 @@ impl ElevationWaveFunctionCollapse {
         for i in 0..vertex_data.len() {
             let inner_map = elevation_mapping
                 .entry(vertex_data[i].quantized_elevation)
-                .or_insert(HashSet::new());
+                .or_insert(HashMap::new());
             for neighbour in &vertex_data[i].neighbours {
-                if !inner_map.contains(&vertex_data[*neighbour].quantized_elevation) {
-                    inner_map.insert(vertex_data[*neighbour].quantized_elevation);
-                }
+                let entry = inner_map.entry(vertex_data[*neighbour].quantized_elevation).or_insert(Ratio::RawSamples {sample_count: 0 });
+                entry.add_sample();
+                // if !inner_map.contains(&vertex_data[*neighbour].quantized_elevation) {
+                //     inner_map.insert(vertex_data[*neighbour].quantized_elevation);
+                // }
             }
         }
+
+        for raw_samples in elevation_mapping.values_mut(){
+            let total: f32 = raw_samples.values().map(|sample_set|{
+                match sample_set{
+                    Ratio::RawSamples {sample_count } => {
+                        *sample_count as f32
+                    },
+                    Ratio::Data(ratio) => {
+                        *ratio
+                    },
+                }
+            }).sum();
+
+            for raw_sample in raw_samples.values_mut(){
+                let new_value = match raw_sample{
+                    Ratio::RawSamples {sample_count } => {
+                        (*sample_count as f32)/total
+                    },
+                    Ratio::Data(_) => {
+                        panic!("Data already averaged")
+                    },
+                };
+
+                *raw_sample = Ratio::Data(new_value);
+            }
+        }
+
+        // dbg!(raw_samp)
+        
         let cells: Vec<_> = vertex_data
             .iter()
             .map(|vertex| {
-                let mut superpositions = HashSet::new();
+                let mut superpositions = HashMap::new();
 
-                for quantized_elevation in elevation_mapping.keys() {
-                    superpositions.insert(*quantized_elevation);
+                for ratio_map in elevation_mapping.values() {
+                    for (potential_elevation, ratio) in ratio_map{
+                        if let Ratio::Data(ratio) = ratio{
+                            let entry = superpositions.entry(*potential_elevation).or_insert(0.0);
+                            *entry += ratio;
+                        }else{
+                            panic!("Data not averaged")
+                        }
+                    }
                 }
+
+                balance_ratios(&mut superpositions);
 
                 Cell {
                     cell_state: CellState::Superposition(superpositions),
@@ -319,24 +495,43 @@ impl ElevationWaveFunctionCollapse {
             })
             .collect();
 
-        Self {
+        let out =Self {
             cells,
             elevation_mapping,
-        }
+        };
+        out    
+
     }
 
-    fn get_possible_states(&self, index: usize) -> HashSet<i8> {
+
+    //will be unbalanced
+    fn get_possible_states(&self, index: usize) -> HashMap<i8, f32> {
         match &self.cells[index].cell_state {
-            CellState::Collapsed(state) => self.elevation_mapping[&state].clone(),
-            CellState::Superposition(states) => states
-                .iter()
-                .map(|state| self.elevation_mapping[state].clone())
-                .flatten()
-                .collect(),
+            CellState::Collapsed(state) => {
+                HashMap::from_iter(self.elevation_mapping[&state].iter().map(|(key, value)|{
+                    match value{
+                        Ratio::RawSamples{..} => panic!("Unfinished ratio map"),
+                        Ratio::Data(new_value) => (*key, *new_value),
+                    }
+                }))
+            },
+            CellState::Superposition(states) => {
+                let mut output = HashMap::new();
+                for (quantized_elevation, ratio) in states{
+                    for (possible_quantized_elevation, possible_ratio) in &self.elevation_mapping[quantized_elevation]{
+                        let entry = output.entry(*possible_quantized_elevation).or_insert(0.0);
+                        if let Ratio::Data(possible_ratio) = possible_ratio{
+                            *entry += ratio * possible_ratio;  
+                        }
+                    }
+                }
+                // balance_ratios(&mut output);
+                output
+            }
         }
     }
 
-    fn propogate_changes(&mut self) {
+    fn propogate_changes(&mut self) -> Result<(), Error> {
         let mut done = true;
         loop {
             // println!("propogate changes loop");
@@ -346,28 +541,45 @@ impl ElevationWaveFunctionCollapse {
                     CellState::Collapsed(_) => continue,
                     CellState::Superposition(states) => {
                         // dbg!(states.len());
-                        let mut new_states = HashSet::new();
+                        let mut neighbour_states = HashMap::new();
                         for neighbour_index in &self.cells[i].neighbours {
-                            new_states.extend(self.get_possible_states(*neighbour_index).iter());
+                            for (neighbour_state_elevation, neighbour_state_ratio) in self.get_possible_states(*neighbour_index).iter(){
+                                let entry = neighbour_states.entry(*neighbour_state_elevation).or_insert(0.0);
+                                *entry += neighbour_state_ratio * states[neighbour_state_elevation];
+                            }
                         }
-                        let out: HashSet<_> = new_states
-                            .intersection(states)
-                            .map(|&state| state)
-                            .collect();
-                        if &out != states {
-                            done = false;
+                        balance_ratios(&mut neighbour_states);
+                        const EPSILON: f32 = 0.001;
+
+                        // dbg!(&neighbour_states);
+                        // dbg!(&states);
+                        for (neighbour_quantized_elevation, neighbour_state_ratio) in &neighbour_states{
+                            let state_ratio = states[neighbour_quantized_elevation];
+                            if (state_ratio - *neighbour_state_ratio).abs() > EPSILON{
+                                done = false;
+                            }
                         }
-                        out
+
+                        
+
+                        // let out: HashSet<_> = neighbour_states
+                        //     .intersection(states)
+                        //     .map(|&state| state)
+                        //     .collect();
+                        // if &out != states {
+                        //     done = false;
+                        // }
+                        neighbour_states
                     }
                 };
 
                 // dbg!(&new_states);
 
                 if new_states.len() == 0 {
-                    panic!("Wave function propogation failed")
+                    return Err(Error::PropogationFailed)
                 } else if new_states.len() == 1 {
                     self.cells[i].cell_state =
-                        CellState::Collapsed(*new_states.iter().next().unwrap())
+                        CellState::Collapsed(*new_states.iter().next().unwrap().0)
                 } else {
                     self.cells[i].cell_state = CellState::Superposition(new_states)
                 }
@@ -377,16 +589,40 @@ impl ElevationWaveFunctionCollapse {
             }
             done = true;
         }
+        Ok(())
     }
-    fn collapse_cell(&mut self, index: usize) {
+
+    fn get_cell_entropy(&self, index: usize) -> usize{
+        match &self.cells[index].cell_state{
+            CellState::Collapsed(_) => {
+                1
+            },
+            CellState::Superposition(states) => {
+                states.iter().count()
+            },
+        }
+    }
+
+    fn collapse_cell(&mut self, index: usize) -> Result<(), Error> {
+        let mut collapsed_value = None;
         match &self.cells[index].cell_state {
-            CellState::Collapsed(_) => return,
+            CellState::Collapsed(_) => return Ok(()),
             CellState::Superposition(superpositions) => {
-                let random = fastrand::usize(0..superpositions.len());
-                self.cells[index].cell_state =
-                    CellState::Collapsed(*superpositions.iter().nth(random).unwrap());
-                self.propogate_changes();
+                let random = fastrand::f32();
+                let mut probability_sum = 0.0;
+                for (quantized_elevation, probability) in superpositions{
+                    probability_sum += probability;
+                    if random <= probability_sum{
+                        collapsed_value = Some(*quantized_elevation)
+                    }
+                }
             }
         }
+        self.cells[index].cell_state = CellState::Collapsed(collapsed_value.expect("Cell Collapse failed. This probably shouldn't happen... maybe"));
+        self.propogate_changes()
+    }
+    fn collapse_cell_to_value(&mut self, index: usize, value: i8) -> Result<(), Error> {
+        self.cells[index].cell_state = CellState::Collapsed(value);
+        self.propogate_changes()
     }
 }

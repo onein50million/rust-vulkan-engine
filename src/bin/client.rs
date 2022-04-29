@@ -1,30 +1,30 @@
 use egui::plot::Value;
 use egui::plot::Values;
-use egui::Button;
-use egui::Color32;
-use egui::Frame;
+
+
+
 use egui::Grid;
 use egui::Label;
-use egui::Rgba;
+
 use egui::ScrollArea;
-use egui::Style;
+
 use egui::TopBottomPanel;
 use egui::Ui;
 use egui::Window;
 use egui_winit::winit::event::{ElementState, Event, VirtualKeyCode, WindowEvent};
 use egui_winit::winit::event_loop::{ControlFlow, EventLoop};
 use egui_winit::winit::window::WindowBuilder;
-use nalgebra::Point3;
-use nalgebra::{Matrix4, Rotation3, Translation3, UnitQuaternion, Vector2, Vector3};
+
+use nalgebra::{Matrix4, Rotation3, Translation3, Vector2, Vector3};
 use rust_vulkan_engine::game::client::Game;
-use rust_vulkan_engine::game::client::GameObject;
+
 use rust_vulkan_engine::network::{ClientState, Packet};
 use rust_vulkan_engine::renderer::*;
 use rust_vulkan_engine::support::*;
 use rust_vulkan_engine::world::*;
 use std::env;
 use std::net::UdpSocket;
-use std::time::Instant;
+
 use winit::event::{MouseButton, MouseScrollDelta};
 //Coordinate system for future reference:
 //from starting location
@@ -123,9 +123,24 @@ fn main() {
     vulkan_data.init_vulkan(&window);
     println!("Vulkan Data initialized");
 
-    let world = World::new();
-
     let planet_mesh = rust_vulkan_engine::planet_gen::get_planet(World::RADIUS as f32);
+
+    let world = World::new(&planet_mesh.indices);
+
+
+    if let Some(line_data) = &mut vulkan_data.line_data{
+        for vertex in &planet_mesh.vertices{
+            line_data.add_point(vertex.position);
+        }
+        for province in world.provinces.iter(){
+            for chunk in province.point_indices.chunks(2){
+                let first_point = chunk[0];
+                let second_point = chunk[1];
+                line_data.connect_points(first_point, second_point);
+            }
+        }
+    }
+
     let planet_render_object_index = VulkanData::load_vertices_and_indices(
         &mut vulkan_data,
         planet_mesh.vertices,
@@ -140,6 +155,7 @@ fn main() {
     vulkan_data.load_folder("models/planet/desert".parse().unwrap());
     vulkan_data.load_folder("models/planet/mountain".parse().unwrap());
     vulkan_data.load_folder("models/planet/snow".parse().unwrap());
+    vulkan_data.load_folder("models/planet/data".parse().unwrap());
 
     // let planet_render_object_index = VulkanData::load_vertices_and_indices(
     //     &mut vulkan_data,
@@ -158,11 +174,16 @@ fn main() {
         state: ClientState::Disconnected,
     };
 
+    let mut last_time_check = std::time::Instant::now();
     //Do some simulation to see if state stabilizes
-    let months = 12 * 10000;
+    let months = 12 * 1000;
     let mut population_history = Vec::with_capacity(months);
     let mut price_histories = vec![Vec::with_capacity(months); Good::VARIANT_COUNT];
     for month in 0..months {
+        if last_time_check.elapsed().as_secs_f64() > 1.0{
+            last_time_check = std::time::Instant::now();
+            println!("Month: {month}");
+        }
         population_history.push(Value::new(
             month as f64,
             game.world.provinces[0].pops.population(),
@@ -421,7 +442,7 @@ fn main() {
                     ));
                     game.process(1.0 / 12.0);
                     current_month += 1;
-                    update_renderer(&game, &mut vulkan_data);
+                    update_renderer(&game, &mut vulkan_data, current_month as f32 / 12.0);
                     vulkan_data.transfer_data_to_gpu();
                     let _draw_frame_result = vulkan_data.draw_frame();
                     time_since_last_frame -= 1.0 / FRAMERATE_TARGET;
@@ -433,7 +454,7 @@ fn main() {
     })
 }
 
-fn update_renderer(game: &Game, vulkan_data: &mut VulkanData) {
+fn update_renderer(game: &Game, vulkan_data: &mut VulkanData, current_year: f32) {
     let clip = Matrix4::<f64>::identity();
 
     let projection = vulkan_data.get_projection(game.inputs.zoom);
@@ -461,7 +482,7 @@ fn update_renderer(game: &Game, vulkan_data: &mut VulkanData) {
     vulkan_data.uniform_buffer_object.view = view_matrix.cast();
     vulkan_data.uniform_buffer_object.proj = projection_matrix.cast();
 
-    vulkan_data.uniform_buffer_object.time = f32::NAN;
+    vulkan_data.uniform_buffer_object.time = current_year;
     vulkan_data.uniform_buffer_object.player_position = Vector3::zeros();
     vulkan_data.uniform_buffer_object.exposure = game.inputs.exposure as f32;
 

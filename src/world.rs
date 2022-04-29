@@ -1,10 +1,7 @@
 use std::{fmt::Display, mem::MaybeUninit};
 
-use nalgebra::{UnitVector3, Vector2, Vector3, Vector4};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use variant_count::VariantCount;
-
-use crate::support::Vertex;
 
 #[repr(usize)]
 #[derive(Clone, Copy, VariantCount, Debug, IntoPrimitive, TryFromPrimitive)]
@@ -174,7 +171,7 @@ impl Pops {
 
 #[derive(Debug)]
 pub struct Province {
-    point_indices: Vec<usize>,
+    pub point_indices: Vec<usize>,
     pub pops: Pops,
     pub market: Market,
 }
@@ -227,72 +224,78 @@ impl Display for Province {
 
 #[derive(Debug)]
 pub struct World {
-    pub provinces: [Province; 2],
-    pub points: Vec<UnitVector3<f64>>,
+    pub provinces: Box<[Province]>,
 }
 
 impl World {
     pub const RADIUS: f64 = 6_378_137.0; //in meters
-                                         // const FOOD_REQUIREMENT: f64 = 1.0; //how much food each person needs
-    pub fn new() -> Self {
+    pub fn new(indices: &[usize]) -> Self {
+        let provinces = indices.chunks(3).map(|triangle|{
+            Province {
+                point_indices: vec![triangle[0], triangle[1], triangle[1] ,triangle[2],triangle[2], triangle[0]],
+                pops: Pops::new(10_000.0),
+                market: Market {
+                    price: [1.0; Good::VARIANT_COUNT],
+                    supply: [0.0; Good::VARIANT_COUNT],
+                    demand: [0.0; Good::VARIANT_COUNT],
+                    previous_supply_demand_error: [0.0; Good::VARIANT_COUNT],
+                    supply_demand_error_integral: [0.0; Good::VARIANT_COUNT],
+                },
+            }
+        }).collect();
+
         Self {
-            provinces: [
-                Province {
-                    point_indices: vec![0, 1, 2],
-                    pops: Pops::new(10_000.0),
-                    market: Market {
-                        price: [1.0; Good::VARIANT_COUNT],
-                        supply: [0.0; Good::VARIANT_COUNT],
-                        demand: [0.0; Good::VARIANT_COUNT],
-                        previous_supply_demand_error: [0.0; Good::VARIANT_COUNT],
-                        supply_demand_error_integral: [0.0; Good::VARIANT_COUNT],
-                    },
-                },
-                Province {
-                    point_indices: vec![0, 3, 4],
-                    pops: Pops::new(1_000.0),
-                    market: Market {
-                        price: [1.0; Good::VARIANT_COUNT],
-                        supply: [0.0; Good::VARIANT_COUNT],
-                        demand: [0.0; Good::VARIANT_COUNT],
-                        previous_supply_demand_error: [0.0; Good::VARIANT_COUNT],
-                        supply_demand_error_integral: [0.0; Good::VARIANT_COUNT],
-                    },
-                },
-            ],
-            points: vec![
-                UnitVector3::new_normalize(Vector3::new(1.0, 0.0, 0.0)),
-                UnitVector3::new_normalize(Vector3::new(1.0, 0.1, 0.0)),
-                UnitVector3::new_normalize(Vector3::new(1.0, 0.0, 0.1)),
-                UnitVector3::new_normalize(Vector3::new(1.0, -0.1, 0.0)),
-                UnitVector3::new_normalize(Vector3::new(1.0, 0.0, -0.1)),
-            ],
+            provinces
+            // provinces: [
+            //     Province {
+            //         point_indices: vec![0, 1, 1, 2, 2, 3,3,0],
+            //         pops: Pops::new(10_000.0),
+            //         market: Market {
+            //             price: [1.0; Good::VARIANT_COUNT],
+            //             supply: [0.0; Good::VARIANT_COUNT],
+            //             demand: [0.0; Good::VARIANT_COUNT],
+            //             previous_supply_demand_error: [0.0; Good::VARIANT_COUNT],
+            //             supply_demand_error_integral: [0.0; Good::VARIANT_COUNT],
+            //         },
+            //     },
+            //     Province {
+            //         point_indices: vec![0, 3],
+            //         pops: Pops::new(1_000.0),
+            //         market: Market {
+            //             price: [1.0; Good::VARIANT_COUNT],
+            //             supply: [0.0; Good::VARIANT_COUNT],
+            //             demand: [0.0; Good::VARIANT_COUNT],
+            //             previous_supply_demand_error: [0.0; Good::VARIANT_COUNT],
+            //             supply_demand_error_integral: [0.0; Good::VARIANT_COUNT],
+            //         },
+            //     },
+            // ],
         }
     }
-    pub fn get_indices(&self) -> Vec<usize> {
-        self.provinces
-            .iter()
-            .flat_map(|province| province.point_indices.iter().map(|index| *index))
-            .collect()
-    }
-    pub fn get_vertices(&self) -> Vec<Vertex> {
-        self.points
-            .iter()
-            .map(|point| Vertex {
-                position: (point.into_inner() * Self::RADIUS).cast(),
-                normal: point.into_inner().cast(),
-                tangent: Vector4::zeros(),
-                texture_coordinate: Vector2::zeros(),
-                texture_type: 0,
-                bone_indices: Vector4::zeros(),
-                bone_weights: Vector4::zeros(),
-                elevation: 0.0,
-            })
-            .collect()
-    }
+    // pub fn get_indices(&self) -> Vec<usize> {
+    //     self.provinces
+    //         .iter()
+    //         .flat_map(|province| province.point_indices.iter().map(|index| *index))
+    //         .collect()
+    // }
+    // pub fn get_vertices(&self) -> Vec<Vertex> {
+    //     self.points
+    //         .iter()
+    //         .map(|point| Vertex {
+    //             position: (point.into_inner() * Self::RADIUS).cast(),
+    //             normal: point.into_inner().cast(),
+    //             tangent: Vector4::zeros(),
+    //             texture_coordinate: Vector2::zeros(),
+    //             texture_type: 0,
+    //             bone_indices: Vector4::zeros(),
+    //             bone_weights: Vector4::zeros(),
+    //             elevation: 0.0,
+    //         })
+    //         .collect()
+    // }
 
     pub fn process(&mut self, delta_year: f64) {
-        for (province_index, province) in self.provinces.iter_mut().enumerate() {
+        for (_province_index, province) in self.provinces.iter_mut().enumerate() {
             province.market.demand = [0.0; Good::VARIANT_COUNT];
             province.market.supply = [0.0; Good::VARIANT_COUNT];
 
@@ -301,7 +304,7 @@ impl World {
                 slice.individual_demand = [0.0; Good::VARIANT_COUNT];
                 slice.individual_supply = [0.0; Good::VARIANT_COUNT];
 
-                let culture = Culture::try_from(index / Industry::VARIANT_COUNT).unwrap();
+                let _culture = Culture::try_from(index / Industry::VARIANT_COUNT).unwrap();
                 let industry = Industry::try_from(index % Industry::VARIANT_COUNT).unwrap();
 
                 let goods_needed: Vec<_> = get_inputs(industry, slice.population, delta_year)
@@ -451,9 +454,9 @@ impl World {
             }
 
             //use remaining resources for industry
-            let mut money_sum = 0.0;
+            let mut _money_sum = 0.0;
             for (index, slice) in province.pops.pop_slices.iter_mut().enumerate() {
-                money_sum += slice.money;
+                _money_sum += slice.money;
                 let industry = Industry::try_from(index % Industry::VARIANT_COUNT).unwrap();
                 let inputs = get_inputs(industry, slice.population, delta_year);
                 let minimum_met_input = inputs

@@ -7,7 +7,7 @@ use erupt::{vk, DeviceLoader, EntryLoader, ExtendableFromConst, InstanceLoader, 
 use gltf::animation::util::{ReadOutputs, Rotations};
 
 use image::{GenericImageView, ImageFormat};
-use nalgebra::Perspective3;
+
 use nalgebra::{
     Matrix4, Point3, Quaternion, Scale3, Translation3, UnitQuaternion, Vector2, Vector3, Vector4,
 };
@@ -18,6 +18,7 @@ use std::f32::consts::PI;
 use std::ffi::{c_void, CStr, CString};
 use std::fs::File;
 use std::io::BufReader;
+use std::marker::PhantomData;
 use std::mem::size_of;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,10 +28,12 @@ use winit::window::Window;
 //TODO: Generate JSON descriptor set info and parse that instead of having to manually keep everything up to date
 //https://www.reddit.com/r/vulkan/comments/s7e9wn/reflection_on_shaders_to_determine_uniforms/
 
-const BASE_VOXEL_SIZE: f32 = 128.0;
+
+//BEHOLD: MY STUFF
 const MIP_LEVELS: u32 = 6;
 const MSAA_ENABLED: bool = false;
 const UI_BUFFER_LENGTH: usize = 8192 * 32;
+const LINE_DATA_BUFFER_MAX_LENGTH: usize = 1<<15;
 
 #[derive(Debug, Copy, Clone)]
 pub enum DanielError {
@@ -108,7 +111,7 @@ impl AnimationKeyframes {
     //     }
     fn get_closest_below(&self, target_frame_time: f32) -> Option<usize> {
         let output = ((self.keyframes.len() as f32) * (target_frame_time / self.end_time)) as usize;
-        if output >= 0 && output < self.keyframes.len() {
+        if output < self.keyframes.len() {
             Some(output)
         } else {
             None
@@ -118,7 +121,7 @@ impl AnimationKeyframes {
     fn get_closest_above(&self, target_frame_time: f32) -> Option<usize> {
         let output =
             (((self.keyframes.len() as f32) * (target_frame_time / self.end_time)).ceil()) as usize;
-        if output >= 0 && output < self.keyframes.len() {
+        if output < self.keyframes.len() {
             Some(output)
         } else {
             None
@@ -960,7 +963,292 @@ impl Drawable for Cubemap {
             .draw(device, command_buffer, pipeline_layout);
     }
 }
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct SimpleVertex{
+    position: Vector3<f32>
+}
 
+pub struct MappedBuffer<T>{
+    buffer: vk::Buffer,
+    count: usize,
+    allocation: vk_mem_erupt::Allocation,
+    allocation_info: vk_mem_erupt::AllocationInfo,
+    phantom: PhantomData<T>,
+}
+
+impl <T> MappedBuffer<T>{
+    fn add_value(&mut self, value: T){
+        assert!(self.count + 1 < LINE_DATA_BUFFER_MAX_LENGTH);
+        unsafe{
+            std::ptr::write::<T>((self.allocation_info.get_mapped_data() as *mut T).offset((self.count) as isize), value)
+        }
+        self.count += 1;
+
+    }
+}
+
+
+#[allow(unused)]
+struct LinePushConstants{
+    model_view_projection: Matrix4<f32>,
+}
+
+pub struct LineDrawData{
+    vertex_buffer: MappedBuffer<SimpleVertex>,
+    index_buffer: MappedBuffer<u32>,
+    pipeline: vk::Pipeline,
+    pipeline_layout: vk::PipelineLayout,
+    descriptor_sets: Vec<vk::DescriptorSet>,
+}
+impl LineDrawData{
+    fn new(vulkan_data: &VulkanData) -> Self{
+        let vertex_buffer = {
+            let buffer_info = vk::BufferCreateInfoBuilder::new()
+            .size((LINE_DATA_BUFFER_MAX_LENGTH * size_of::<SimpleVertex>()) as u64)
+            .usage(vk::BufferUsageFlags::VERTEX_BUFFER);
+            let allocation_info = vk_mem_erupt::AllocationCreateInfo {
+                usage: vk_mem_erupt::MemoryUsage::CpuToGpu,
+                flags: vk_mem_erupt::AllocationCreateFlags::MAPPED, 
+                required_flags: vk::MemoryPropertyFlags::empty(), 
+                preferred_flags: vk::MemoryPropertyFlags::empty(), 
+                memory_type_bits: u32::MAX, 
+                pool: None, 
+                user_data: None
+            };
+
+            let (buffer, allocation, allocation_info) = vulkan_data.allocator.as_ref().unwrap().create_buffer(&buffer_info, &allocation_info).expect("Line Vertex Data Creation failed");
+            MappedBuffer{
+                buffer,
+                count: 0,
+                allocation,
+                allocation_info,
+                phantom: PhantomData,
+            }
+        };
+        let index_buffer = {
+            let buffer_info = vk::BufferCreateInfoBuilder::new()
+            .size((LINE_DATA_BUFFER_MAX_LENGTH) as u64)
+            .usage(vk::BufferUsageFlags::INDEX_BUFFER);
+            let allocation_info = vk_mem_erupt::AllocationCreateInfo {
+                usage: vk_mem_erupt::MemoryUsage::CpuToGpu,
+                flags: vk_mem_erupt::AllocationCreateFlags::MAPPED, 
+                required_flags: vk::MemoryPropertyFlags::empty(), 
+                preferred_flags: vk::MemoryPropertyFlags::empty(), 
+                memory_type_bits: u32::MAX, 
+                pool: None, 
+                user_data: None
+            };
+
+            let (buffer, allocation, allocation_info) = vulkan_data.allocator.as_ref().unwrap().create_buffer(&buffer_info, &allocation_info).expect("Line Index Data Creation failed");
+            MappedBuffer{
+                buffer,
+                count: 0,
+                allocation,
+                allocation_info,
+                phantom: PhantomData,
+            }
+        };
+
+        let (descriptor_sets, set_layouts) = Self::create_descriptor_sets(vulkan_data);
+        let pipeline_layout = Self::create_pipeline_layout(vulkan_data, &set_layouts);
+        let pipeline = Self::create_pipeline(vulkan_data, pipeline_layout);
+
+        Self{
+            vertex_buffer,
+            index_buffer,
+            pipeline,
+            descriptor_sets,
+            pipeline_layout,
+        }
+    }
+
+    fn create_descriptor_sets(vulkan_data: &VulkanData) ->( Vec<vk::DescriptorSet>, Vec<vk::DescriptorSetLayout>){
+        let bindings = [];
+        let layout_info = vk::DescriptorSetLayoutCreateInfoBuilder::new().bindings(&bindings);
+
+        let descriptor_set_layout = unsafe {
+            vulkan_data.device
+                .as_ref()
+                .unwrap()
+                .create_descriptor_set_layout(&layout_info, None)
+        }
+        .unwrap();
+        let set_layout = descriptor_set_layout;
+
+        let layouts = [set_layout];
+        let allocate_info = vk::DescriptorSetAllocateInfoBuilder::new()
+            .descriptor_pool(vulkan_data.descriptor_pool.unwrap())
+            .set_layouts(&layouts);
+        (unsafe {
+            vulkan_data.device
+                .as_ref()
+                .unwrap()
+                .allocate_descriptor_sets(&allocate_info)
+        }
+        .unwrap().to_vec(), layouts.into_iter().collect())
+
+    }
+
+    fn create_pipeline_layout(vulkan_data: &VulkanData, descriptor_set_layouts: &[vk::DescriptorSetLayout]) -> vk::PipelineLayout{
+        let push_constant_range = vk::PushConstantRangeBuilder::new()
+        .offset(0)
+        .size(std::mem::size_of::<LinePushConstants>() as u32)
+        .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
+    let push_constant_ranges = [push_constant_range];
+
+    let pipeline_layout_create_info = vk::PipelineLayoutCreateInfoBuilder::new()
+        .set_layouts(descriptor_set_layouts)
+        .push_constant_ranges(&push_constant_ranges);
+
+    unsafe {
+        vulkan_data.device
+            .as_ref()
+            .unwrap()
+            .create_pipeline_layout(&pipeline_layout_create_info, None)
+    }
+    .unwrap()
+    }
+
+    fn create_pipeline(vulkan_data: &VulkanData, pipeline_layout: vk::PipelineLayout ) -> vk::Pipeline{
+
+
+            let binding_descriptions = vec![vk::VertexInputBindingDescriptionBuilder::new()
+            .binding(0)
+            .stride(std::mem::size_of::<SimpleVertex>() as u32)
+            .input_rate(vk::VertexInputRate::VERTEX)];
+            let attribute_descriptions = vec![
+                vk::VertexInputAttributeDescriptionBuilder::new()
+                    .binding(0)
+                    .location(0)
+                    .format(vk::Format::R32G32B32_SFLOAT)
+                    .offset(0)
+            ];
+            let vertex_input_create_info = vk::PipelineVertexInputStateCreateInfoBuilder::new()
+                .vertex_binding_descriptions(&binding_descriptions)
+                .vertex_attribute_descriptions(&attribute_descriptions);
+    
+            let input_assembly_create_info = vk::PipelineInputAssemblyStateCreateInfoBuilder::new()
+                .topology(vk::PrimitiveTopology::LINE_LIST)
+                .primitive_restart_enable(false);
+            let viewport = vk::ViewportBuilder::new()
+                .x(0.0f32)
+                .y(0.0f32)
+                .width(vulkan_data.surface_capabilities.unwrap().current_extent.width as f32)
+                .height(vulkan_data.surface_capabilities.unwrap().current_extent.height as f32)
+                .min_depth(0.0f32)
+                .max_depth(1.0f32);
+    
+            let scissor = vk::Rect2DBuilder::new()
+                .offset(vk::Offset2D { x: 0, y: 0 })
+                .extent(vulkan_data.surface_capabilities.unwrap().current_extent);
+    
+            let viewports = [viewport];
+            let scissors = [scissor];
+            let viewport_state_create_info = vk::PipelineViewportStateCreateInfoBuilder::new()
+                .viewports(&viewports)
+                .scissors(&scissors);
+    
+            let rasterizer = vk::PipelineRasterizationStateCreateInfoBuilder::new()
+                .depth_clamp_enable(false)
+                .rasterizer_discard_enable(false)
+                .polygon_mode(vk::PolygonMode::FILL)
+                .cull_mode(vk::CullModeFlags::NONE)
+                .front_face(vk::FrontFace::CLOCKWISE)
+                .depth_bias_enable(false)
+                .line_width(5.0f32);
+    
+            let multisampling = vk::PipelineMultisampleStateCreateInfoBuilder::new()
+                .sample_shading_enable(false)
+                .rasterization_samples(vulkan_data.msaa_samples);
+    
+            let color_blend_attachment = vk::PipelineColorBlendAttachmentStateBuilder::new()
+                .color_write_mask(vk::ColorComponentFlags::all())
+                .blend_enable(true)
+                .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+                .color_blend_op(vk::BlendOp::ADD)
+                .src_alpha_blend_factor(vk::BlendFactor::ONE)
+                .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+                .alpha_blend_op(vk::BlendOp::ADD);
+    
+            let color_blend_attachments = [color_blend_attachment];
+    
+            let color_blending = vk::PipelineColorBlendStateCreateInfoBuilder::new()
+                .logic_op_enable(false)
+                .logic_op(vk::LogicOp::OR)
+                .attachments(&color_blend_attachments);
+    
+            let vert_entry_string = CString::new("main").unwrap();
+            let frag_entry_string = CString::new("main").unwrap();
+    
+            let vert_shader_file = std::fs::read("shaders/line/vert.spv").unwrap();
+            let frag_shader_file = std::fs::read("shaders/line/frag.spv").unwrap();
+            let vert_shader_code = erupt::utils::decode_spv(&vert_shader_file).unwrap();
+            let frag_shader_code = erupt::utils::decode_spv(&frag_shader_file).unwrap();
+            let vert_shader_module =
+                VulkanData::create_shader_module(&vulkan_data.device.as_ref().unwrap(), vert_shader_code);
+            let frag_shader_module =
+                VulkanData::create_shader_module(&vulkan_data.device.as_ref().unwrap(), frag_shader_code);
+    
+            let vert_shader_stage_create_info = vk::PipelineShaderStageCreateInfoBuilder::new()
+                .stage(vk::ShaderStageFlagBits::VERTEX)
+                .module(vert_shader_module)
+                .name(vert_entry_string.as_c_str());
+            let frag_shader_stage_create_info = vk::PipelineShaderStageCreateInfoBuilder::new()
+                .stage(vk::ShaderStageFlagBits::FRAGMENT)
+                .module(frag_shader_module)
+                .name(frag_entry_string.as_c_str());
+            let shader_stages = vec![vert_shader_stage_create_info, frag_shader_stage_create_info];
+    
+            let depth_stencil = vk::PipelineDepthStencilStateCreateInfoBuilder::new()
+                .depth_test_enable(true)
+                .depth_write_enable(true)
+                .depth_compare_op(vk::CompareOp::LESS)
+                .depth_bounds_test_enable(false)
+                .min_depth_bounds(0.0)
+                .max_depth_bounds(1.0)
+                .stencil_test_enable(false);
+
+            let dynamic_state = vk::PipelineDynamicStateCreateInfoBuilder::new().dynamic_states(&[vk::DynamicState::LINE_WIDTH]);
+            let pipeline_infos = [vk::GraphicsPipelineCreateInfoBuilder::new()
+                .stages(&shader_stages)
+                .vertex_input_state(&vertex_input_create_info)
+                .input_assembly_state(&input_assembly_create_info)
+                .viewport_state(&viewport_state_create_info)
+                .rasterization_state(&rasterizer)
+                .multisample_state(&multisampling)
+                .color_blend_state(&color_blending)
+                .layout(pipeline_layout)
+                .render_pass(vulkan_data.render_pass.unwrap())
+                .subpass(0)
+                .depth_stencil_state(&depth_stencil)
+                .dynamic_state(&dynamic_state)];
+    
+            let pipeline = unsafe {
+                vulkan_data.device
+                    .as_ref()
+                    .unwrap()
+                    .create_graphics_pipelines(None, &pipeline_infos, None)
+            }
+            .unwrap()[0];
+    
+            pipeline
+    }
+
+    pub fn add_point(&mut self, point: Vector3<f32>) -> usize{
+        self.vertex_buffer.add_value(SimpleVertex{
+            position: point
+        });
+        self.vertex_buffer.count - 1
+    }
+
+    pub fn connect_points(&mut self, first_index: usize, second_index: usize){
+        self.index_buffer.add_value(first_index as u32);
+        self.index_buffer.add_value(second_index as u32);
+    }
+}
+//TODO: Clean this up, maybe split it into multiple structs so it's less of a mess
 pub struct VulkanData {
     rng: fastrand::Rng,
     instance: Option<InstanceLoader>,
@@ -996,6 +1284,7 @@ pub struct VulkanData {
     in_flight_fence: Option<vk::Fence>,
     vertex_buffer: Option<vk::Buffer>,
     vertex_buffer_memory: Option<vk::DeviceMemory>,
+    pub line_data: Option<LineDrawData>,
     pub ui_data: UiData,
     index_buffer: Option<vk::Buffer>,
     index_buffer_memory: Option<vk::DeviceMemory>,
@@ -1108,6 +1397,7 @@ impl VulkanData {
             in_flight_fence: None,
             vertex_buffer: None,
             vertex_buffer_memory: None,
+            line_data: None,
             ui_data: UiData {
                 vertex_buffer: None,
                 vertex_allocation: None,
@@ -1269,7 +1559,7 @@ impl VulkanData {
             .queue_priorities(&[1.0f32]);
         let queue_create_infos = &[queue_create_info];
 
-        let device_features = vk::PhysicalDeviceFeaturesBuilder::new().sampler_anisotropy(true);
+        let device_features = vk::PhysicalDeviceFeaturesBuilder::new().sampler_anisotropy(true).wide_lines(true);
 
         let mut extended_dynamic_state_features =
             vk::PhysicalDeviceExtendedDynamicStateFeaturesEXTBuilder::new()
@@ -1392,6 +1682,7 @@ impl VulkanData {
 
         println!("Creating Descriptor pools");
         self.create_descriptor_pool();
+        self.create_line_data();
 
         // println!("Running test compute shader");
         // self.run_test_shader();
@@ -1893,7 +2184,7 @@ impl VulkanData {
                     .map(|matrix| Matrix4::from(matrix))
                     .collect();
 
-                for (animation_index, animation) in gltf.animations().enumerate() {
+                for (_animation_index, animation) in gltf.animations().enumerate() {
                     let mut bone_sets = vec![];
                     let animation_end = {
                         animation
@@ -2136,7 +2427,7 @@ impl VulkanData {
 
         let pool_info = vk::DescriptorPoolCreateInfoBuilder::new()
             .pool_sizes(&pool_sizes)
-            .max_sets(self.swapchain_image_views.as_ref().unwrap().len() as u32);
+            .max_sets(self.swapchain_image_views.as_ref().unwrap().len() as u32 + 1);
         let compute_pool_info = vk::DescriptorPoolCreateInfoBuilder::new()
             .pool_sizes(&compute_pool_sizes)
             .max_sets(self.swapchain_image_views.as_ref().unwrap().len() as u32);
@@ -3139,6 +3430,11 @@ impl VulkanData {
         };
     }
 
+    fn create_line_data(&mut self){
+        let line_data = LineDrawData::new(self);
+        self.line_data = Some(line_data);
+    }
+
     pub fn update_vertex_and_index_buffers(&mut self) {
         if self.vertex_buffer.is_some() || self.vertex_buffer_memory.is_some() {
             self.destroy_vertex_buffer();
@@ -3149,6 +3445,8 @@ impl VulkanData {
             self.create_index_buffer();
         }
     }
+
+
 
     fn find_memory_type(&self, type_filter: u32, properties: vk::MemoryPropertyFlags) -> u32 {
         let memory_properties = unsafe {
@@ -4032,16 +4330,13 @@ impl VulkanData {
                     )
                 };
 
-                for pipeline in &self.graphics_pipelines {
-                    //TODO: make this not dumb (won't only the last pipeline be bound?)
-                    unsafe {
-                        self.device.as_ref().unwrap().cmd_bind_pipeline(
-                            *command_buffer,
-                            vk::PipelineBindPoint::GRAPHICS,
-                            *pipeline,
-                        )
-                    };
-                }
+                unsafe {
+                    self.device.as_ref().unwrap().cmd_bind_pipeline(
+                        *command_buffer,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.graphics_pipelines[0],
+                    )
+                };
 
                 let vertex_buffers = [self.vertex_buffer.unwrap()];
                 let offsets = [0 as vk::DeviceSize];
@@ -4074,12 +4369,12 @@ impl VulkanData {
                     )
                 };
 
-                // unsafe {
-                //     self.device
-                //         .as_ref()
-                //         .unwrap()
-                //         .cmd_set_depth_test_enable_ext(*command_buffer, false)
-                // };
+                unsafe {
+                    self.device
+                        .as_ref()
+                        .unwrap()
+                        .cmd_set_depth_test_enable_ext(*command_buffer, false)
+                };
 
                 self.cubemap.as_ref().unwrap().draw(
                     self.device.as_ref().unwrap(),
@@ -4101,11 +4396,12 @@ impl VulkanData {
                         self.pipeline_layout.unwrap(),
                     );
                 }
+
                 unsafe {
                     self.device
                         .as_ref()
                         .unwrap()
-                        .cmd_set_depth_test_enable_ext(*command_buffer, false)
+                        .cmd_set_depth_test_enable_ext(*command_buffer, true)
                 };
 
                 for object in &self.fullscreen_quads {
@@ -4122,6 +4418,53 @@ impl VulkanData {
                         .unwrap()
                         .cmd_set_depth_test_enable_ext(*command_buffer, true)
                 };
+
+                if let Some(line_data) = &self.line_data{
+                    unsafe{
+
+                        self.device.as_ref().unwrap().cmd_bind_pipeline(
+                            *command_buffer,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            line_data.pipeline,
+                        );
+
+                        self.device.as_ref().unwrap().cmd_bind_vertex_buffers(
+                            *command_buffer,
+                            0,
+                            &[line_data.vertex_buffer.buffer],
+                            &offsets,
+                        );
+        
+                        self.device.as_ref().unwrap().cmd_bind_index_buffer(
+                            *command_buffer,
+                            line_data.index_buffer.buffer,
+                            0 as vk::DeviceSize,
+                            vk::IndexType::UINT32,
+                        );
+                        self.device.as_ref().unwrap().cmd_bind_descriptor_sets(
+                            *command_buffer,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            line_data.pipeline_layout,
+                            0,
+                            &line_data.descriptor_sets,
+                            &[],
+                        );
+
+                        self.device.as_ref().unwrap().cmd_set_line_width(*command_buffer, 5.0);
+                        let push_constant = LinePushConstants{
+                            model_view_projection: self.uniform_buffer_object.proj * self.uniform_buffer_object.view,
+                        };
+                        self.device.as_ref().unwrap().cmd_push_constants(
+                            *command_buffer,
+                            line_data.pipeline_layout,
+                            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                            0,
+                            size_of::<LinePushConstants>() as u32,
+                            &push_constant as *const _ as *const c_void,
+                        );
+                        self.device.as_ref().unwrap().cmd_draw_indexed(*command_buffer, line_data.index_buffer.count as u32, 1, 0, 0, 0);
+                    }
+                }
 
                 unsafe {
                     self.device.as_ref().unwrap().cmd_bind_pipeline(
@@ -4217,6 +4560,9 @@ impl VulkanData {
 
         self.create_compute_pipelines();
         self.create_ui_pipeline();
+        if self.line_data.is_some(){
+            self.line_data.as_mut().unwrap().pipeline = LineDrawData::create_pipeline(self, self.line_data.as_ref().unwrap().pipeline_layout);
+        }
         self.create_command_buffers();
         self.update_descriptor_sets();
 
@@ -4356,7 +4702,7 @@ impl VulkanData {
     }
 
     fn create_cubemap_resources(&mut self) {
-        let cubemap_folder = PathBuf::from("cubemap_forest");
+        let cubemap_folder = PathBuf::from("cubemap_space");
 
         self.cubemap = Some(Cubemap::new(
             self,
@@ -4811,6 +5157,14 @@ impl VulkanData {
                 .as_ref()
                 .unwrap()
                 .destroy_pipeline(self.ui_data.pipeline, None);
+            
+            if let Some(line_data) = &self.line_data{
+                self.device
+                .as_ref()
+                .unwrap()
+                .destroy_pipeline(Some(line_data.pipeline), None);
+            }
+
         }
 
         unsafe {
@@ -4929,7 +5283,7 @@ impl VulkanData {
         self.index_buffer_memory = None;
     }
 
-    pub fn get_projection(&self, zoom: f64) -> nalgebra::Perspective3<f64> {
+    pub fn get_projection(&self, _zoom: f64) -> nalgebra::Perspective3<f64> {
         let surface_width = self.surface_capabilities.unwrap().current_extent.width as f64;
         let surface_height = self.surface_capabilities.unwrap().current_extent.height as f64;
         let aspect_ratio = surface_width / surface_height;

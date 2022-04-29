@@ -1,5 +1,6 @@
 #version 450
 #include "extras.glsl"
+#include "map.glsl"
 
 struct SampleSet{ //set of samples
     vec4 albedo;
@@ -9,6 +10,7 @@ struct SampleSet{ //set of samples
     vec3 normal;
 };
 
+const float RADIUS = 6378137.0;
 
 const int DEEP_WATER_OFFSET = 1;
 const int SHALLOW_WATER_OFFSET = 2;
@@ -16,6 +18,7 @@ const int FOLIAGE_OFFSET = 3;
 const int DESERT_OFFSET = 4;
 const int MOUNTAIN_OFFSET = 5;
 const int SNOW_OFFSET = 6;
+const int DATA_OFFSET = 7;
 
 const mat3 CORRECTION_MATRIX = mat3(1.0000000,  0.0000000,  0.0000000,
 0.0000000,  0.0000000, 1.0000000,
@@ -113,8 +116,9 @@ vec3 triplanar_normal(in sampler2D in_sampler, vec3 position,vec3 world_normal,v
     ));
 }
 
-SampleSet load_sample_set(int texture_offset, vec3 offset){
-    float scale = 1.0/6378137.0;
+SampleSet load_sample_set(int texture_offset, vec3 offset, float scale_modifier){
+    float scale = 1.0/RADIUS;
+    scale *= scale_modifier;
     vec3 normal = triplanar_normal(normal_maps[pushConstant.texture_index+texture_offset],worldPosition, fragNormal,fragNormal,scale, offset).rgb;
     vec4 albedo = triplanar_sample(texSampler[pushConstant.texture_index+texture_offset],worldPosition, normal, scale, offset);
     albedo.a = 1.0;
@@ -159,12 +163,13 @@ void main() {
     }
     else if ((pushConstant.bitfield&IS_GLOBE) > 0){ //triplanar mapping
 
-        SampleSet deep_water_set = load_sample_set(DEEP_WATER_OFFSET,vec3(0.0));
-        SampleSet shallow_water_set = load_sample_set(SHALLOW_WATER_OFFSET,vec3(0.0));
-        SampleSet foliage_set = load_sample_set(FOLIAGE_OFFSET,vec3(0.0));
-        SampleSet desert_set = load_sample_set(DESERT_OFFSET,vec3(0.0));
-        SampleSet mountain_set = load_sample_set(MOUNTAIN_OFFSET,vec3(0.0));
-        SampleSet snow_set = load_sample_set(SNOW_OFFSET,vec3(0.0));
+        SampleSet deep_water_set = load_sample_set(DEEP_WATER_OFFSET,vec3(0.0),1.0);
+        SampleSet shallow_water_set = load_sample_set(SHALLOW_WATER_OFFSET,vec3(0.0),1.0);
+        SampleSet foliage_set = load_sample_set(FOLIAGE_OFFSET,vec3(0.0),1.0);
+        SampleSet desert_set = load_sample_set(DESERT_OFFSET,vec3(0.0),1.0);
+        SampleSet mountain_set = load_sample_set(MOUNTAIN_OFFSET,vec3(0.0),10.0);
+        SampleSet snow_set = load_sample_set(SNOW_OFFSET,vec3(0.0),1.0);
+        SampleSet data_set = load_sample_set(DATA_OFFSET,vec3(0.0),1.0);
 
         float deep_water_weight = 0.0;
         float shallow_water_weight = 0.0;
@@ -173,15 +178,32 @@ void main() {
         float mountain_weight = 0.0;
         float snow_weight = 0.0;
 
-        if (fragElevation > 3000.0){
-            snow_weight = 1.0;
-        }
-        else if (fragElevation > 1000.0){
-            mountain_weight = 1.0;
-        }else if (fragElevation > 0.0){
-            foliage_weight = 1.0;
+
+        float latitude_factor = clamp(pow((abs(asin(normalize(fragPosition).y)) / PI) + 0.6, 64.0), 0.0, 1.0);
+        float aridity = clamp(pow((1.0 - abs(asin(normalize(fragPosition).y)) / PI) + 0.01, 32.0),0.0, 1.0);
+        // outColor = vec4(vec3(aridity),1.0);
+        // return;
+        float temperature_factor = (data_set.albedo.r - latitude_factor)*2.0 - 1.0 + 0.5;
+        float shifted_elevation = fragElevation + (fbm(normalize(fragPosition)*10.0) * 2.0 - 1.0 )* 5000.0;
+        float snow_level = 5000.0 + temperature_factor * 3000.0;
+
+
+        if (shifted_elevation < 0.0){
+            deep_water_weight = map_range_linear(shifted_elevation, 0.0, -3000.0, 0.0,1.0);
+            if (snow_level < -0.8){
+                snow_weight = 1.0 - deep_water_weight;
+            }
+            else{
+                shallow_water_weight = 1.0 - deep_water_weight;
+            }
         }else{
-            deep_water_weight = 1.0;
+        float grass_ratio = map_range_linear(shifted_elevation,0.0, 2500.0,1.0 , 0.2);
+        mountain_weight = map_range_linear(shifted_elevation,2500.0, 3000.0,0.0, 1.0);
+
+        snow_weight = map_range_linear(shifted_elevation,snow_level,snow_level + 2000.0,0.0, 100.0);
+        desert_weight = clamp(temperature_factor + aridity,0.0,1.0);
+        foliage_weight = clamp(grass_ratio - mountain_weight - desert_weight,0.0,1.0);
+
         }
 
         SampleSet sample_sets[] = {
@@ -267,7 +289,7 @@ void main() {
         normal = normalize(TBN * normal);
         normal = inverse(mat3(pushConstant.model)) * normal;//not sure why I need this
     }
-    vec3 sun_direction = normalize(vec3(sin(ubos.time.x), cos(ubos.time.x), 0.0));
+    vec3 sun_direction = normalize(vec3(sin(ubos.time.x), 0.0, cos(ubos.time.x)));
 
     if ((pushConstant.bitfield&IS_HIGHLIGHTED) > 0){
         outColor = vec4(0.9,0.1,0.1,1.0);
@@ -292,9 +314,9 @@ void main() {
     vec3 total_light = vec3(0.0);
     for (int i = 0; i< NUM_LIGHTS; i++){
         vec3 light_position = ubos.lights[i].position.xyz;
-        if (i == 0){
-            light_position = camera_location;
-        }
+        // if (i == 0){
+        //     light_position = camera_location;
+        // }
         float light_distance = length(light_position - worldPosition);
         float attenuation = 1.0/(light_distance * light_distance);
 
@@ -346,5 +368,6 @@ void main() {
     vec3 color = ambient + total_light;
 
     outColor = vec4(color, albedo.a);
+    // outColor = vec4(vec3(fbm(normalize(fragPosition))), 1.0);
 
 }

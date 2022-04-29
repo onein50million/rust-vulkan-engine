@@ -22,7 +22,7 @@ impl Client {
     }
     fn process_packet(&mut self, packet: Packet, socket: &UdpSocket) {
         match packet {
-            Packet::RequestConnect { username } => {
+            Packet::RequestConnect { username: _ } => {
                 self.state = ClientState::Connected;
                 let send_data = Packet::RequestAccepted;
 
@@ -45,7 +45,7 @@ struct Server {
 impl Server {
     fn new() -> Self {
         let socket = UdpSocket::bind("127.0.0.1:2022").unwrap();
-        socket.set_nonblocking(true);
+        socket.set_nonblocking(true).expect("Failed to set socket as nonblocking");
         Self {
             clients: HashMap::new(),
             socket,

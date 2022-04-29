@@ -89,7 +89,7 @@ impl Light {
     pub(crate) fn new() -> Self {
         let _rng = fastrand::Rng::new();
         let _distance = 5.0;
-        let power = 0.0;
+        let power = 1.0;
         let position = Vector4::new(0.0, 0.0, 0.0, 0.0);
         let color = Vector4::new(1.0, 0.9, 0.9, 0.0) * power;
 

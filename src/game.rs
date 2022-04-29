@@ -12,23 +12,23 @@ Client predicted: Uses client side prediction to reduce latency
 Client only (Animations, particles)
  */
 
-mod directions {
+pub mod directions {
     use nalgebra::Vector3;
     use std::f64::consts::FRAC_1_SQRT_2;
 
-    pub(crate) const UP: Vector3<f64> = Vector3::new(0.0, -1.0, 0.0);
-    pub(crate) const DOWN: Vector3<f64> = Vector3::new(0.0, 1.0, 0.0);
-    pub(crate) const LEFT: Vector3<f64> = Vector3::new(-1.0, 0.0, 0.0);
-    pub(crate) const RIGHT: Vector3<f64> = Vector3::new(1.0, 0.0, 0.0);
-    pub(crate) const FORWARDS: Vector3<f64> = Vector3::new(0.0, 0.0, 1.0);
-    pub(crate) const BACKWARDS: Vector3<f64> = Vector3::new(0.0, 0.0, -1.0);
+    pub const UP: Vector3<f64> = Vector3::new(0.0, -1.0, 0.0);
+    pub const DOWN: Vector3<f64> = Vector3::new(0.0, 1.0, 0.0);
+    pub const LEFT: Vector3<f64> = Vector3::new(-1.0, 0.0, 0.0);
+    pub const RIGHT: Vector3<f64> = Vector3::new(1.0, 0.0, 0.0);
+    pub const FORWARDS: Vector3<f64> = Vector3::new(0.0, 0.0, 1.0);
+    pub const BACKWARDS: Vector3<f64> = Vector3::new(0.0, 0.0, -1.0);
 
-    pub(crate) const ISOMETRIC_DOWN: Vector3<f64> =
+    pub const ISOMETRIC_DOWN: Vector3<f64> =
         Vector3::new(-FRAC_1_SQRT_2, 0.0, -FRAC_1_SQRT_2);
-    pub(crate) const ISOMETRIC_UP: Vector3<f64> = Vector3::new(FRAC_1_SQRT_2, 0.0, FRAC_1_SQRT_2);
-    pub(crate) const ISOMETRIC_RIGHT: Vector3<f64> =
+    pub const ISOMETRIC_UP: Vector3<f64> = Vector3::new(FRAC_1_SQRT_2, 0.0, FRAC_1_SQRT_2);
+    pub const ISOMETRIC_RIGHT: Vector3<f64> =
         Vector3::new(-FRAC_1_SQRT_2, 0.0, FRAC_1_SQRT_2);
-    pub(crate) const ISOMETRIC_LEFT: Vector3<f64> =
+    pub const ISOMETRIC_LEFT: Vector3<f64> =
         Vector3::new(FRAC_1_SQRT_2, 0.0, -FRAC_1_SQRT_2);
 }
 
@@ -64,7 +64,7 @@ pub(crate) mod server {
         }
 
         pub fn process(&mut self) {
-            let delta_time = self.last_frame_instant.elapsed().as_secs_f64();
+            let _delta_time = self.last_frame_instant.elapsed().as_secs_f64();
             self.last_frame_instant = std::time::Instant::now();
         }
     }
