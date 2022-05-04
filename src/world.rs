@@ -1,7 +1,10 @@
 use std::{fmt::Display, mem::MaybeUninit};
 
+use nalgebra::Vector3;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use variant_count::VariantCount;
+
+use crate::{support::Vertex, planet_gen::MeshOutput, province_gen::Islands};
 
 #[repr(usize)]
 #[derive(Clone, Copy, VariantCount, Debug, IntoPrimitive, TryFromPrimitive)]
@@ -174,6 +177,7 @@ pub struct Province {
     pub point_indices: Vec<usize>,
     pub pops: Pops,
     pub market: Market,
+    pub position: Vector3<f64>,
 }
 impl Display for Province {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -224,15 +228,87 @@ impl Display for Province {
 
 #[derive(Debug)]
 pub struct World {
+    pub points: Vec<Vector3<f32>>,
     pub provinces: Box<[Province]>,
 }
 
 impl World {
     pub const RADIUS: f64 = 6_378_137.0; //in meters
-    pub fn new(indices: &[usize]) -> Self {
-        let provinces = indices.chunks(3).map(|triangle|{
+    
+    pub fn intersect_planet(ray_origin: Vector3<f64>, ray_direction: Vector3<f64>) -> Option<Vector3<f64>>{
+        let a = ray_direction.dot(&ray_direction);
+        let b = 2.0 * ray_origin.dot(&ray_direction);
+        let c = ray_origin.dot(&ray_origin) - (Self::RADIUS * Self::RADIUS);
+        let discriminant = b*b - 4.0*a*c;
+        if discriminant < 0.0{
+            return None;
+        }else{
+            let ray_ratio = (-b + discriminant.sqrt()) / (2.0 * a);
+            return Some(ray_origin + ray_direction * ray_ratio);
+        }
+    }
+    
+    pub fn new(vertices: &[(Vector3<f32>, f32)], planet_mesh: &MeshOutput) -> Self {
+        
+        // let mut provinces = vec![];
+
+        // let mut islands = Islands::new(vertices, planet_mesh);
+
+        // println!("Collapsing islands");
+        // loop{
+        //     if islands.collapse_islands(){
+        //         break;
+        //     }
+        // }
+        // println!("Finished collapsing islands");
+    
+        // for island in islands.islands{
+
+        //     let mut point_indices = vec![];
+        //     let island_indices: Vec<_> = island.iter().collect();
+        //     let position: Vector3<f64> = island_indices.iter().map(|&index| vertices[*index].0.cast::<f64>()).sum::<Vector3<f64>>() / island_indices.len() as f64;
+        //     for window in island_indices.windows(2){
+        //         point_indices.push(*window[0]);
+        //         point_indices.push(*window[1]);
+        //     }
+
+        //     provinces.push(
+        //     Province {
+        //         point_indices,
+        //         position,
+        //         pops: Pops::new(10_000.0),
+        //         market: Market {
+        //             price: [1.0; Good::VARIANT_COUNT],
+        //             supply: [0.0; Good::VARIANT_COUNT],
+        //             demand: [0.0; Good::VARIANT_COUNT],
+        //             previous_supply_demand_error: [0.0; Good::VARIANT_COUNT],
+        //             supply_demand_error_integral: [0.0; Good::VARIANT_COUNT],
+        //         },
+        //     });
+        // }
+
+
+        //tired so code is getting bad
+
+        let indices: Vec<_> = (0..vertices.len()).collect();
+
+        // let mut iter = vertices.iter().enumerate().map(|(index, _)| index);
+
+        // loop{
+        //     let small_index: Vec<_> = iter.by_ref().take(6).collect();
+        //     if small_index.len() == 0{
+        //         break;
+        //     }
+        //     indices.extend(small_index);
+        // }
+
+        let provinces: Box<[_]> = indices.chunks(2).map(|line|{
+            assert_eq!(line.len(), 2);
+            let point_indices = vec![line[0], line[1]];
+            let position: Vector3<f64> = line.iter().map(|&index| vertices[index].0.cast::<f64>()).sum::<Vector3<f64>>() / line.len() as f64;
             Province {
-                point_indices: vec![triangle[0], triangle[1], triangle[1] ,triangle[2],triangle[2], triangle[0]],
+                point_indices,
+                position,
                 pops: Pops::new(10_000.0),
                 market: Market {
                     price: [1.0; Good::VARIANT_COUNT],
@@ -245,54 +321,10 @@ impl World {
         }).collect();
 
         Self {
+            points:vertices.iter().map(|(position, _elevation)| *position).collect(),
             provinces
-            // provinces: [
-            //     Province {
-            //         point_indices: vec![0, 1, 1, 2, 2, 3,3,0],
-            //         pops: Pops::new(10_000.0),
-            //         market: Market {
-            //             price: [1.0; Good::VARIANT_COUNT],
-            //             supply: [0.0; Good::VARIANT_COUNT],
-            //             demand: [0.0; Good::VARIANT_COUNT],
-            //             previous_supply_demand_error: [0.0; Good::VARIANT_COUNT],
-            //             supply_demand_error_integral: [0.0; Good::VARIANT_COUNT],
-            //         },
-            //     },
-            //     Province {
-            //         point_indices: vec![0, 3],
-            //         pops: Pops::new(1_000.0),
-            //         market: Market {
-            //             price: [1.0; Good::VARIANT_COUNT],
-            //             supply: [0.0; Good::VARIANT_COUNT],
-            //             demand: [0.0; Good::VARIANT_COUNT],
-            //             previous_supply_demand_error: [0.0; Good::VARIANT_COUNT],
-            //             supply_demand_error_integral: [0.0; Good::VARIANT_COUNT],
-            //         },
-            //     },
-            // ],
         }
     }
-    // pub fn get_indices(&self) -> Vec<usize> {
-    //     self.provinces
-    //         .iter()
-    //         .flat_map(|province| province.point_indices.iter().map(|index| *index))
-    //         .collect()
-    // }
-    // pub fn get_vertices(&self) -> Vec<Vertex> {
-    //     self.points
-    //         .iter()
-    //         .map(|point| Vertex {
-    //             position: (point.into_inner() * Self::RADIUS).cast(),
-    //             normal: point.into_inner().cast(),
-    //             tangent: Vector4::zeros(),
-    //             texture_coordinate: Vector2::zeros(),
-    //             texture_type: 0,
-    //             bone_indices: Vector4::zeros(),
-    //             bone_weights: Vector4::zeros(),
-    //             elevation: 0.0,
-    //         })
-    //         .collect()
-    // }
 
     pub fn process(&mut self, delta_year: f64) {
         for (_province_index, province) in self.provinces.iter_mut().enumerate() {

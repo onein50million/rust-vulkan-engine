@@ -5,3 +5,4 @@ pub mod planet_gen;
 pub mod renderer;
 pub mod support;
 pub mod world;
+pub mod province_gen;

@@ -15,15 +15,24 @@ use egui_winit::winit::event::{ElementState, Event, VirtualKeyCode, WindowEvent}
 use egui_winit::winit::event_loop::{ControlFlow, EventLoop};
 use egui_winit::winit::window::WindowBuilder;
 
+use float_ord::FloatOrd;
+use nalgebra::Matrix3;
+use nalgebra::Perspective3;
+use nalgebra::Point3;
 use nalgebra::{Matrix4, Rotation3, Translation3, Vector2, Vector3};
 use rust_vulkan_engine::game::client::Game;
 
 use rust_vulkan_engine::network::{ClientState, Packet};
+use rust_vulkan_engine::planet_gen::interoplate_on_mesh;
+use rust_vulkan_engine::province_gen::Islands;
 use rust_vulkan_engine::renderer::*;
 use rust_vulkan_engine::support::*;
 use rust_vulkan_engine::world::*;
+use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::env;
 use std::net::UdpSocket;
+use std::time::Instant;
 
 use winit::event::{MouseButton, MouseScrollDelta};
 //Coordinate system for future reference:
@@ -98,7 +107,43 @@ fn add_plot(ui: &mut Ui, values: &[Value], heading: &str, num_samples: usize, st
     );
 }
 
+struct Histories{
+    population: Box<[VecDeque<Value>]>,
+    prices: Box<[Box<[VecDeque<Value>]>]>,
+    last_time_check: Instant,
+}
+impl Histories{
+    fn add_new_tick(&mut self, world: &World, month: usize, print_progress: bool){
+        for (province_index, province) in world.provinces.iter().enumerate(){
+            if print_progress && self.last_time_check.elapsed().as_secs_f64() > 1.0{
+                self.last_time_check = std::time::Instant::now();
+                println!("Month: {month}");
+            }
+            if self.population[province_index].len() > 10000{
+                self.population[province_index].pop_back();
+            }
+            self.population[province_index].push_front(Value::new(
+                month as f64,
+                province.pops.population(),
+            ));
+    
+            for good_index in 0..Good::VARIANT_COUNT {
+                if self.prices[province_index][good_index].len() > 10000{
+                    self.prices[province_index][good_index].pop_back();
+                }
+                self.prices[province_index][good_index].push_front(Value::new(
+                    month as f64,
+                    province.market.price[good_index],
+                ));
+            }    
+        }
+    }
+}
+
 fn main() {
+
+    println!("{:}", Perspective3::new(1.0, 90f64.to_radians(), 1000.0, 20000000.0).to_homogeneous());
+
     let mut frametime: std::time::Instant = std::time::Instant::now();
     let mut time_since_last_frame: f64 = 0.0; //seconds
 
@@ -125,12 +170,107 @@ fn main() {
 
     let planet_mesh = rust_vulkan_engine::planet_gen::get_planet(World::RADIUS as f32);
 
-    let world = World::new(&planet_mesh.indices);
+    let elevations = {
+        let elevation_vertices: Box<[ElevationVertex]> = planet_mesh.vertices.iter().map(|vertex| ElevationVertex{ position: vertex.position, elevation: vertex.elevation }).collect();
+        let elevation_indices: Box<[u32]> = planet_mesh.indices.iter().map(|&index| index as u32).collect();
+        let mut elevation_cubemap = CubemapRender::new(&vulkan_data, &elevation_vertices, &elevation_indices);
+        elevation_cubemap.render(&vulkan_data);
+        elevation_cubemap.get_image(&vulkan_data)
+    };
+    dbg!(elevations.len());
+
+    const CUBEMAP_WIDTH: usize = CubemapRender::CUBEMAP_WIDTH as usize;
+    const CORRECTION_MATRIX: Matrix3<f64> = Matrix3::new(1.0000000,  0.0000000,  0.0000000,
+        0.0000000,  0.0000000, 1.0000000,
+        0.0000000,  -1.0000000,  0.0000000);
+    let mut province_points = vec![];
+    let elevation_vertices: Vec<_> = planet_mesh.vertices.iter().map(|vertex| (vertex.position, vertex.elevation)).collect();
+    for (index, &elevation) in elevations.iter().enumerate(){
+        let x = (index % (CUBEMAP_WIDTH * CUBEMAP_WIDTH)) % CUBEMAP_WIDTH;
+        let y = (index % (CUBEMAP_WIDTH * CUBEMAP_WIDTH)) / CUBEMAP_WIDTH;
+        let face = index / (CUBEMAP_WIDTH * CUBEMAP_WIDTH);
+
+        let x = ((x as f64) /  CUBEMAP_WIDTH as f64) * 2.0 - 1.0;
+        let y = ((y as f64) /  CUBEMAP_WIDTH as f64) * 2.0 - 1.0;
+
+        let normal;
+        match face{
+            0 => {
+                normal = Vector3::new(1.0, -y, -x);
+            },
+            1 => {
+                normal = Vector3::new(-1.0, -y, x);
+            },
+            2 => {
+                normal = Vector3::new(x, 1.0, y);
+            },
+            3 => {
+                normal = Vector3::new(x, -1.0, -y);
+            },
+            4 => {
+                normal = Vector3::new(x, -y, 1.0);
+            },
+            5 => {
+                normal = Vector3::new(-x, -y, -1.0);
+            },
+            _ => {
+                panic!("Too many faces in cubemap");
+            },
+        }
+
+        let secondary_correction_matrix: Matrix4<f64> = Matrix4::from(Rotation3::from_euler_angles(-90f64.to_radians(),0.0,0.0));
+        let normal = CORRECTION_MATRIX * normal.normalize();
+        let normal = secondary_correction_matrix.transform_point(&Point3::from(normal)).coords;
+        let normal = normal.component_mul(&Vector3::new(1.0,1.0,1.0));
+        let point = normal * World::RADIUS;
+        
+        if !elevation.is_nan() && elevation.abs() < 100.0 && fastrand::f64() > 0.99{
+            province_points.push((point.cast(), elevation));
+        }
+        if fastrand::f64() > 0.9999{
+            let mesh_elevation = interoplate_on_mesh(point.cast(), &elevation_vertices, &planet_mesh.indices);
+            println!("normal elevation: {elevation}");
+            println!("elevation according to mesh: {mesh_elevation}");
+            println!("inverse normal elevation according to mesh: {:}", interoplate_on_mesh((-normal * World::RADIUS).cast(), &elevation_vertices, &planet_mesh.indices));
+        }
+
+
+    }
+
+    // for &elevation in &elevations{
+    //     if elevation != 0.0{
+    //         dbg!(elevation);
+    //     }
+    // }
+
+    // let mut province_points = vec![];
+    // let rng = fastrand::Rng::new();
+    
+    // let elevation_vertices: Vec<_> = planet_mesh.vertices.iter().map(|vertex| (vertex.position, vertex.elevation)).collect();
+    // //*very* naive random points on a sphere
+    // while province_points.len() < 20{
+    //     let point = Vector3::new(rng.f32() * 2.0 - 1.0,rng.f32() * 2.0 - 1.0,rng.f32() * 2.0 - 1.0,).normalize() * World::RADIUS as f32;
+    //     let elevation = interoplate_on_mesh(point, &elevation_vertices, &planet_mesh.indices);
+
+    //     if elevation.abs() < 100.0{
+    //         province_points.push((point, elevation))
+    //     }
+
+    // }
+
+    dbg!(province_points.len());
+    assert!(province_points.len() >= 3);
+
+    if province_points.len() % 2 != 0{
+        province_points.pop();
+    }
+
+    let world = World::new(&province_points, &planet_mesh);
 
 
     if let Some(line_data) = &mut vulkan_data.line_data{
-        for vertex in &planet_mesh.vertices{
-            line_data.add_point(vertex.position);
+        for point in &world.points{
+            line_data.add_point(*point);
         }
         for province in world.provinces.iter(){
             for chunk in province.point_indices.chunks(2){
@@ -174,27 +314,16 @@ fn main() {
         state: ClientState::Disconnected,
     };
 
-    let mut last_time_check = std::time::Instant::now();
+    let last_time_check = std::time::Instant::now();
     //Do some simulation to see if state stabilizes
-    let months = 12 * 1000;
-    let mut population_history = Vec::with_capacity(months);
-    let mut price_histories = vec![Vec::with_capacity(months); Good::VARIANT_COUNT];
+    let months = 12 * 100;
+    let mut histories = Histories{
+        population: vec![VecDeque::with_capacity(months); game.world.provinces.len()].into_boxed_slice(),
+        prices: vec![vec![VecDeque::with_capacity(months); Good::VARIANT_COUNT].into_boxed_slice(); game.world.provinces.len()].into_boxed_slice(),
+        last_time_check,
+    };
     for month in 0..months {
-        if last_time_check.elapsed().as_secs_f64() > 1.0{
-            last_time_check = std::time::Instant::now();
-            println!("Month: {month}");
-        }
-        population_history.push(Value::new(
-            month as f64,
-            game.world.provinces[0].pops.population(),
-        ));
-
-        for good_index in 0..Good::VARIANT_COUNT {
-            price_histories[good_index].push(Value::new(
-                month as f64,
-                game.world.provinces[0].market.price[good_index],
-            ));
-        }
+        histories.add_new_tick(&game.world, month, true);
         game.world.process(1.0 / 12.0);
     }
 
@@ -244,7 +373,8 @@ fn main() {
         if population_graph_window_open {
             Window::new("Population Plot").show(&ctx, |ui| {
                 ui.label("hello!");
-                add_plot(ui, &population_history, "Total Population", 1000, 0);
+                let values = histories.population[0].as_slices();
+                add_plot(ui, &[values.0, values.1].concat(), "Total Population", 1000, 0);
             });
         }
         if price_graph_window_open {
@@ -252,9 +382,11 @@ fn main() {
                 ScrollArea::vertical().show(ui, |ui| {
                     for good_index in 0..Good::VARIANT_COUNT {
                         let good = Good::try_from(good_index).unwrap();
+
+                        let values = histories.prices[0][good_index].as_slices();
                         add_plot(
                             ui,
-                            &price_histories[good_index],
+                            &[values.0, values.1].concat(),
                             &format!("{:?} Price", good),
                             1000,
                             0,
@@ -325,8 +457,8 @@ fn main() {
                             close_app(&mut vulkan_data, control_flow);
                         }
                         WindowEvent::CursorMoved { position, .. } => {
-                            game.mouse_position.x = position.x;
-                            game.mouse_position.y = position.y;
+                            game.mouse_position.x = -((position.x / window.inner_size().width as f64) * 2.0 - 1.0);
+                            game.mouse_position.y = -((position.y / window.inner_size().height as f64) * 2.0 - 1.0);
                             // println!("Position: {:?}", position);
                         }
                         WindowEvent::MouseInput { button, state, .. } => {
@@ -436,14 +568,22 @@ fn main() {
                     average_frametime /= FRAME_SAMPLES as f64;
 
                     window.set_title(format!("Frametimes: {:}", average_frametime).as_str());
-                    population_history.push(Value::new(
-                        current_month as f64,
-                        game.world.provinces[0].pops.population(),
-                    ));
+
+                    histories.add_new_tick(&game.world, current_month, false);
                     game.process(1.0 / 12.0);
+
+                    if let Some(selected_province) = game.selected_province{
+                        let province_indices = &game.world.provinces[selected_province].point_indices;
+                        if let Some(line_data) = &mut vulkan_data.line_data{
+                            line_data.select_points(&province_indices);
+                        }
+                    }
+
                     current_month += 1;
+
                     update_renderer(&game, &mut vulkan_data, current_month as f32 / 12.0);
                     vulkan_data.transfer_data_to_gpu();
+
                     let _draw_frame_result = vulkan_data.draw_frame();
                     time_since_last_frame -= 1.0 / FRAMERATE_TARGET;
                 }

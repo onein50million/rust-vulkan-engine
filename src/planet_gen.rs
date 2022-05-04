@@ -1,11 +1,11 @@
-use crate::support::Vertex;
+use crate::{support::Vertex, world::World};
 use float_ord::FloatOrd;
 use gdal::errors::GdalError;
 use genmesh::generators::{IcoSphere, IndexedPolygon, SharedVertex};
 use nalgebra::{Vector2, Vector3, Vector4};
 use std::{
     collections::{HashMap, HashSet},
-    fs::read_dir,
+    fs::read_dir, ops::{Add, Mul}, fmt::Debug, time::Instant,
 };
 
 pub struct MeshOutput {
@@ -25,6 +25,105 @@ struct VertexData {
     elevation: f32,
     quantized_elevation: i8,
     neighbours: Vec<usize>,
+}
+// //https://answers.unity.com/questions/383804/calculate-uv-coordinates-of-3d-point-on-plane-of-m.html
+// pub fn triangle_interpolate<T>(target_point: Vector3<f32>,first_point: (Vector3<f32>, T),second_point: (Vector3<f32>, T),third_point: (Vector3<f32>, T)) -> Option<T>
+// where T:  Mul<f32, Output = T> + Add<Output = T> + Copy
+// {
+//     let f1 = first_point.0 - target_point;
+//     let f2 = second_point.0 - target_point;
+//     let f3 = third_point.0 - target_point;
+
+//     let total_area = dbg!((first_point.0 - second_point.0).cross(&(first_point.0 - third_point.0)).magnitude());
+
+//     let ratio1 = dbg!(f2.cross(&f3).magnitude()/total_area);
+//     let ratio2 = dbg!(f3.cross(&f1).magnitude()/total_area);
+//     let ratio3 = dbg!(f1.cross(&f2).magnitude()/total_area);
+
+
+//     if ratio1 > 0.0 && ratio2 > 0.0 && ratio3 > 0.0{
+//         Some(first_point.1 * ratio1 + second_point.1 * ratio2 + third_point.1 * ratio3)
+//     }else{
+//         None
+//     }
+
+// }
+
+//https://answers.unity.com/questions/383804/calculate-uv-coordinates-of-3d-point-on-plane-of-m.html
+pub fn triangle_interpolate<T>(target_point: Vector3<f32>,first_point: (Vector3<f32>, T),second_point: (Vector3<f32>, T),third_point: (Vector3<f32>, T)) -> Option<T>
+where T:  Mul<f32, Output = T> + Add<Output = T> + Copy
+{
+    let f1 = target_point - first_point.0;
+    let f2 = target_point - second_point.0;
+    let f3 = target_point - third_point.0;
+
+
+    let main_cross = (first_point.0 - second_point.0).cross(&(first_point.0 - third_point.0));
+    let cross1 = f2.cross(&f3);
+    let cross2 = f3.cross(&f1);
+    let cross3 = f1.cross(&f2);
+    
+    let total_area = main_cross.magnitude();
+    let ratio1 = cross1.magnitude()/total_area * main_cross.dot(&cross1).signum();
+    let ratio2 = cross2.magnitude()/total_area * main_cross.dot(&cross2).signum();
+    let ratio3 = cross3.magnitude()/total_area * main_cross.dot(&cross3).signum();
+
+    if ratio1 >= -0.1 && ratio2 >= -0.1 && ratio3 >= -0.1 && ratio1 <= 1.0 && ratio2 <= 1.0 && ratio3 <= 1.0 {
+        Some(first_point.1 * ratio1 + second_point.1 * ratio2 + third_point.1 * ratio3)
+    }else{
+        None
+    }
+
+}
+
+pub fn interoplate_on_mesh<T>(point: Vector3<f32>, vertices: &[(Vector3<f32>, T)], indices: &[usize]) -> T
+where T:  Mul<f32, Output = T> + Add<Output = T> + Copy + Debug
+{
+    for triangle in indices.chunks(3){
+        let first_point = vertices[triangle[0]];
+        let second_point = vertices[triangle[1]];
+        let third_point = vertices[triangle[2]];
+        
+        if let Some(value) = triangle_interpolate(point,first_point, second_point, third_point){
+            return value;
+        }
+    }
+    panic!("Failed to find point on mesh: point: {point}")
+}
+
+// pub fn are_points_contiguous(point1: Vector3<f32>, point2: Vector3<f32>, vertices: &[(Vector3<f32>, f32)], indices: &[usize]) -> bool{
+//     const SAMPLES_PER_RADIAN: usize = 100;
+//     let angle = point1.angle(&point2);
+//     let num_samples = ((angle * SAMPLES_PER_RADIAN as f32) as usize).max(1);
+
+//     for sample in 0..num_samples{
+//         let progress = sample as f32 / num_samples as f32;
+
+//         let sample_vector = point1.slerp(&point2, progress) * World::RADIUS as f32;
+//         let interpolate = interoplate_on_mesh(sample_vector, vertices, indices);
+
+        
+//         if interpolate < 0.0{
+//             return false;
+//         }
+//     }
+//     true
+// }
+
+pub fn are_points_contiguous(point1: Vector3<f32>, point2: Vector3<f32>, vertices: &[(Vector3<f32>, f32)], indices: &[usize]) -> bool{
+    const NUM_SAMPLES: usize = 100;
+    for sample in 0..NUM_SAMPLES{
+        let progress = (sample as f32 + 0.5) / NUM_SAMPLES as f32;
+
+        let sample_vector = point1.slerp(&point2, progress) * World::RADIUS as f32;
+        let interpolate = interoplate_on_mesh(sample_vector, vertices, indices);
+
+        
+        if interpolate < 0.0{
+            return false;
+        }
+    }
+    true
 }
 
 const NUM_BUCKETS: f32 = 8.0; //Number of buckets to quantize elevations into
@@ -256,38 +355,38 @@ pub fn get_planet(radius: f32) -> MeshOutput {
 
         let mut cells_to_collapse = vec![0];
         // let mut count = wave_function_collapse.cells.len()/32;
-        let mut count = 0;
-        // let mut count = usize::MAX;
-        let mut visited_cells = HashSet::new();
-        dbg!(count);
-        while count > 0{
-            // if fastrand::f64() > 0.9{
-            //     wave_function_collapse.collapse_cell_to_value(i,1).expect("failed to collapse");
-            // }
-            let mut new_cells_to_collapse: Vec<usize> = vec![];
-            let mut cells_collapsed = 0u32; 
-            for cell_index in &cells_to_collapse{
-                if !visited_cells.contains(cell_index){
-                    // println!("Collapsing {cell_index}");
-                    if fastrand::f32() > 0.25{
-                        wave_function_collapse.collapse_cell_to_value(*cell_index,1).expect("failed to collapse");
-                    }
-                    visited_cells.insert(*cell_index);
-                    new_cells_to_collapse.extend(wave_function_collapse.cells[*cell_index].neighbours.iter());
-                    cells_collapsed += 1;
-                    count -= 1;
-                    if count == 0{
-                        break;
-                    }    
-                }
-            }
-            if cells_collapsed == 0{
-                break
-            }else{
-                cells_to_collapse = new_cells_to_collapse;
-            }
+        // let mut count = 0;
+        // // let mut count = usize::MAX;
+        // let mut visited_cells = HashSet::new();
+        // dbg!(count);
+        // while count > 0{
+        //     // if fastrand::f64() > 0.9{
+        //     //     wave_function_collapse.collapse_cell_to_value(i,1).expect("failed to collapse");
+        //     // }
+        //     let mut new_cells_to_collapse: Vec<usize> = vec![];
+        //     let mut cells_collapsed = 0u32; 
+        //     for cell_index in &cells_to_collapse{
+        //         if !visited_cells.contains(cell_index){
+        //             // println!("Collapsing {cell_index}");
+        //             if fastrand::f32() > 0.25{
+        //                 wave_function_collapse.collapse_cell_to_value(*cell_index,-2).expect("failed to collapse");
+        //             }
+        //             visited_cells.insert(*cell_index);
+        //             new_cells_to_collapse.extend(wave_function_collapse.cells[*cell_index].neighbours.iter());
+        //             cells_collapsed += 1;
+        //             count -= 1;
+        //             if count == 0{
+        //                 break;
+        //             }    
+        //         }
+        //     }
+        //     if cells_collapsed == 0{
+        //         break
+        //     }else{
+        //         cells_to_collapse = new_cells_to_collapse;
+        //     }
 
-        }
+        // }
 
         let mut num_collapses = 0;
         loop {

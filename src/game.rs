@@ -76,7 +76,8 @@ pub mod client {
     use crate::renderer::VulkanData;
     use crate::support::Inputs;
     use crate::world::World;
-    use nalgebra::{Matrix4, Translation3, UnitQuaternion, Vector2, Vector3};
+    use float_ord::FloatOrd;
+    use nalgebra::{Matrix4, Translation3, UnitQuaternion, Vector2, Vector3, Vector4};
 
     pub struct AnimationHandler {
         pub index: usize,
@@ -164,6 +165,7 @@ pub mod client {
         pub planet: GameObject,
         pub start_time: Instant,
         pub camera: Camera,
+        pub selected_province: Option<usize>,
     }
     impl Game {
         pub fn new(planet_render_index: usize, world: World) -> Self {
@@ -180,6 +182,7 @@ pub mod client {
                 camera: Camera::new(),
                 last_mouse_position: Vector2::zeros(),
                 world,
+                selected_province: None,
             }
         }
         pub fn process(&mut self, delta_time: f64) {
@@ -189,8 +192,21 @@ pub mod client {
             self.last_mouse_position = self.mouse_position;
             if self.inputs.panning {
                 self.camera.latitude =
-                    (self.camera.latitude - 0.001 * delta_mouse.y).clamp(-PI / 2.01, PI / 2.01);
-                self.camera.longitude -= delta_mouse.x * 0.001;
+                    (self.camera.latitude + 1.0 * delta_mouse.y).clamp(-PI / 2.01, PI / 2.01);
+                self.camera.longitude += delta_mouse.x * 1.0;
+            }
+
+            if self.inputs.left_click{
+                self.selected_province = {
+                    let direction = self.camera.get_view_matrix().try_inverse().unwrap() * Vector4::new(self.mouse_position.x, self.mouse_position.y, 1.0,0.0);
+                    match World::intersect_planet(self.camera.get_position(), direction.xyz()){
+                        Some(point) => {
+                            Some(self.world.provinces.iter().enumerate().min_by_key(|(_, province)|{FloatOrd((point - province.position).magnitude())}).expect("Failed to find closest provice to click").0)
+                        }
+                        None => None,
+                    }
+                };
+                self.inputs.left_click = false;
             }
         }
     }

@@ -181,11 +181,12 @@ void main() {
 
         float latitude_factor = clamp(pow((abs(asin(normalize(fragPosition).y)) / PI) + 0.6, 64.0), 0.0, 1.0);
         float aridity = clamp(pow((1.0 - abs(asin(normalize(fragPosition).y)) / PI) + 0.01, 32.0),0.0, 1.0);
-        // outColor = vec4(vec3(aridity),1.0);
-        // return;
         float temperature_factor = (data_set.albedo.r - latitude_factor)*2.0 - 1.0 + 0.5;
-        float shifted_elevation = fragElevation + (fbm(normalize(fragPosition)*10.0) * 2.0 - 1.0 )* 5000.0;
+        // float shifted_elevation = fragElevation + (fbm(normalize(fragPosition)*10.0) * 2.0 - 1.0 )* 5000.0;
+        float shifted_elevation = fragElevation;
         float snow_level = 5000.0 + temperature_factor * 3000.0;
+        // outColor = vec4(vec3(shifted_elevation),1.0);
+        // return;
 
 
         if (shifted_elevation < 0.0){

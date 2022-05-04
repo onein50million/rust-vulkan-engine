@@ -2,9 +2,12 @@
 
 layout(location = 0) out vec4 outColor;
 
-layout(binding = 1) uniform usampler2D font_texture;
+layout(location = 0) in vec4 fragColor;
 
 
 void main() {
-    outColor = vec4(1.0);
+    // if (fragColor.a < 0.9){
+    //     discard;
+    // }
+    outColor = fragColor;
 }
