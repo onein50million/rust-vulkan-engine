@@ -14,6 +14,8 @@ use nalgebra::{
     Matrix4, Point3, Quaternion, Scale3, Translation3, UnitQuaternion, Vector2, Vector3, Vector4,
 };
 
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::convert::TryInto;
 use std::default::Default;
 use std::f32::consts::PI;
@@ -22,6 +24,8 @@ use std::fs::File;
 use std::io::BufReader;
 use std::marker::PhantomData;
 use std::mem::size_of;
+use std::ops::Index;
+use std::ops::IndexMut;
 use std::path::PathBuf;
 use std::ptr;
 use std::sync::Arc;
@@ -37,8 +41,8 @@ use winit::window::Window;
 const MIP_LEVELS: u32 = 6;
 const MSAA_ENABLED: bool = false;
 const UI_BUFFER_LENGTH: usize = 8192 * 32;
-const LINE_DATA_BUFFER_MAX_LENGTH: usize = 1<<15;
-const LINE_WIDTH: f32 = 5.0;
+const LINE_DATA_BUFFER_MAX_LENGTH: usize = 1<<22;
+const LINE_WIDTH: f32 = 1.0;
 
 
 #[derive(Debug, Copy, Clone)]
@@ -1093,6 +1097,26 @@ impl <T> MappedBuffer<T>{
     }
 }
 
+impl <T> Index<usize> for MappedBuffer<T>{
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        assert!(index < self.count);
+        unsafe{
+            &*(self.allocation_info.get_mapped_data() as *mut T).offset(index as isize)
+        }
+    }
+}
+
+impl <T> IndexMut<usize> for MappedBuffer<T>{
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        assert!(index < self.count);
+        unsafe{
+            &mut *(self.allocation_info.get_mapped_data() as *mut T).offset(index as isize)
+        }
+    }
+}
+
 impl <T> IntoIterator for MappedBuffer<T>{
     type Item = T;
 
@@ -1148,6 +1172,7 @@ struct LinePushConstants{
 pub struct LineDrawData{
     vertex_buffer: MappedBuffer<LineVertex>,
     index_buffer: MappedBuffer<u32>,
+    index_map: HashSet<(usize,usize)>,
     pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     descriptor_sets: Vec<vk::DescriptorSet>,
@@ -1211,6 +1236,7 @@ impl LineDrawData{
             pipeline,
             descriptor_sets,
             pipeline_layout,
+            index_map: HashSet::new(),
         }
     }
 
@@ -1400,7 +1426,7 @@ impl LineDrawData{
     pub fn add_point(&mut self, point: Vector3<f32>) -> usize{
         self.vertex_buffer.add_value(LineVertex{
             position: point,
-            color: Vector4::new(1.0,1.0,1.0, 0.0),
+            color: Vector4::new(1.0,1.0,1.0, 1.0),
         });
         self.vertex_buffer.count - 1
     }
@@ -1409,15 +1435,23 @@ impl LineDrawData{
 
         for (index, vertex) in (&mut self.vertex_buffer).into_iter().enumerate(){
             if point_indices.contains(&index){
-                vertex.color = Vector4::new(1.0,0.3,0.3, 1.0);
+                vertex.color.w = 1.0;
             }else{
-                vertex.color = Vector4::new(1.0,1.0,1.0, 0.9);
+                vertex.color.w = 0.1;
             }
         }
+    }
 
+    pub fn set_color(&mut self, point_indices: &[usize], color: Vector4<f32>){
+        for &index in point_indices{
+            self.vertex_buffer[index].color = color;
+        }
     }
 
     pub fn connect_points(&mut self, first_index: usize, second_index: usize){
+        if !self.index_map.insert((first_index, second_index)){
+            return;
+        }
         self.index_buffer.add_value(first_index as u32);
         self.index_buffer.add_value(second_index as u32);
     }
@@ -1440,7 +1474,7 @@ pub struct CubemapRender{
 }
 impl CubemapRender{
 
-    pub const CUBEMAP_WIDTH: u32 = 1024;
+    pub const CUBEMAP_WIDTH: u32 = 128;
 
     pub fn new(vulkan_data: &VulkanData, vertices: &[ElevationVertex], indices: &[u32]) -> Self{
         let (descriptor_sets, set_layouts) = Self::create_descriptor_sets(vulkan_data);
@@ -6009,14 +6043,14 @@ impl VulkanData {
         self.index_buffer_memory = None;
     }
 
-    pub fn get_projection(&self, _zoom: f64) -> nalgebra::Perspective3<f64> {
+    pub fn get_projection(&self, zoom: f64) -> nalgebra::Perspective3<f64> {
         let surface_width = self.surface_capabilities.unwrap().current_extent.width as f64;
         let surface_height = self.surface_capabilities.unwrap().current_extent.height as f64;
         let aspect_ratio = surface_width / surface_height;
 
         return nalgebra::Perspective3::new(
             aspect_ratio,
-            90.0f64.to_radians(),
+            90.0f64.to_radians() * zoom,
             1_000_000.0,
             20_000_000.0,
         );

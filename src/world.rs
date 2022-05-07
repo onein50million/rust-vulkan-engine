@@ -1,6 +1,7 @@
 use std::{fmt::Display, mem::MaybeUninit};
 
-use nalgebra::Vector3;
+use float_ord::FloatOrd;
+use nalgebra::{Vector3, Vector4, Isometry3, Point3, Orthographic3, Matrix4, Vector2};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use variant_count::VariantCount;
 
@@ -226,6 +227,37 @@ impl Display for Province {
     }
 }
 
+
+// fn project_point_on_plane(point: Vector3<f32>, origin: Vector3<f32>, normal: Vector3<f32>) -> Point3<f32>{
+//     let v = point - origin;
+//     let dist = v.dot(&normal);
+
+//     let isometry = Isometry3::look_at_rh(&Point3::from(origin), &Point3::from(origin + 100000.0*normal), &Vector3::new(0.0,-1.0, 0.0));
+//     // dbg!(point);
+//     isometry.transform_point(&Point3::from(point - dist * normal))
+    
+// }
+
+// fn project_point_on_plane(point: Vector3<f32>, origin: Vector3<f32>, normal: Vector3<f32>) -> Vector2<f32>{
+//     let v = point - origin;
+//     let dist = v.dot(&normal);
+
+//     let isometry = Isometry3::look_at_rh(&Point3::from(origin), &Point3::from(origin + 100000.0*normal), &Vector3::new(0.0,-1.0, 0.0));
+//     // dbg!(point);
+//     isometry.transform_point(&Point3::from(point - dist * normal)).coords.xy()
+    
+// }
+
+fn project_point_on_plane(point: Vector3<f32>, origin: Vector3<f32>, normal: Vector3<f32>) -> Vector2<f32>{
+    let v = point - origin;
+    let dist = v.dot(&normal);
+
+    let isometry = Isometry3::look_at_rh(&Point3::from(origin), &Point3::from(origin + 100000.0*normal), &Vector3::new(0.0,-1.0, 0.0));
+    // dbg!(point);
+    isometry.transform_point(&Point3::from(point - dist * normal)).coords.xy()
+    
+}
+
 #[derive(Debug)]
 pub struct World {
     pub points: Vec<Vector3<f32>>,
@@ -248,67 +280,74 @@ impl World {
         }
     }
     
-    pub fn new(vertices: &[(Vector3<f32>, f32)], planet_mesh: &MeshOutput) -> Self {
+    pub fn new(vertices: &[Vector3<f32>],province_indices_slice: &[Vec<usize>]) -> Self {
         
-        // let mut provinces = vec![];
-
-        // let mut islands = Islands::new(vertices, planet_mesh);
-
-        // println!("Collapsing islands");
-        // loop{
-        //     if islands.collapse_islands(){
-        //         break;
-        //     }
-        // }
-        // println!("Finished collapsing islands");
-    
-        // for island in islands.islands{
-
-        //     let mut point_indices = vec![];
-        //     let island_indices: Vec<_> = island.iter().collect();
-        //     let position: Vector3<f64> = island_indices.iter().map(|&index| vertices[*index].0.cast::<f64>()).sum::<Vector3<f64>>() / island_indices.len() as f64;
-        //     for window in island_indices.windows(2){
-        //         point_indices.push(*window[0]);
-        //         point_indices.push(*window[1]);
-        //     }
-
-        //     provinces.push(
-        //     Province {
-        //         point_indices,
-        //         position,
-        //         pops: Pops::new(10_000.0),
-        //         market: Market {
-        //             price: [1.0; Good::VARIANT_COUNT],
-        //             supply: [0.0; Good::VARIANT_COUNT],
-        //             demand: [0.0; Good::VARIANT_COUNT],
-        //             previous_supply_demand_error: [0.0; Good::VARIANT_COUNT],
-        //             supply_demand_error_integral: [0.0; Good::VARIANT_COUNT],
-        //         },
-        //     });
-        // }
+        let mut provinces = vec![];
+        for province_indices in province_indices_slice{
+            let province_origin  = province_indices.iter().map(|&index| vertices[index]).sum::<Vector3<f32>>() / province_indices.len() as f32;
+            let normal = province_origin.normalize();
+            let province_origin = province_origin.normalize() * Self::RADIUS as f32;
+            let mut sorted_indices = province_indices.clone();
 
 
-        //tired so code is getting bad
+            // after many attempts this seemed to work the best https://stackoverflow.com/a/65422749
+            let origin_latlong = (
+                normal.z.asin(),
+                normal.y.atan2(normal.x)
+            );
+            sorted_indices.sort_by(|&a,&b|{
+                let a_normal = vertices[a].normalize();
+                let a_latlong = (
+                    a_normal.z.asin(),
+                    a_normal.y.atan2(a_normal.x)
+                );
+                let b_normal = vertices[b].normalize();
+                let b_latlong = (
+                    b_normal.z.asin(),
+                    b_normal.y.atan2(b_normal.x)
+                );
 
-        let indices: Vec<_> = (0..vertices.len()).collect();
+                let a1 = (a_latlong.0 - origin_latlong.0).atan2(a_latlong.1 - origin_latlong.1);
+                let a2 = (b_latlong.0 - origin_latlong.0).atan2(b_latlong.1 - origin_latlong.1);
 
-        // let mut iter = vertices.iter().enumerate().map(|(index, _)| index);
+                FloatOrd(a1).cmp(&FloatOrd(a2))
+            });
 
-        // loop{
-        //     let small_index: Vec<_> = iter.by_ref().take(6).collect();
-        //     if small_index.len() == 0{
-        //         break;
-        //     }
-        //     indices.extend(small_index);
-        // }
+            // let right_vector = Vector2::new(1.0, 0.0);
+            // sorted_indices.sort_by_key(|&index|{
+            //     let projected_point = project_point_on_plane(vertices[index], province_origin, normal);
+            //     FloatOrd((-projected_point).angle(&right_vector))
+            // });
 
-        let provinces: Box<[_]> = indices.chunks(2).map(|line|{
-            assert_eq!(line.len(), 2);
-            let point_indices = vec![line[0], line[1]];
-            let position: Vector3<f64> = line.iter().map(|&index| vertices[index].0.cast::<f64>()).sum::<Vector3<f64>>() / line.len() as f64;
-            Province {
-                point_indices,
-                position,
+            // let reference_vector = normal.cross(&Vector3::new(0.0,-1.0,0.0));
+            // sorted_indices.sort_by_key(|&index| {
+            //     let vector = province_origin - vertices[index];
+            //     FloatOrd(vector.angle(&reference_vector))
+            // });
+
+            // let lowermost = Vector3::new(-100000.0, 0.0, 0.0) - province_indices.iter().map(|&index|{
+            //     project_point_on_plane(vertices[index], province_origin, normal)
+            // }).max_by_key(|a|FloatOrd(a.y)).unwrap().coords;
+            // sorted_indices.sort_by_key(|&index|{
+            //     let point = vertices[index];
+            //     let projected_point = project_point_on_plane(point, province_origin, normal);
+            //     let vector = Vector3::new(-100000.0, 0.0, 0.0) - projected_point.coords;
+
+            //     FloatOrd(vector.angle(&lowermost))
+            //     // FloatOrd(normal.dot(&(lowermost.cross(&vector))))
+            // });
+
+            let mut out_indices = vec![];
+            for index in sorted_indices.windows(2){
+                out_indices.push(index[0]);
+                out_indices.push(index[1]);
+            }
+            out_indices.push(*sorted_indices.last().unwrap());
+            out_indices.push(*sorted_indices.first().unwrap());
+
+            provinces.push(Province {
+                point_indices: out_indices,
+                position: province_origin.cast(),
                 pops: Pops::new(10_000.0),
                 market: Market {
                     price: [1.0; Good::VARIANT_COUNT],
@@ -317,12 +356,13 @@ impl World {
                     previous_supply_demand_error: [0.0; Good::VARIANT_COUNT],
                     supply_demand_error_integral: [0.0; Good::VARIANT_COUNT],
                 },
-            }
-        }).collect();
+            })
+
+        }
 
         Self {
-            points:vertices.iter().map(|(position, _elevation)| *position).collect(),
-            provinces
+            points:vertices.iter().map(|vertex| *vertex).collect(),
+            provinces: provinces.into_boxed_slice()
         }
     }
 

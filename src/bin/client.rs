@@ -20,14 +20,15 @@ use nalgebra::Matrix3;
 use nalgebra::Perspective3;
 use nalgebra::Point3;
 use nalgebra::{Matrix4, Rotation3, Translation3, Vector2, Vector3};
+use nohash_hasher::BuildNoHashHasher;
+use noise::NoiseFn;
 use rust_vulkan_engine::game::client::Game;
 
 use rust_vulkan_engine::network::{ClientState, Packet};
-use rust_vulkan_engine::planet_gen::interoplate_on_mesh;
-use rust_vulkan_engine::province_gen::Islands;
 use rust_vulkan_engine::renderer::*;
 use rust_vulkan_engine::support::*;
 use rust_vulkan_engine::world::*;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::env;
@@ -43,6 +44,213 @@ use winit::event::{MouseButton, MouseScrollDelta};
 //backward: positive z
 //left: negative x
 //right: positive x
+
+const CUBEMAP_WIDTH: usize = CubemapRender::CUBEMAP_WIDTH as usize;
+
+fn province_shift(perlin: &noise::Perlin, point: &Vector3<f64>, w: f64) -> f64{
+    (perlin.get([
+        point.x as f64,
+        point.y as f64,
+        point.z as f64,
+        w,
+    ]) * 2.0 -1.0) * 0.01
+}
+
+
+fn index_to_coordinate(index: usize) -> Vector3<f32>{
+    const CORRECTION_MATRIX: Matrix3<f64> = Matrix3::new(1.0000000,  0.0000000,  0.0000000,
+        0.0000000,  0.0000000, 1.0000000,
+        0.0000000,  -1.0000000,  0.0000000);
+
+    let (x,y) = index_to_pixel(index);
+    let face = index / (CUBEMAP_WIDTH * CUBEMAP_WIDTH);
+    
+    let x = ((x as f64) /  CUBEMAP_WIDTH as f64) * 2.0 - 1.0;
+    let y = ((y as f64) /  CUBEMAP_WIDTH as f64) * 2.0 - 1.0;
+
+    let normal;
+    match face{
+        0 => {
+            normal = Vector3::new(1.0, -y, -x);
+        },
+        1 => {
+            normal = Vector3::new(-1.0, -y, x);
+        },
+        2 => {
+            normal = Vector3::new(x, 1.0, y);
+        },
+        3 => {
+            normal = Vector3::new(x, -1.0, -y);
+        },
+        4 => {
+            normal = Vector3::new(x, -y, 1.0);
+        },
+        5 => {
+            normal = Vector3::new(-x, -y, -1.0);
+        },
+        _ => {
+            panic!("Too many faces in cubemap");
+        },
+    }
+
+    let secondary_correction_matrix: Matrix4<f64> = Matrix4::from(Rotation3::from_euler_angles(-90f64.to_radians(),0.0,0.0));
+    let normal = CORRECTION_MATRIX * normal.normalize();
+    let normal = secondary_correction_matrix.transform_point(&Point3::from(normal)).coords;
+    let normal = normal.component_mul(&Vector3::new(1.0,1.0,1.0));
+    let point = normal * World::RADIUS;
+    
+    point.cast()
+
+}
+
+fn index_to_pixel(index: usize) -> (usize, usize){
+    ((index % (CUBEMAP_WIDTH * CUBEMAP_WIDTH)) % CUBEMAP_WIDTH, (index % (CUBEMAP_WIDTH * CUBEMAP_WIDTH)) / CUBEMAP_WIDTH)
+}
+
+fn pixel_to_index(x: usize, y: usize, face: usize) -> usize{
+    let face_offset = face * CUBEMAP_WIDTH * CUBEMAP_WIDTH;
+    let y_offset = y * CUBEMAP_WIDTH;
+    x + y_offset + face_offset
+
+}
+
+const POS_X_FACE: usize = 0;
+const NEG_X_FACE: usize = 1;
+const POS_Y_FACE: usize = 3; //These two are swapped because I had them backwards when I was doing the conversion and now it's a bunch of work to fix it
+const NEG_Y_FACE: usize = 2; // ^^^^^
+const POS_Z_FACE: usize = 4;
+const NEG_Z_FACE: usize = 5;
+
+//This is really confusing to figure out but hopefully it should give neighbouring pixels on a cubemap
+fn get_neighbour_pixels(index: usize) -> Box<[usize]>{
+    let (x, y) = index_to_pixel(index);
+
+    let current_face = index / (CUBEMAP_WIDTH * CUBEMAP_WIDTH);
+
+    const MAX_COORD:usize = CUBEMAP_WIDTH - 1;
+
+    //tuple is (neighbouring face, whether it needs to be flipped)
+    let left_face;
+    let right_face;
+    let up_face;
+    let down_face;
+    match current_face{
+        POS_X_FACE => {
+            //positive x
+            left_face = POS_Z_FACE;
+            right_face = NEG_Z_FACE;
+            up_face = NEG_Y_FACE;
+            down_face = POS_Y_FACE;
+        },
+        NEG_X_FACE => {
+            //negative x
+            left_face = NEG_Z_FACE;
+            right_face = POS_Z_FACE;
+            up_face = NEG_Y_FACE;
+            down_face = POS_Y_FACE;
+        },
+        POS_Y_FACE => {
+            //positive y
+            left_face = NEG_X_FACE;
+            right_face = POS_X_FACE;
+            up_face = POS_Z_FACE;
+            down_face = NEG_Z_FACE;
+        },
+        NEG_Y_FACE => {
+            //negative y
+            left_face = NEG_X_FACE;
+            right_face = POS_X_FACE;
+            up_face = NEG_Z_FACE;
+            down_face = POS_Z_FACE;
+        },
+        POS_Z_FACE => {
+            //positive z
+            left_face = NEG_X_FACE;
+            right_face = POS_X_FACE;
+            up_face = NEG_Y_FACE;
+            down_face = POS_Y_FACE;
+        },
+        NEG_Z_FACE => {
+            //negative z
+            left_face = POS_X_FACE;
+            right_face = NEG_X_FACE;
+            up_face = NEG_Y_FACE;
+            down_face = POS_Y_FACE;
+        },
+        _ => {
+            panic!("Too many faces in cubemap");
+        },
+    }
+    let mut out = Vec::with_capacity(4);
+
+    
+    if x == 0{
+        match (current_face, left_face){
+            (POS_X_FACE, POS_Z_FACE) => out.push(pixel_to_index(MAX_COORD, y, left_face)),
+            (NEG_X_FACE, NEG_Z_FACE) => out.push(pixel_to_index(MAX_COORD, y, left_face)),
+            (POS_Y_FACE, NEG_X_FACE) => out.push(pixel_to_index(MAX_COORD - y, MAX_COORD, left_face)),
+            (NEG_Y_FACE, NEG_X_FACE) => out.push(pixel_to_index(y, 0, left_face)),
+            (POS_Z_FACE, NEG_X_FACE) => out.push(pixel_to_index(MAX_COORD, y, left_face)),
+            (NEG_Z_FACE, POS_X_FACE) => out.push(pixel_to_index(MAX_COORD, y, left_face)),
+            _ => panic!("invalid case")
+        }
+    }else{
+        out.push(pixel_to_index(x - 1, y, current_face));
+    }
+
+    if x == MAX_COORD{
+        match (current_face, right_face)
+       { 
+            (POS_X_FACE,NEG_Z_FACE) =>out.push(pixel_to_index(0, y, right_face)),
+            (NEG_X_FACE,POS_Z_FACE) =>out.push(pixel_to_index(0, y, right_face)),
+            (POS_Y_FACE,POS_X_FACE) =>out.push(pixel_to_index(y, MAX_COORD, right_face)),
+            (NEG_Y_FACE,POS_X_FACE) =>out.push(pixel_to_index(MAX_COORD - y, 0, right_face)),
+            (POS_Z_FACE,POS_X_FACE) =>out.push(pixel_to_index(0, y, right_face)),
+            (NEG_Z_FACE,NEG_X_FACE) =>out.push(pixel_to_index(0, y, right_face)),
+            _ => panic!("invalid case")
+    }
+    }else{
+        out.push(pixel_to_index(x+1, y, current_face));
+    }
+
+    if y == 0{
+        match (current_face, up_face){
+            (POS_X_FACE,NEG_Y_FACE) => out.push(pixel_to_index(MAX_COORD, MAX_COORD - x, up_face)),
+            (NEG_X_FACE,NEG_Y_FACE) => out.push(pixel_to_index(0, x, up_face)),
+            (POS_Y_FACE,POS_Z_FACE) => out.push(pixel_to_index(x, MAX_COORD, up_face)),
+            (NEG_Y_FACE,NEG_Z_FACE) => out.push(pixel_to_index(MAX_COORD - x, 0, up_face)),
+            (POS_Z_FACE,NEG_Y_FACE) => out.push(pixel_to_index(x, MAX_COORD, up_face)),
+            (NEG_Z_FACE,NEG_Y_FACE) => out.push(pixel_to_index(MAX_COORD - x, 0, up_face)),
+            _ => panic!("Invalid case") 
+        }
+    }else{
+        out.push(pixel_to_index(x, y - 1, current_face));
+    }
+
+    if y == MAX_COORD{
+        match (current_face, down_face){
+            (POS_X_FACE,POS_Y_FACE) => out.push(pixel_to_index(MAX_COORD, x, down_face)),
+            (NEG_X_FACE,POS_Y_FACE) => out.push(pixel_to_index(0, MAX_COORD - x, down_face)),
+            (POS_Y_FACE,NEG_Z_FACE) => out.push(pixel_to_index(MAX_COORD - x, MAX_COORD, down_face)),
+            (NEG_Y_FACE,POS_Z_FACE) => out.push(pixel_to_index(x, 0, down_face)),
+            (POS_Z_FACE,POS_Y_FACE) => out.push(pixel_to_index(x, 0, down_face)),
+            (NEG_Z_FACE,POS_Y_FACE) => out.push(pixel_to_index(MAX_COORD - x, MAX_COORD, down_face)),
+            _ => panic!("Invalid case")
+        }
+    }else{
+        out.push(pixel_to_index(x, y+1, current_face));
+    }
+
+    out.into_boxed_slice()
+}
+
+#[derive(Debug, Clone)]
+struct CategorizedElevation{
+    position: Vector3<f32>,
+    elevation: f32,
+    province_id: Option<usize>,
+    is_coastal: bool,
+}
 
 struct Client {
     socket: UdpSocket,
@@ -87,12 +295,12 @@ fn add_plot(ui: &mut Ui, values: &[Value], heading: &str, num_samples: usize, st
     let line = egui::plot::Line::new(Values::from_values_iter(values.chunks(chunk_size).map(
         |values| {
             let mut sum = 0.0;
-            let mut month_sum = 0.0;
+            let mut day_sum = 0.0;
             for value in values {
                 sum += value.y;
-                month_sum += value.x;
+                day_sum += value.x;
             }
-            Value::new(month_sum / values.len() as f64, sum / values.len() as f64)
+            Value::new(day_sum / values.len() as f64, sum / values.len() as f64)
         },
     )));
     ui.add(Label::new(heading).heading());
@@ -117,7 +325,7 @@ impl Histories{
         for (province_index, province) in world.provinces.iter().enumerate(){
             if print_progress && self.last_time_check.elapsed().as_secs_f64() > 1.0{
                 self.last_time_check = std::time::Instant::now();
-                println!("Month: {month}");
+                println!("Day: {month}");
             }
             if self.population[province_index].len() > 10000{
                 self.population[province_index].pop_back();
@@ -142,8 +350,6 @@ impl Histories{
 
 fn main() {
 
-    println!("{:}", Perspective3::new(1.0, 90f64.to_radians(), 1000.0, 20000000.0).to_homogeneous());
-
     let mut frametime: std::time::Instant = std::time::Instant::now();
     let mut time_since_last_frame: f64 = 0.0; //seconds
 
@@ -151,8 +357,6 @@ fn main() {
     let mut frametimes_start = 0;
     let mut last_tick = std::time::Instant::now();
 
-    let path = env::current_dir().unwrap();
-    println!("The current directory is {}", path.display());
     let mut ctx = egui::CtxRef::default();
 
     let event_loop = EventLoop::new();
@@ -178,95 +382,305 @@ fn main() {
         elevation_cubemap.get_image(&vulkan_data)
     };
     dbg!(elevations.len());
+    
 
-    const CUBEMAP_WIDTH: usize = CubemapRender::CUBEMAP_WIDTH as usize;
-    const CORRECTION_MATRIX: Matrix3<f64> = Matrix3::new(1.0000000,  0.0000000,  0.0000000,
-        0.0000000,  0.0000000, 1.0000000,
-        0.0000000,  -1.0000000,  0.0000000);
-    let mut province_points = vec![];
-    let elevation_vertices: Vec<_> = planet_mesh.vertices.iter().map(|vertex| (vertex.position, vertex.elevation)).collect();
-    for (index, &elevation) in elevations.iter().enumerate(){
-        let x = (index % (CUBEMAP_WIDTH * CUBEMAP_WIDTH)) % CUBEMAP_WIDTH;
-        let y = (index % (CUBEMAP_WIDTH * CUBEMAP_WIDTH)) / CUBEMAP_WIDTH;
-        let face = index / (CUBEMAP_WIDTH * CUBEMAP_WIDTH);
+    
+    let rng = fastrand::Rng::new();
+    let mut elevations: Vec<_> = elevations.iter().enumerate().map(|(index, &elevation)| CategorizedElevation{
+        elevation,
+        province_id: if elevation > 0.0 {None} else {Some(0)},
+        position: index_to_coordinate(index), 
+        is_coastal: false,
+    }).collect();
 
-        let x = ((x as f64) /  CUBEMAP_WIDTH as f64) * 2.0 - 1.0;
-        let y = ((y as f64) /  CUBEMAP_WIDTH as f64) * 2.0 - 1.0;
+    println!("Starting to separate provinces");
+    // let mut provinces: Vec<_> = elevations.iter().filter_map(|cat_elevation| {
+    //     if cat_elevation.elevation > 0.0{
+    //         let mut set: HashSet<_, BuildNoHashHasher<usize>> = HashSet::with_hasher(BuildNoHashHasher::default());
+    //         set.insert(cat_elevation.province_id);
+    //         Some(set)   
+    //     }else{
+    //         None
+    //     }
+    // }).collect();
 
-        let normal;
-        match face{
-            0 => {
-                normal = Vector3::new(1.0, -y, -x);
+    // let mut last_time_check = Instant::now();
+    // loop{
+    //     let mut modified = false;
+    //     for index in 0..elevations.len(){
+    //         if elevations[index].elevation <= 0.0{
+    //             continue;
+    //         }
+    //         let neighbours = get_neighbour_pixels(index);
+    //         for &neighbour_index in neighbours.iter(){
+    //             if elevations[neighbour_index].province_id != elevations[index].province_id && elevations[neighbour_index].elevation > 0.0{
+                    
+    //                 let old_set_index = provinces.iter().position(|set| set.contains(&neighbour_index)).unwrap();
+
+    //                 if provinces[old_set_index].contains(&index){
+    //                     continue;   
+    //                 }
+    //                 let old_set = provinces.remove(old_set_index);
+    //                 // dbg!(&old_set);
+
+    //                 let set_to_union_with = provinces.iter_mut().find(|set| set.contains(&index)).unwrap();
+    //                 // dbg!(&set_to_union_with);
+    //                 *set_to_union_with = set_to_union_with.union(&old_set).map(|a| *a).collect();
+    //                 // dbg!(&set_to_union_with);
+    //                 modified = true;
+    //             }
+    //         }
+    //         if last_time_check.elapsed().as_secs_f64() > 1.0{
+    //             last_time_check = std::time::Instant::now();
+    //             println!("Index: {index}");
+    //         }
+    //         // dbg!(index);
+    //     }
+    //     // dbg!(&elevations);
+    //     if !modified{
+    //         break;
+    //     }
+    // }
+
+    let mut used_ids = HashSet::new();
+    used_ids.insert(0);
+    loop{
+        let current_id = rng.usize(1..);
+        assert_eq!(used_ids.contains(&current_id), false);
+        used_ids.insert(current_id);
+        let mut num_set = 0;
+        match elevations.iter().position(|a| a.province_id.is_none()){
+            Some(index) => {
+                let mut queue = VecDeque::new();
+                queue.push_back(index);
+                // elevations[index].province_id = Some(current_id);
+                while queue.len() > 0 && num_set < (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) / 10000{
+                    let n = queue.pop_front().unwrap();
+                    if elevations[n].province_id.is_none() && elevations[n].elevation > 0.0{
+                        elevations[n].province_id = Some(current_id);
+                        num_set +=1;
+                        queue.extend(get_neighbour_pixels(n).iter());
+                    }
+                }
+                // dbg!(&queue);
             },
-            1 => {
-                normal = Vector3::new(-1.0, -y, x);
-            },
-            2 => {
-                normal = Vector3::new(x, 1.0, y);
-            },
-            3 => {
-                normal = Vector3::new(x, -1.0, -y);
-            },
-            4 => {
-                normal = Vector3::new(x, -y, 1.0);
-            },
-            5 => {
-                normal = Vector3::new(-x, -y, -1.0);
-            },
-            _ => {
-                panic!("Too many faces in cubemap");
-            },
+            None => break,
         }
-
-        let secondary_correction_matrix: Matrix4<f64> = Matrix4::from(Rotation3::from_euler_angles(-90f64.to_radians(),0.0,0.0));
-        let normal = CORRECTION_MATRIX * normal.normalize();
-        let normal = secondary_correction_matrix.transform_point(&Point3::from(normal)).coords;
-        let normal = normal.component_mul(&Vector3::new(1.0,1.0,1.0));
-        let point = normal * World::RADIUS;
-        
-        if !elevation.is_nan() && elevation.abs() < 100.0 && fastrand::f64() > 0.99{
-            province_points.push((point.cast(), elevation));
-        }
-        if fastrand::f64() > 0.9999{
-            let mesh_elevation = interoplate_on_mesh(point.cast(), &elevation_vertices, &planet_mesh.indices);
-            println!("normal elevation: {elevation}");
-            println!("elevation according to mesh: {mesh_elevation}");
-            println!("inverse normal elevation according to mesh: {:}", interoplate_on_mesh((-normal * World::RADIUS).cast(), &elevation_vertices, &planet_mesh.indices));
-        }
-
-
     }
 
-    // for &elevation in &elevations{
-    //     if elevation != 0.0{
-    //         dbg!(elevation);
-    //     }
-    // }
+    println!("Finished separating provinces");
 
+    let mut bad_provinces = HashSet::new();
+    for id in used_ids{
+        let mut num_pixels = 0;
+        let province = elevations.iter().enumerate().filter_map(|(i, a)| if a.province_id.unwrap() == id{
+            num_pixels += 1;
+            Some(i)
+        }else{
+            None
+        });
+        let neighbours: Box<[_]> = province.map(|a| get_neighbour_pixels(a)).collect();
+        let num_neighbours = neighbours.into_iter().map(|a|a.into_iter()).flatten().filter(|&&a| elevations[a].province_id.unwrap() != id).count();
+        // let num_pixels = province.count();
+        let neighbour_ratio = (num_neighbours as f64) / (num_pixels as f64);
+        // dbg!(neighbour_ratio);
+        if !(num_pixels > 5 || neighbour_ratio < 10.0){
+            bad_provinces.insert(id);
+        }
+        
+    }
+
+    let mut found_borders = HashSet::new();
+    for i in 0..elevations.len(){
+        if elevations[i].elevation < 0.0 || bad_provinces.contains(&elevations[i].province_id.unwrap()){
+            continue;
+        }
+        let neighbours = get_neighbour_pixels(i);
+        // if neighbours.iter().all(|&neighbour_index|!elevations[neighbour_index].is_border){
+        //     continue;
+        // }
+
+        
+        for &neighbour in neighbours.iter(){
+            if elevations[neighbour].elevation > 0.0 && elevations[i].province_id != elevations[neighbour].province_id{
+                found_borders.insert(if i > neighbour{
+                    (i, neighbour)
+                }else{
+                    (neighbour, i)
+                });
+            }
+            
+        }
+
+        if neighbours.iter().any(|&neighbour_index| {
+            elevations[neighbour_index].elevation < 0.0
+        }){
+            elevations[i].is_coastal = true;
+        }
+
+        // if neighbours.iter().any(|&neighbour_index| {
+        //     elevations[neighbour_index].province_id != elevations[i].province_id
+        // }){
+        //     elevations[i].is_border = true;
+        // }
+        // if neighbours.iter().any(|&neighbour_index| {
+        //     elevations[neighbour_index].elevation < 0.0
+        // }){
+        //     elevations[i].is_coastal = true;
+        //     elevations[i].is_border = true;
+        // }
+    }
+
+    let mut province_map = HashMap::new();
+    let mut province_points = vec![];
+    let perlin = noise::Perlin::new();
+
+    for &pair in found_borders.iter(){
+        let midpoint = elevations[pair.0].position.lerp(&elevations[pair.1].position, 0.5);
+        let noise_point = midpoint.normalize().cast() * 30.0;
+        let noise_shift = if true || elevations[pair.0].is_coastal || elevations[pair.1].is_coastal{
+            Vector3::zeros()
+        }else{
+            Vector3::new(
+                province_shift(&perlin, &noise_point, 0.0),
+                province_shift(&perlin, &noise_point, 100.0),
+                province_shift(&perlin, &noise_point, 1000.0),
+            )
+        }; 
+        let shifted_position: Vector3<f32> = ((midpoint.normalize().cast() + noise_shift).normalize() * World::RADIUS).cast() * 1.001;
+
+        //point a
+        let entry = province_map.entry(elevations[pair.0].province_id.unwrap()).or_insert(vec![]);
+        entry.push(province_points.len());
+        // province_points.push(shifted_position);
+
+        //point b
+        let entry = province_map.entry(elevations[pair.1].province_id.unwrap()).or_insert(vec![]);
+        entry.push(province_points.len());
+        province_points.push(shifted_position);
+    }
+
+
+
+
+    // let mut province_map = HashMap::new();
     // let mut province_points = vec![];
-    // let rng = fastrand::Rng::new();
-    
-    // let elevation_vertices: Vec<_> = planet_mesh.vertices.iter().map(|vertex| (vertex.position, vertex.elevation)).collect();
-    // //*very* naive random points on a sphere
-    // while province_points.len() < 20{
-    //     let point = Vector3::new(rng.f32() * 2.0 - 1.0,rng.f32() * 2.0 - 1.0,rng.f32() * 2.0 - 1.0,).normalize() * World::RADIUS as f32;
-    //     let elevation = interoplate_on_mesh(point, &elevation_vertices, &planet_mesh.indices);
-
-    //     if elevation.abs() < 100.0{
-    //         province_points.push((point, elevation))
+    // // let mut current_index = 0;
+    // let perlin = noise::Perlin::new();
+    // for categorized_elevation in elevations.iter(){
+    //     if categorized_elevation.province_id == Some(0) || !categorized_elevation.is_border{
+    //         continue;
     //     }
 
+    //     // let closest_distance = province_points.iter().map(|a:&Vector3<f32>| (a - categorized_elevation.position).magnitude()).min_by_key(|a|FloatOrd(*a)).unwrap_or(f32::INFINITY);
+    //     // if closest_distance < (World::RADIUS * 0.01) as f32 {
+    //     //     continue;
+    //     // }
+    //     // let (closest_index, closest_distance) = province_points.iter().map(|a:&Vector3<f32>| (a - categorized_elevation.position).magnitude()).enumerate().min_by_key(|(index,a)|FloatOrd(*a)).unwrap_or((usize::MAX, f32::INFINITY));
+    //     // let close_neighbour_index = if closest_distance < (World::RADIUS * 0.1) as f32{
+    //     //     Some(closest_index)
+    //     // }else{
+    //     //     None
+    //     // };
+    //     // let mut replacement_point = None;
+    //     // for neighbour in get_neighbour_pixels(index).iter(){
+    //     //     if elevations[*neighbour].province_id != categorized_elevation.province_id && province_map.values().enumerate().any(|(map_index)|a.contains(neighbour)){
+    //     //         replacement_point = Some(*neighbour);
+    //     //     }
+    //     // }
+    //     // dbg!(categorized_elevation);
+    //     // let entry = province_map.entry(categorized_elevation.province_id.unwrap()).or_insert(vec![]);
+    //     // entry.push(province_points.len());
+    //     // // current_index += 1;
+    //     // let noise_point = categorized_elevation.position.normalize().cast() * 30.0;
+    //     // let noise_shift = if categorized_elevation.is_coastal{
+    //     //     Vector3::zeros()
+    //     // }else{
+    //     //     Vector3::new(
+    //     //         province_shift(&perlin, &noise_point, 0.0),
+    //     //         province_shift(&perlin, &noise_point, 100.0),
+    //     //         province_shift(&perlin, &noise_point, 1000.0),
+    //     //     )
+    //     // }; 
+    //     // let shifted_position: Vector3<f32> = ((categorized_elevation.position.normalize().cast() + noise_shift).normalize() * World::RADIUS).cast();
+    //     // province_points.push(shifted_position.cast() * 1.0005);        
+
+
+    //     let closest_points: Box<[_]> = elevations.iter().map(|a|a.position).filter(|&a| (a - categorized_elevation.position).magnitude() < (World::RADIUS * 0.01) as f32).collect();
+
+    //     let average_position = closest_points.iter().sum::<Vector3<f32>>() / closest_points.len() as f32;
+    //     let entry = province_map.entry(categorized_elevation.province_id.unwrap()).or_insert(vec![]);
+    //     entry.push(province_points.len());
+    //     // current_index += 1;
+    //     let noise_point = average_position.normalize().cast() * 30.0;
+    //     let noise_shift = if categorized_elevation.is_coastal{
+    //         Vector3::zeros()
+    //     }else{
+    //         Vector3::new(
+    //             province_shift(&perlin, &noise_point, 0.0),
+    //             province_shift(&perlin, &noise_point, 100.0),
+    //             province_shift(&perlin, &noise_point, 1000.0),
+    //         )
+    //     };
+    //     let shifted_position: Vector3<f32> = ((average_position.normalize().cast() + noise_shift).normalize() * World::RADIUS).cast();
+    //     province_points.push( shifted_position.cast() * 1.0005);        
+
+
+        // match close_neighbour_index{
+        //     Some(close_neighbour_index) => {
+        //         // println!("Hello");
+        //         entry.push(close_neighbour_index);
+        //     },
+        //     None => {
+        //         entry.push(province_points.len());
+        //         province_points.push(categorized_elevation.position * 1.01);        
+        //     },
+        // }
     // }
+    // let province_points: Box<[_]> = province_map.values().flatten().map(|&a|elevations[a].position * 1.01).collect();
+
+    // for province in province_map.values_mut(){
+    //     let &last = province.last().unwrap();
+    //     let &first = province.first().unwrap();
+    //     province.push(last);
+    //     province.push(first);
+    // }
+
+    // dbg!(province_map.values().nth(1));
+
+    // let province_points: Box<[_]> = elevations.iter().map(|a|a.position).collect();
+
+    let province_indices: Box<[_]> = province_map.into_values().collect();
+    dbg!(province_indices.len());
+    // dbg!(&province_indices);
+
+    // for province in provinces{
+    //     let mut indices = vec![];
+    //     for index in province{
+    //         indices.push(province_points.len());
+    //         province_points.push(elevations[index].position)
+    //     }
+    //     province_indices.push(indices);
+    // }
+
+    // let mut province_map = HashMap::new();
+    // for categorized_elevation in &elevations{
+    //     let entry = province_map.entry(categorized_elevation.province_id).or_insert(vec![]);
+    //     entry.push(province_points.len());
+    //     province_points.push(categorized_elevation.position);
+    // }
+    // let province_indices: Box<[_]> = province_map.values().map(|vec| vec.as_slice()).collect();
 
     dbg!(province_points.len());
-    assert!(province_points.len() >= 3);
 
-    if province_points.len() % 2 != 0{
-        province_points.pop();
-    }
-
-    let world = World::new(&province_points, &planet_mesh);
-
+    // let test_points =  vec![
+    //     Vector3::new(1.0,-0.11,0.0).normalize() * World::RADIUS as f32,
+    //     Vector3::new(1.0,0.0,0.12).normalize() * World::RADIUS as f32,
+    //     Vector3::new(1.0,0.0,-0.13).normalize() * World::RADIUS as f32,
+    //     Vector3::new(1.0,0.14,0.0).normalize() * World::RADIUS as f32,
+    //     ];
+    // let world = World::new(&test_points, &[vec![0,1,2,3]]);
+    let world = World::new(&province_points, &province_indices);
 
     if let Some(line_data) = &mut vulkan_data.line_data{
         for point in &world.points{
@@ -274,8 +688,11 @@ fn main() {
         }
         for province in world.provinces.iter(){
             for chunk in province.point_indices.chunks(2){
+                if chunk.len() < 2{
+                    continue;
+                }
                 let first_point = chunk[0];
-                let second_point = chunk[1];
+                let second_point = chunk[1];    
                 line_data.connect_points(first_point, second_point);
             }
         }
@@ -316,15 +733,15 @@ fn main() {
 
     let last_time_check = std::time::Instant::now();
     //Do some simulation to see if state stabilizes
-    let months = 12 * 100;
+    let days = 12 * 100;
     let mut histories = Histories{
-        population: vec![VecDeque::with_capacity(months); game.world.provinces.len()].into_boxed_slice(),
-        prices: vec![vec![VecDeque::with_capacity(months); Good::VARIANT_COUNT].into_boxed_slice(); game.world.provinces.len()].into_boxed_slice(),
+        population: vec![VecDeque::with_capacity(days); game.world.provinces.len()].into_boxed_slice(),
+        prices: vec![vec![VecDeque::with_capacity(days); Good::VARIANT_COUNT].into_boxed_slice(); game.world.provinces.len()].into_boxed_slice(),
         last_time_check,
     };
-    for month in 0..months {
-        histories.add_new_tick(&game.world, month, true);
-        game.world.process(1.0 / 12.0);
+    for day in 0..days {
+        histories.add_new_tick(&game.world, day, true);
+        game.world.process(1.0 / 365.0);
     }
 
     client
@@ -338,7 +755,7 @@ fn main() {
         .unwrap();
     client.state = ClientState::ConnectionAwaiting;
 
-    let mut current_month = months;
+    let mut current_day = days;
     let mut texture_version = 0;
 
     let mut population_graph_window_open = false;
@@ -362,7 +779,6 @@ fn main() {
         // });
 
         TopBottomPanel::top("get_unique_id()").show(&ctx, |ui| {
-            ui.label("hello world!");
             ui.horizontal(|ui| {
                 ui.checkbox(&mut population_graph_window_open, "Population Plot");
                 ui.checkbox(&mut pop_table_open, "Pops Table");
@@ -372,26 +788,38 @@ fn main() {
 
         if population_graph_window_open {
             Window::new("Population Plot").show(&ctx, |ui| {
-                ui.label("hello!");
-                let values = histories.population[0].as_slices();
-                add_plot(ui, &[values.0, values.1].concat(), "Total Population", 1000, 0);
+                match game.selected_province{
+                    Some(selected_province) => {
+                        let values = histories.population[selected_province].as_slices();
+                        add_plot(ui, &[values.0, values.1].concat(), "Total Population", 1000, 0);        
+                    },
+                    None => {},
+                }
             });
         }
         if price_graph_window_open {
             Window::new("Price Plots").show(&ctx, |ui| {
                 ScrollArea::vertical().show(ui, |ui| {
-                    for good_index in 0..Good::VARIANT_COUNT {
-                        let good = Good::try_from(good_index).unwrap();
+                    match game.selected_province{
+                        Some(selected_province) => {
+                            for good_index in 0..Good::VARIANT_COUNT {
+                                let good = Good::try_from(good_index).unwrap();
+        
+                                let values = histories.prices[selected_province][good_index].as_slices();
+                                add_plot(
+                                    ui,
+                                    &[values.0, values.1].concat(),
+                                    &format!("{:?} Price", good),
+                                    1000,
+                                    0,
+                                );
+                            }
+                        },
+                        None => {
 
-                        let values = histories.prices[0][good_index].as_slices();
-                        add_plot(
-                            ui,
-                            &[values.0, values.1].concat(),
-                            &format!("{:?} Price", good),
-                            1000,
-                            0,
-                        );
+                        },
                     }
+
                 });
             });
         }
@@ -480,8 +908,8 @@ fn main() {
                         WindowEvent::MouseWheel { delta, .. } => match delta {
                             MouseScrollDelta::LineDelta(_, vertical_lines) => {
                                 game.inputs.zoom = (game.inputs.zoom
-                                    * 1.1f64.powf(vertical_lines as f64))
-                                .max(1.0);
+                                    * 1.1f64.powf(-vertical_lines as f64))
+                                .clamp(0.00001, 2.0);
                             }
                             _ => {}
                         },
@@ -569,8 +997,8 @@ fn main() {
 
                     window.set_title(format!("Frametimes: {:}", average_frametime).as_str());
 
-                    histories.add_new_tick(&game.world, current_month, false);
-                    game.process(1.0 / 12.0);
+                    histories.add_new_tick(&game.world, current_day, false);
+                    game.process(1.0 / 365.0, &vulkan_data.get_projection(game.inputs.zoom));
 
                     if let Some(selected_province) = game.selected_province{
                         let province_indices = &game.world.provinces[selected_province].point_indices;
@@ -579,9 +1007,9 @@ fn main() {
                         }
                     }
 
-                    current_month += 1;
+                    current_day += 1;
 
-                    update_renderer(&game, &mut vulkan_data, current_month as f32 / 12.0);
+                    update_renderer(&game, &mut vulkan_data, current_day as f32 / 365.0);
                     vulkan_data.transfer_data_to_gpu();
 
                     let _draw_frame_result = vulkan_data.draw_frame();

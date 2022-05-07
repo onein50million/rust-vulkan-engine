@@ -77,7 +77,7 @@ pub mod client {
     use crate::support::Inputs;
     use crate::world::World;
     use float_ord::FloatOrd;
-    use nalgebra::{Matrix4, Translation3, UnitQuaternion, Vector2, Vector3, Vector4};
+    use nalgebra::{Matrix4, Translation3, UnitQuaternion, Vector2, Vector3, Vector4, Perspective3, Point3};
 
     pub struct AnimationHandler {
         pub index: usize,
@@ -185,7 +185,7 @@ pub mod client {
                 selected_province: None,
             }
         }
-        pub fn process(&mut self, delta_time: f64) {
+        pub fn process(&mut self, delta_time: f64, projection: &Perspective3<f64>) {
             self.world.process(delta_time);
 
             let delta_mouse = self.last_mouse_position - self.mouse_position;
@@ -198,8 +198,10 @@ pub mod client {
 
             if self.inputs.left_click{
                 self.selected_province = {
-                    let direction = self.camera.get_view_matrix().try_inverse().unwrap() * Vector4::new(self.mouse_position.x, self.mouse_position.y, 1.0,0.0);
-                    match World::intersect_planet(self.camera.get_position(), direction.xyz()){
+                    //TODO: Figure out why I have to make these negative. Probably something to do with the inconsistent coordinate system
+                    let direction = self.camera.get_view_matrix().try_inverse().unwrap().transform_vector(&projection.unproject_point(&Point3::new(-self.mouse_position.x, -self.mouse_position.y, 1.0)).coords);
+                    
+                    match World::intersect_planet(self.camera.get_position(), -direction.xyz()){
                         Some(point) => {
                             Some(self.world.provinces.iter().enumerate().min_by_key(|(_, province)|{FloatOrd((point - province.position).magnitude())}).expect("Failed to find closest provice to click").0)
                         }

@@ -290,7 +290,8 @@ void main() {
         normal = normalize(TBN * normal);
         normal = inverse(mat3(pushConstant.model)) * normal;//not sure why I need this
     }
-    vec3 sun_direction = normalize(vec3(sin(ubos.time.x), 0.0, cos(ubos.time.x)));
+    float day_ratio = ubos.time.x * 365;
+    vec3 sun_direction = normalize(vec3(sin(day_ratio), 0.0, cos(day_ratio)));
 
     if ((pushConstant.bitfield&IS_HIGHLIGHTED) > 0){
         outColor = vec4(0.9,0.1,0.1,1.0);

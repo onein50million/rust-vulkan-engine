@@ -279,6 +279,7 @@ pub fn get_planet(radius: f32) -> MeshOutput {
         if raw_vertex.sample_count > 0 {
             vertex.elevation = (raw_vertex.sum / raw_vertex.sample_count as f64) as f32;
         }
+        // vertex.elevation = 1000.0;
         // vertex.position *= radius;
     }
 
@@ -350,44 +351,6 @@ pub fn get_planet(radius: f32) -> MeshOutput {
         println!("Current try: {:}", current_try);
         let mut wave_function_collapse = ElevationWaveFunctionCollapse::new(&vertex_data);
     
-        // wave_function_collapse.collapse_cell(0);
-
-
-        let mut cells_to_collapse = vec![0];
-        // let mut count = wave_function_collapse.cells.len()/32;
-        // let mut count = 0;
-        // // let mut count = usize::MAX;
-        // let mut visited_cells = HashSet::new();
-        // dbg!(count);
-        // while count > 0{
-        //     // if fastrand::f64() > 0.9{
-        //     //     wave_function_collapse.collapse_cell_to_value(i,1).expect("failed to collapse");
-        //     // }
-        //     let mut new_cells_to_collapse: Vec<usize> = vec![];
-        //     let mut cells_collapsed = 0u32; 
-        //     for cell_index in &cells_to_collapse{
-        //         if !visited_cells.contains(cell_index){
-        //             // println!("Collapsing {cell_index}");
-        //             if fastrand::f32() > 0.25{
-        //                 wave_function_collapse.collapse_cell_to_value(*cell_index,-2).expect("failed to collapse");
-        //             }
-        //             visited_cells.insert(*cell_index);
-        //             new_cells_to_collapse.extend(wave_function_collapse.cells[*cell_index].neighbours.iter());
-        //             cells_collapsed += 1;
-        //             count -= 1;
-        //             if count == 0{
-        //                 break;
-        //             }    
-        //         }
-        //     }
-        //     if cells_collapsed == 0{
-        //         break
-        //     }else{
-        //         cells_to_collapse = new_cells_to_collapse;
-        //     }
-
-        // }
-
         let mut num_collapses = 0;
         loop {
 

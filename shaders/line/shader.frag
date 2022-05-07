@@ -10,4 +10,5 @@ void main() {
     //     discard;
     // }
     outColor = fragColor;
+    // outColor.a = pow(outColor.a, 32);
 }
