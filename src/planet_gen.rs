@@ -5,7 +5,7 @@ use genmesh::generators::{IcoSphere, IndexedPolygon, SharedVertex};
 use nalgebra::{Vector2, Vector3, Vector4};
 use std::{
     collections::{HashMap, HashSet},
-    fs::read_dir, ops::{Add, Mul}, fmt::Debug, time::Instant,
+    fs::read_dir, ops::{Add, Mul}, fmt::Debug,
 };
 
 pub struct MeshOutput {

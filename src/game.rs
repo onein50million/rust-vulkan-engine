@@ -77,7 +77,7 @@ pub mod client {
     use crate::support::Inputs;
     use crate::world::World;
     use float_ord::FloatOrd;
-    use nalgebra::{Matrix4, Translation3, UnitQuaternion, Vector2, Vector3, Vector4, Perspective3, Point3};
+    use nalgebra::{Matrix4, Translation3, UnitQuaternion, Vector2, Vector3, Perspective3, Point3};
 
     pub struct AnimationHandler {
         pub index: usize,

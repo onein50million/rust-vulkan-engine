@@ -3,7 +3,7 @@ use crate::support::*;
 use erupt::extensions;
 use erupt::vk::{DescriptorBufferInfoBuilder, DescriptorImageInfoBuilder};
 
-use erupt::vk1_1;
+
 use erupt::{vk, DeviceLoader, EntryLoader, ExtendableFromConst, InstanceLoader, SmallVec};
 
 use gltf::animation::util::{ReadOutputs, Rotations};
@@ -14,7 +14,7 @@ use nalgebra::{
     Matrix4, Point3, Quaternion, Scale3, Translation3, UnitQuaternion, Vector2, Vector3, Vector4,
 };
 
-use std::collections::HashMap;
+
 use std::collections::HashSet;
 use std::convert::TryInto;
 use std::default::Default;
@@ -27,7 +27,7 @@ use std::mem::size_of;
 use std::ops::Index;
 use std::ops::IndexMut;
 use std::path::PathBuf;
-use std::ptr;
+
 use std::sync::Arc;
 
 use winit::window::Window;

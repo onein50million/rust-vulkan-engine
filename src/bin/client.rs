@@ -15,12 +15,12 @@ use egui_winit::winit::event::{ElementState, Event, VirtualKeyCode, WindowEvent}
 use egui_winit::winit::event_loop::{ControlFlow, EventLoop};
 use egui_winit::winit::window::WindowBuilder;
 
-use float_ord::FloatOrd;
+
 use nalgebra::Matrix3;
-use nalgebra::Perspective3;
+
 use nalgebra::Point3;
 use nalgebra::{Matrix4, Rotation3, Translation3, Vector2, Vector3};
-use nohash_hasher::BuildNoHashHasher;
+
 use noise::NoiseFn;
 use rust_vulkan_engine::game::client::Game;
 
@@ -31,7 +31,7 @@ use rust_vulkan_engine::world::*;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
-use std::env;
+
 use std::net::UdpSocket;
 use std::time::Instant;
 
