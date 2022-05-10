@@ -228,36 +228,6 @@ impl Display for Province {
 }
 
 
-// fn project_point_on_plane(point: Vector3<f32>, origin: Vector3<f32>, normal: Vector3<f32>) -> Point3<f32>{
-//     let v = point - origin;
-//     let dist = v.dot(&normal);
-
-//     let isometry = Isometry3::look_at_rh(&Point3::from(origin), &Point3::from(origin + 100000.0*normal), &Vector3::new(0.0,-1.0, 0.0));
-//     // dbg!(point);
-//     isometry.transform_point(&Point3::from(point - dist * normal))
-    
-// }
-
-// fn project_point_on_plane(point: Vector3<f32>, origin: Vector3<f32>, normal: Vector3<f32>) -> Vector2<f32>{
-//     let v = point - origin;
-//     let dist = v.dot(&normal);
-
-//     let isometry = Isometry3::look_at_rh(&Point3::from(origin), &Point3::from(origin + 100000.0*normal), &Vector3::new(0.0,-1.0, 0.0));
-//     // dbg!(point);
-//     isometry.transform_point(&Point3::from(point - dist * normal)).coords.xy()
-    
-// }
-
-fn project_point_on_plane(point: Vector3<f32>, origin: Vector3<f32>, normal: Vector3<f32>) -> Vector2<f32>{
-    let v = point - origin;
-    let dist = v.dot(&normal);
-
-    let isometry = Isometry3::look_at_rh(&Point3::from(origin), &Point3::from(origin + 100000.0*normal), &Vector3::new(0.0,-1.0, 0.0));
-    // dbg!(point);
-    isometry.transform_point(&Point3::from(point - dist * normal)).coords.xy()
-    
-}
-
 #[derive(Debug)]
 pub struct World {
     pub points: Vec<Vector3<f32>>,
@@ -312,30 +282,6 @@ impl World {
 
                 FloatOrd(a1).cmp(&FloatOrd(a2))
             });
-
-            // let right_vector = Vector2::new(1.0, 0.0);
-            // sorted_indices.sort_by_key(|&index|{
-            //     let projected_point = project_point_on_plane(vertices[index], province_origin, normal);
-            //     FloatOrd((-projected_point).angle(&right_vector))
-            // });
-
-            // let reference_vector = normal.cross(&Vector3::new(0.0,-1.0,0.0));
-            // sorted_indices.sort_by_key(|&index| {
-            //     let vector = province_origin - vertices[index];
-            //     FloatOrd(vector.angle(&reference_vector))
-            // });
-
-            // let lowermost = Vector3::new(-100000.0, 0.0, 0.0) - province_indices.iter().map(|&index|{
-            //     project_point_on_plane(vertices[index], province_origin, normal)
-            // }).max_by_key(|a|FloatOrd(a.y)).unwrap().coords;
-            // sorted_indices.sort_by_key(|&index|{
-            //     let point = vertices[index];
-            //     let projected_point = project_point_on_plane(point, province_origin, normal);
-            //     let vector = Vector3::new(-100000.0, 0.0, 0.0) - projected_point.coords;
-
-            //     FloatOrd(vector.angle(&lowermost))
-            //     // FloatOrd(normal.dot(&(lowermost.cross(&vector))))
-            // });
 
             let mut out_indices = vec![];
             for index in sorted_indices.windows(2){

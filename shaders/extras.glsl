@@ -8,7 +8,7 @@ const int NUM_NOISE_OCTAVES = 5;
 
 
 const int NUM_RANDOM = 100;
-const int NUM_LIGHTS = 1;
+const int NUM_LIGHTS = 2;
 const int NUM_MODELS = 1000;
 const int NUM_BONES_PER_BONESET = 256;
 const int NUM_BONE_SETS = 256;
@@ -37,7 +37,7 @@ layout(binding = 0, std140) uniform UniformBufferObject {
     mat4 proj;
     vec4 random[NUM_RANDOM];
     Light lights[NUM_LIGHTS];
-    uint player_index;
+    uint cubemap_index;
     uint num_lights;
     uint map_mode;
     float exposure;

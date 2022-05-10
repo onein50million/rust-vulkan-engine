@@ -1,6 +1,7 @@
 #version 450
-#include "extras.glsl"
+// #include "extras.glsl"
 #include "map.glsl"
+#include "planet/elevation.glsl"
 
 struct SampleSet{ //set of samples
     vec4 albedo;
@@ -34,6 +35,8 @@ layout(binding = 6) uniform samplerCube irradiance_map[NUM_MODELS];
 layout(binding = 7) uniform sampler2D brdf_lut;
 layout(binding = 8) uniform samplerCube environment_map[NUM_MODELS];
 layout(binding = 9) uniform usampler2D cpu_images[NUM_MODELS];
+layout(binding = 10) uniform samplerCube planet_normal;
+layout(binding = 11) uniform sampler3D image_3ds[NUM_MODELS];
 
 
 layout(location = 0) in vec3 fragPosition;
@@ -95,7 +98,19 @@ vec4 triplanar_sample(in sampler2D in_sampler, vec3 position, vec3 normal, float
     blend_weight /= dot(blend_weight, vec3(1.0));
 
     return color_x * blend_weight.x + color_y * blend_weight.y + color_z * blend_weight.z;
+}
 
+//3d sampler
+vec4 triplanar_sample(in sampler3D in_sampler, vec3 position, vec3 normal, vec3 scale, vec4 offset, float w){
+    vec4 color_x = texture(in_sampler, vec3(position.zy + offset.zy, w + offset.w) * scale);
+    vec4 color_y = texture(in_sampler, vec3(position.xz + offset.xz, w + offset.w) * scale);
+    vec4 color_z = texture(in_sampler, vec3(position.xy + offset.xy, w + offset.w) * scale);
+
+    float blend_sharpness = 50.0;
+    vec3 blend_weight = pow(abs(normal), vec3(blend_sharpness));
+    blend_weight /= dot(blend_weight, vec3(1.0));
+
+    return color_x * blend_weight.x + color_y * blend_weight.y + color_z * blend_weight.z;
 }
 
 vec3 triplanar_normal(in sampler2D in_sampler, vec3 position,vec3 world_normal,vec3 object_normal, float scale,vec3 offset){
@@ -129,6 +144,9 @@ SampleSet load_sample_set(int texture_offset, vec3 offset, float scale_modifier)
     return SampleSet(albedo,roughness,metalness,ambient_occlusion,normal);
 }
 
+vec3 rgb(float r, float g, float b){
+    return vec3(r/255.0,g/255.0,b/255.0);
+}
 
 void main() {
 
@@ -151,123 +169,173 @@ void main() {
     ubos.player_position_y,
     ubos.player_position_z
     );
+    float day_ratio = ubos.time.x * 36.5;
+    vec3 sun_direction = normalize(vec3(sin(day_ratio), 0.0, cos(day_ratio)));
 
     if ((pushConstant.bitfield&IS_CUBEMAP) > 0) {
         // vec3 view_direction = (inverse(ubos.view) * vec4(gl_FragCoord.xy,1.0,0.0)).xyz;
         vec3 scren_space_direction = vec3(fragTexCoord*2.0 - 1.0,1.0);
         vec3 view_direction = CORRECTION_MATRIX * normalize((inverse(ubos.view) * vec4(unproject_point(scren_space_direction),0.0)).xyz);
 
-        outColor = vec4(texture(cubemaps[pushConstant.texture_index], view_direction).rgb, 1.0);
+        outColor = vec4(texture(cubemaps[ubos.cubemap_index], view_direction).rgb, 1.0);
         // outColor = vec4(view_direction, 1.0);
         return;
     }
     else if ((pushConstant.bitfield&IS_GLOBE) > 0){ //triplanar mapping
 
-        SampleSet deep_water_set = load_sample_set(DEEP_WATER_OFFSET,vec3(0.0),1.0);
-        SampleSet shallow_water_set = load_sample_set(SHALLOW_WATER_OFFSET,vec3(0.0),1.0);
-        SampleSet foliage_set = load_sample_set(FOLIAGE_OFFSET,vec3(0.0),1.0);
-        SampleSet desert_set = load_sample_set(DESERT_OFFSET,vec3(0.0),1.0);
-        SampleSet mountain_set = load_sample_set(MOUNTAIN_OFFSET,vec3(0.0),10.0);
-        SampleSet snow_set = load_sample_set(SNOW_OFFSET,vec3(0.0),1.0);
-        SampleSet data_set = load_sample_set(DATA_OFFSET,vec3(0.0),1.0);
+        if(ubos.map_mode == 0){
 
-        float deep_water_weight = 0.0;
-        float shallow_water_weight = 0.0;
-        float foliage_weight = 0.0;
-        float desert_weight = 0.0;
-        float mountain_weight = 0.0;
-        float snow_weight = 0.0;
+            SampleSet deep_water_set = load_sample_set(DEEP_WATER_OFFSET,vec3(0.0),1.0);
+            SampleSet shallow_water_set = load_sample_set(SHALLOW_WATER_OFFSET,vec3(0.0),1.0);
+            SampleSet foliage_set = load_sample_set(FOLIAGE_OFFSET,vec3(0.0),1.0);
+            SampleSet desert_set = load_sample_set(DESERT_OFFSET,vec3(0.0),1.0);
+            SampleSet mountain_set = load_sample_set(MOUNTAIN_OFFSET,vec3(0.0),10.0);
+            SampleSet snow_set = load_sample_set(SNOW_OFFSET,vec3(0.0),1.0);
+            SampleSet data_set = load_sample_set(DATA_OFFSET,vec3(0.0),1.0);
 
-
-        float latitude_factor = clamp(pow((abs(asin(normalize(fragPosition).y)) / PI) + 0.6, 64.0), 0.0, 1.0);
-        float aridity = clamp(pow((1.0 - abs(asin(normalize(fragPosition).y)) / PI) + 0.01, 32.0),0.0, 1.0);
-        float temperature_factor = (data_set.albedo.r - latitude_factor)*2.0 - 1.0 + 0.5;
-        // float shifted_elevation = fragElevation + (fbm(normalize(fragPosition)*10.0) * 2.0 - 1.0 )* 5000.0;
-        float shifted_elevation = fragElevation;
-        float snow_level = 5000.0 + temperature_factor * 3000.0;
-        // outColor = vec4(vec3(shifted_elevation),1.0);
-        // return;
+            float deep_water_weight = 0.0;
+            float shallow_water_weight = 0.0;
+            float foliage_weight = 0.0;
+            float desert_weight = 0.0;
+            float mountain_weight = 0.0;
+            float snow_weight = 0.0;
 
 
-        if (shifted_elevation < 0.0){
-            deep_water_weight = map_range_linear(shifted_elevation, 0.0, -3000.0, 0.0,1.0);
-            if (snow_level < -0.8){
-                snow_weight = 1.0 - deep_water_weight;
+            float latitude_factor = clamp(pow((abs(asin(normalize(fragPosition).y)) / PI) + 0.6, 64.0), 0.0, 1.0);
+            float aridity = clamp(pow((1.0 - abs(asin(normalize(fragPosition).y)) / PI) + 0.01, 32.0),0.0, 1.0);
+            float temperature_factor = (data_set.albedo.r - latitude_factor)*2.0 - 1.0 + 0.5;
+            float shifted_elevation = shift_elevation(normalize(fragPosition), fragElevation);
+            float snow_level = 5000.0 + temperature_factor * 3000.0;
+            // outColor = vec4(vec3(shifted_elevation),1.0);
+            // return;
+
+
+            if (shifted_elevation < 0.0){
+                deep_water_weight = map_range_linear(shifted_elevation, 0.0, -3000.0, 0.0,1.0);
+                if (snow_level < -0.8){
+                    snow_weight = 1.0 - deep_water_weight;
+                }
+                else{
+                    shallow_water_weight = 1.0 - deep_water_weight;
+                }
+            }else{
+            float grass_ratio = map_range_linear(shifted_elevation,0.0, 2500.0,1.0 , 0.2);
+            mountain_weight = map_range_linear(shifted_elevation,2500.0, 3000.0,0.0, 1.0);
+
+            snow_weight = map_range_linear(shifted_elevation,snow_level,snow_level + 2000.0,0.0, 100.0);
+            desert_weight = clamp(temperature_factor + aridity,0.0,1.0);
+            foliage_weight = clamp(grass_ratio - mountain_weight - desert_weight,0.0,1.0);
+
             }
-            else{
-                shallow_water_weight = 1.0 - deep_water_weight;
+
+            SampleSet sample_sets[] = {
+            deep_water_set,
+            shallow_water_set,
+            foliage_set,
+            desert_set,
+            mountain_set,
+            snow_set
+            };
+
+            float weights[] = {
+            deep_water_weight,
+            shallow_water_weight,
+            foliage_weight,
+            desert_weight,
+            mountain_weight,
+            snow_weight
+            };
+
+            float weight_sum = 0.0;
+            for (int i = 0; i < weights.length(); i++){
+                weight_sum += weights[i];
             }
-        }else{
-        float grass_ratio = map_range_linear(shifted_elevation,0.0, 2500.0,1.0 , 0.2);
-        mountain_weight = map_range_linear(shifted_elevation,2500.0, 3000.0,0.0, 1.0);
 
-        snow_weight = map_range_linear(shifted_elevation,snow_level,snow_level + 2000.0,0.0, 100.0);
-        desert_weight = clamp(temperature_factor + aridity,0.0,1.0);
-        foliage_weight = clamp(grass_ratio - mountain_weight - desert_weight,0.0,1.0);
+            if(weight_sum <= 0.1){
+                deep_water_weight = 0.0;
+                shallow_water_weight = 0.0;
+                foliage_weight = 0.0;
+                desert_weight = 0.0;
+                snow_weight = 0.0;
+                mountain_weight = 1.0;
+                weight_sum = 1.0;
+            }
+
+
+            float blends[] = {
+            clamp(deep_water_weight/weight_sum,0.0,1.0),
+            clamp(shallow_water_weight/weight_sum,0.0,1.0),
+            clamp(foliage_weight/weight_sum,0.0,1.0),
+            clamp(desert_weight/weight_sum,0.0,1.0),
+            clamp(mountain_weight/weight_sum,0.0,1.0),
+            clamp(snow_weight/weight_sum,0.0,1.0)
+            };
+
+
+            albedo = vec4(0.0);
+            roughness = 0.0;
+            metalness = 0.0;
+            ambient_occlusion = 0.0;
+            normal = vec3(0.0);
+
+            for (int i = 0; i < sample_sets.length(); i++){
+                albedo += sample_sets[i].albedo * blends[i];
+                roughness += sample_sets[i].roughness * blends[i];
+                metalness += sample_sets[i].metalness * blends[i];
+                ambient_occlusion += sample_sets[i].ambient_occlusion * blends[i];
+                normal += sample_sets[i].normal * blends[i];
+            }
+        }
+        else if(ubos.map_mode == 1){ //Paper/globe map
+            // albedo = vec4(1.0);
+            float shifted_elevation = shift_elevation(normalize(fragPosition), fragElevation);
+            SampleSet data_set = load_sample_set(DATA_OFFSET,vec3(0.0),1.0);
+            // float aridity = clamp(pow((abs(asin(normalize(fragPosition).y)) / PI) + 0.01, 32.0),0.0, 1.0);
+            // float latitude_factor = clamp(pow((abs(asin(normalize(fragPosition).y)) / PI) + 0.6, 64.0), 0.0, 1.0);
+            // float temperature_factor = (data_set.albedo.r - latitude_factor)*2.0 - 1.0 + 0.5;
+
+    
+            normal = texture(planet_normal,normalize(fragPosition)).xyz;
+            roughness = 0.95;
+            ambient_occlusion = 1.0;
+            metalness = 0.0;
+            vec3 mountain_color = vec3(0.187820772300678, 0.223227957316809, 0.371237680474149);
+            vec3 dark_stain_color = vec3(0.701101891932973, 0.479320183100827, 0.258182852921596);
+            vec3 light_stain_color = vec3(0.896269353374266, 0.814846572216101, 0.723055128921969);
+            vec3 ground_color = vec3(0.982250550333117, 0.921581856277295, 0.83879901174074);
+            vec3 grass_color = vec3(0.287440837726917,0.491020849847836,0.287440837726917);
+            vec3 tree_color = vec3(0.114435373826974, 0.165132194501668, 0.119538427988346);
+            // vec3 water_color = vec3(0.47353149614801, 0.590618840919337, 0.708375779891687);
+            vec3 water_color = vec3(0.00749903204322618, 0.168269400189691, 0.356400144145944);
+            float scale = 100.0/RADIUS;
+            // vec4 image_3d_color = triplanar_sample(image_3ds[0], fragPosition, normal, vec3(vec2(scale,-scale),1.0), vec4(0.0), ubos.time * 100.0);
+            // vec4 image_3d_color = vec4(0.0);
+
+            float latitude = asin(normalize(fragPosition).y);
+            float longitude = atan(normalize(fragPosition).z, normalize(fragPosition).x);
+
+            float normal_ratio = atan(normal.z, normal.x) / (2.0 * PI) + 0.5;
+            float sun_ratio = atan(sun_direction.z, sun_direction.x) / (2.0 * PI) + 0.5;
+            float light_ratio = sun_ratio - normal_ratio;
+
+            vec4 image_3d_color = texture(image_3ds[0], vec3(longitude*60.0, latitude*-60.0, light_ratio));
+            mountain_color = mix(mountain_color, image_3d_color.rgb, image_3d_color.a);
+            vec3 stain_color = mix(dark_stain_color, light_stain_color, fbm(normalize(fragPosition)*10.0));
+
+            float steepness = clamp(acos(dot(normal, normalize(fragPosition)))*10.0, 0.0, 1.0);
+            float tree_elevaton_factor = smoothstep(2600.0, 2500.0, shifted_elevation);
+            tree_elevaton_factor = mix(tree_elevaton_factor, 0.0, smoothstep(500.0,490.0, shifted_elevation));
+            float tree_factor = mix(0.0, 1.0 - steepness,tree_elevaton_factor);
+            vec3 map_color = mix(mountain_color, ground_color, smoothstep(3000.0, 2900.0, shifted_elevation));
+            map_color = mix(map_color, grass_color, smoothstep(1000.0, 990.0, shifted_elevation));
+            map_color = mix(map_color, tree_color, smoothstep(0.49, 0.51, tree_factor));
+            map_color = mix(map_color, water_color, smoothstep(0.0, -10.0, shifted_elevation));
+
+            
+            vec3 final_color = mix(stain_color, map_color, clamp(fbm(normalize(fragPosition)*10.0 + 100.0) + 0.8, 0.0, 1.0));
+            albedo = vec4(final_color,1.0);
 
         }
-
-        SampleSet sample_sets[] = {
-        deep_water_set,
-        shallow_water_set,
-        foliage_set,
-        desert_set,
-        mountain_set,
-        snow_set
-        };
-
-        float weights[] = {
-        deep_water_weight,
-        shallow_water_weight,
-        foliage_weight,
-        desert_weight,
-        mountain_weight,
-        snow_weight
-        };
-
-        float weight_sum = 0.0;
-        for (int i = 0; i < weights.length(); i++){
-            weight_sum += weights[i];
-        }
-
-        if(weight_sum <= 0.1){
-            deep_water_weight = 0.0;
-            shallow_water_weight = 0.0;
-            foliage_weight = 0.0;
-            desert_weight = 0.0;
-            snow_weight = 0.0;
-            mountain_weight = 1.0;
-            weight_sum = 1.0;
-        }
-
-
-        float blends[] = {
-        clamp(deep_water_weight/weight_sum,0.0,1.0),
-        clamp(shallow_water_weight/weight_sum,0.0,1.0),
-        clamp(foliage_weight/weight_sum,0.0,1.0),
-        clamp(desert_weight/weight_sum,0.0,1.0),
-        clamp(mountain_weight/weight_sum,0.0,1.0),
-        clamp(snow_weight/weight_sum,0.0,1.0)
-        };
-
-
-        albedo = vec4(0.0);
-        roughness = 0.0;
-        metalness = 0.0;
-        ambient_occlusion = 0.0;
-        normal = vec3(0.0);
-
-        for (int i = 0; i < sample_sets.length(); i++){
-            albedo += sample_sets[i].albedo * blends[i];
-            roughness += sample_sets[i].roughness * blends[i];
-            metalness += sample_sets[i].metalness * blends[i];
-            ambient_occlusion += sample_sets[i].ambient_occlusion * blends[i];
-            normal += sample_sets[i].normal * blends[i];
-        }
-
-        vec3 modified_player_position = player_position;
-        modified_player_position.y = (player_position.y - worldPosition.y)*0.05 + worldPosition.y;
-        shadow_amount = clamp(mix(1.0,0.0,pow(distance(modified_player_position, worldPosition)*2.0 + 0.1,5.0)),0.0,1.0);
     }
     else {
 
@@ -290,8 +358,6 @@ void main() {
         normal = normalize(TBN * normal);
         normal = inverse(mat3(pushConstant.model)) * normal;//not sure why I need this
     }
-    float day_ratio = ubos.time.x * 365;
-    vec3 sun_direction = normalize(vec3(sin(day_ratio), 0.0, cos(day_ratio)));
 
     if ((pushConstant.bitfield&IS_HIGHLIGHTED) > 0){
         outColor = vec4(0.9,0.1,0.1,1.0);
@@ -315,6 +381,9 @@ void main() {
 
     vec3 total_light = vec3(0.0);
     for (int i = 0; i< NUM_LIGHTS; i++){
+        if (ubos.lights[i].color.a < 0.5){
+            continue;
+        } 
         vec3 light_position = ubos.lights[i].position.xyz;
         // if (i == 0){
         //     light_position = camera_location;
@@ -351,15 +420,17 @@ void main() {
 
     }
 
-    vec3 irradiance = texture(irradiance_map[0], normal).rgb;
-    irradiance = vec3(1.0) - exp(-irradiance * ubos.exposure);
+    vec3 irradiance = texture(irradiance_map[ubos.cubemap_index], normal).rgb;
+    // irradiance = vec3(1.0) - exp(-irradiance * ubos.exposure);
+    irradiance = vec3(1.0) - exp(-irradiance * 1.0);
 
     vec3 irradiance_reflection = fresnelSchlick(max(dot(normal,view_direction),0.0), normal_incidence);
     vec3 irradiance_refraction = 1.0 - irradiance_reflection;
 
     vec3 reflection = reflect(-view_direction, normal);
-    vec3 prefilteredColor = textureLod(environment_map[0],reflection,int(roughness*9.0)).rgb; //TODO set max reflection lod smarterly
-    prefilteredColor = vec3(1.0) - exp(-prefilteredColor * ubos.exposure);
+    vec3 prefilteredColor = textureLod(environment_map[ubos.cubemap_index],reflection,int(roughness*9.0)).rgb; //TODO set max reflection lod smarterly
+    // prefilteredColor = vec3(1.0) - exp(-prefilteredColor * ubos.exposure);
+    prefilteredColor = vec3(1.0) - exp(-prefilteredColor * 1.0);
 
     vec2 brdf = texture(brdf_lut,vec2(max(dot(normal,view_direction),0.0),roughness)).xy;
     vec3 specular = prefilteredColor * (irradiance_reflection * brdf.x + brdf.y);

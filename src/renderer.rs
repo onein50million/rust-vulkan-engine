@@ -1,5 +1,6 @@
 use crate::cube::*;
 use crate::support::*;
+use crate::world::World;
 use erupt::extensions;
 use erupt::vk::{DescriptorBufferInfoBuilder, DescriptorImageInfoBuilder};
 
@@ -26,6 +27,7 @@ use std::marker::PhantomData;
 use std::mem::size_of;
 use std::ops::Index;
 use std::ops::IndexMut;
+use std::path::Path;
 use std::path::PathBuf;
 
 use std::sync::Arc;
@@ -406,7 +408,7 @@ impl CpuImage {
     }
 }
 
-struct CombinedImage {
+pub struct CombinedImage {
     image: vk::Image,
     image_view: vk::ImageView,
     sampler: vk::Sampler,
@@ -1501,7 +1503,7 @@ impl CubemapRender{
             .format(vk::Format::R32_SFLOAT)
             .tiling(vk::ImageTiling::OPTIMAL)
             .initial_layout(vk::ImageLayout::UNDEFINED)
-            .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC)
+            .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
             .samples(vk::SampleCountFlagBits::_1)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
@@ -1649,7 +1651,7 @@ impl CubemapRender{
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
-            .final_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+            .final_layout(vk::ImageLayout::GENERAL)
             .samples(vk::SampleCountFlagBits::_1)];
 
 
@@ -1852,7 +1854,6 @@ impl CubemapRender{
         let command_buffer = vulkan_data.begin_single_time_commands();
         let device = vulkan_data.device.as_ref().unwrap();
 
-
         let attachments = [self.image.image_view];
 
         let framebuffer_create_info = vk::FramebufferCreateInfoBuilder::new()
@@ -1927,8 +1928,75 @@ impl CubemapRender{
         }
         vulkan_data.end_single_time_commands(command_buffer);
     }
-    pub fn get_image(&self, vulkan_data: &VulkanData) -> Vec<f32>{
+
+    pub fn get_normal(&self, vulkan_data: &mut VulkanData) -> CombinedImage{
+        let normal_cubemap = vulkan_data.create_blank_cubemap(2048, 2048, 1, vk::Format::R32G32B32A32_SFLOAT, vk::ImageLayout::GENERAL);
+        let combined_descriptors = [
+            CombinedDescriptor {
+                descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                descriptor_count: 1,
+                descriptor_info: DescriptorInfoData::Image {
+                    image_view: self.image.image_view,
+                    sampler: Some(self.image.sampler),
+                    layout: vk::ImageLayout::GENERAL,
+                },
+            },
+            CombinedDescriptor {
+                descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+                descriptor_count: 1,
+                descriptor_info: DescriptorInfoData::Image {
+                    image_view: normal_cubemap.image_view,
+                    sampler: None,
+                    layout: vk::ImageLayout::GENERAL,
+                },
+            },
+        ];
+        println!("Running planet normal generation shader");
+        vulkan_data.run_arbitrary_compute_shader(
+            vulkan_data.load_shader("shaders/planet/normal.spv".parse().unwrap()),
+            1u32,
+            &combined_descriptors,
+            (
+                normal_cubemap.width / 8 + u32::from(normal_cubemap.width % 8 == 0),
+                normal_cubemap.height / 8 + u32::from(normal_cubemap.height % 8 == 0),
+                6,
+            ),
+        );
+
+        let target_barrier = vk::ImageMemoryBarrierBuilder::new()
+            .old_layout(vk::ImageLayout::GENERAL)
+            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(normal_cubemap.image)
+            .subresource_range(
+                *vk::ImageSubresourceRangeBuilder::new()
+                    .level_count(1)
+                    .layer_count(6)
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .base_mip_level(0)
+                    .base_array_layer(0),
+            );
+
+        let command_buffer = vulkan_data.begin_single_time_commands();
+        unsafe {
+            vulkan_data.device.as_ref().unwrap().cmd_pipeline_barrier(
+                command_buffer,
+                Some(vk::PipelineStageFlags::ALL_COMMANDS),
+                Some(vk::PipelineStageFlags::ALL_COMMANDS),
+                None,
+                &[],
+                &[],
+                &[target_barrier],
+            )
+        };
+
+        vulkan_data.end_single_time_commands(command_buffer);
+        normal_cubemap
+    }
+    pub fn into_image(&self, vulkan_data: &VulkanData) -> Vec<f32>{
         
+
         let float_count = (6*Self::CUBEMAP_WIDTH * Self::CUBEMAP_WIDTH) as usize;
         let (transfer_buffer, transfer_allocation, transfer_allocation_info) = {
             let buffer_info = vk::BufferCreateInfoBuilder::new()
@@ -1971,7 +2039,7 @@ impl CubemapRender{
             vulkan_data.device.as_ref().unwrap().cmd_copy_image_to_buffer(
                 command_buffer,
                 self.image.image,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                vk::ImageLayout::GENERAL,
                 transfer_buffer,
                 &[region],
             )
@@ -2069,9 +2137,11 @@ pub struct VulkanData {
     cubemaps: Vec<CombinedImage>,
     irradiance_maps: Vec<CombinedImage>,
     environment_maps: Vec<CombinedImage>,
+    pub planet_normal_map: Option<CombinedImage>,
     brdf_lut: Option<CombinedImage>,
     fallback_texture: Option<TextureSet>,
     pub(crate) cpu_images: Vec<CpuImage>,
+    images_3d: Vec<CombinedImage>,
 }
 
 fn get_random_vector(rng: &fastrand::Rng, length: usize) -> Vec<f32> {
@@ -2084,21 +2154,25 @@ fn get_random_vector(rng: &fastrand::Rng, length: usize) -> Vec<f32> {
 
 impl VulkanData {
     pub fn new() -> Self {
-        let mut lights = [Light::new(); NUM_LIGHTS];
+        // let mut lights = [Light::new(); NUM_LIGHTS];
 
-        for i in 0..NUM_LIGHTS {
-            lights[i] = Light::new();
-        }
+        // for i in 0..NUM_LIGHTS {
+        //     lights[i] = Light::new();
+        // }
 
+        let lights = [
+            Light::new(Vector3::zeros(), Vector3::new(1.0,1.0,1.0)),
+            Light::new(Vector3::new((World::RADIUS * 2.0) as f32, 0.0, 0.0), Vector3::new(254.0/255.0, 196.0/255.0, 127.0/255.0) * 4.06e13),
+        ];
         let uniform_buffer_object = UniformBufferObject {
             view: Matrix4::identity(),
             proj: Matrix4::identity(),
             random: [Vector4::new(0.0f32, 0.0f32, 0.0f32, 0.0f32); NUM_RANDOM],
             lights,
-            player_index: 0,
+            cubemap_index: 0,
             num_lights: 100,
-            _map_mode: 0,
-            exposure: 0.0,
+            map_mode: 0,
+            exposure: 1.0,
             mouse_position: Vector2::new(0.0, 0.0),
             screen_size: Vector2::zeros(),
             time: 0.0,
@@ -2200,6 +2274,8 @@ impl VulkanData {
             fallback_texture: None,
             cpu_images: vec![],
             current_boneset: 0,
+            planet_normal_map: None,
+            images_3d: vec![],
         };
     }
     pub fn init_vulkan(&mut self, window: &Window) {
@@ -2428,6 +2504,7 @@ impl VulkanData {
         self.create_color_resources();
         self.create_depth_resources();
         self.create_cubemap_resources();
+        self.create_array_image_resources();
 
         println!("Loading Shaders");
         self.load_shaders();
@@ -3267,6 +3344,17 @@ impl VulkanData {
                 .descriptor_count(NUM_MODELS as u32)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBindingBuilder::new()
+                .binding(10)
+                .descriptor_count(1)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBindingBuilder::new()
+                .binding(11)
+                .descriptor_count(NUM_MODELS as u32)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+
         ];
 
         let layout_info =
@@ -3305,7 +3393,7 @@ impl VulkanData {
         );
     }
 
-    fn update_descriptor_sets(&mut self) {
+    pub fn update_descriptor_sets(&mut self) {
         println!(
             "Descriptor set count when updating descriptor sets: {:}",
             self.descriptor_sets.as_ref().unwrap().len()
@@ -3493,7 +3581,38 @@ impl VulkanData {
                     .range(size_of::<ShaderStorageBufferObject>() as vk::DeviceSize)
                     .offset(0)];
 
-                let descriptor_writes = [
+                let planet_normal_info = match &self.planet_normal_map{
+                    Some(planet_normal_map) => {
+                        Some([vk::DescriptorImageInfoBuilder::new()
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .image_view(planet_normal_map.image_view)
+                        .sampler(planet_normal_map.sampler)])
+                    },
+                    None => None,
+                };
+
+                
+                
+                let mut images_3d_info = vec![];
+                for image_3d in &self.images_3d {
+                    images_3d_info.push(
+                        vk::DescriptorImageInfoBuilder::new()
+                            .image_view(image_3d.image_view)
+                            .sampler(image_3d.sampler)
+                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+                    );
+                }
+                let images_3d_left = NUM_MODELS - images_3d_info.len();
+                for _ in 0..images_3d_left {
+                    images_3d_info.push(
+                        vk::DescriptorImageInfoBuilder::new()
+                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                            .image_view(self.images_3d[0].image_view)
+                            .sampler(self.images_3d[0].sampler),
+                    );
+                }
+
+                let mut descriptor_writes = vec![
                     vk::WriteDescriptorSetBuilder::new()
                         .dst_set(*descriptor_set)
                         .dst_binding(0)
@@ -3555,6 +3674,25 @@ impl VulkanData {
                         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                         .image_info(&cpu_image_infos),
                 ];
+                match &planet_normal_info{
+                    Some(planet_normal_info) => {
+                        descriptor_writes.push(vk::WriteDescriptorSetBuilder::new()
+                        .dst_set(*descriptor_set)
+                        .dst_binding(10)
+                        .dst_array_element(0)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .image_info(planet_normal_info))
+
+                    },
+                    None => {},
+                }
+                descriptor_writes.push(vk::WriteDescriptorSetBuilder::new()
+                    .dst_set(*descriptor_set)
+                    .dst_binding(11)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&images_3d_info));
+
 
                 unsafe {
                     self.device
@@ -5348,7 +5486,7 @@ impl VulkanData {
             Some(self.create_image_view(color_image, color_format, vk::ImageAspectFlags::COLOR, 1));
     }
 
-    fn create_blank_cubemap(&self, width: u32, height: u32, mip_levels: u32, format: vk::Format) -> CombinedImage {
+    fn create_blank_cubemap(&self, width: u32, height: u32, mip_levels: u32, format: vk::Format, final_layout: vk::ImageLayout) -> CombinedImage {
         let image_info = vk::ImageCreateInfoBuilder::new()
             .image_type(vk::ImageType::_2D)
             .flags(vk::ImageCreateFlags::CUBE_COMPATIBLE)
@@ -5430,7 +5568,7 @@ impl VulkanData {
             .base_array_layer(0);
         let barrier = vk::ImageMemoryBarrierBuilder::new()
             .old_layout(vk::ImageLayout::UNDEFINED)
-            .new_layout(vk::ImageLayout::GENERAL)
+            .new_layout(final_layout)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .image(image)
@@ -5461,72 +5599,174 @@ impl VulkanData {
         };
     }
 
-    fn create_cubemap_resources(&mut self) {
-        let cubemap_folder = PathBuf::from("cubemap_space");
-
-        self.cubemap = Some(Cubemap::new(
-            self,
-            cubemap_folder.join("StandardCubeMap.hdr"),
-        ));
-
-        let base_cubemap = CombinedImage::new(
-            self,
-            cubemap_folder.join("StandardCubeMap.hdr"),
-            vk::ImageViewType::CUBE,
-            vk::Format::R32G32B32A32_SFLOAT,
-            false,
+    fn create_array_image_resources(&mut self){
+        self.images_3d.push(
+            self.load_image_sequence(&Path::new("models/planet/drawn-globe/mountain_drawn"))
         )
+    }
+
+    fn load_image_sequence(&self, folder: &Path, ) -> CombinedImage{
+        let mut images = vec![];
+        for file in folder.read_dir().expect("Failed to read_dir"){
+            let dynamic_image = image::io::Reader::open(file.unwrap().path()).unwrap().decode().unwrap();
+            images.push(dynamic_image.into_rgba8());
+        }
+        assert_ne!(images.len(), 0);
+        for image in &images{
+            assert_eq!(image.width() * image.height(), images[0].width() * images[0].height());
+        }
+
+        let width = images[0].width();
+        let height = images[0].height();
+        let depth = images.len() as u32;
+
+        let image_info = vk::ImageCreateInfoBuilder::new()
+        .image_type(vk::ImageType::_3D)
+        .flags(vk::ImageCreateFlags::empty())
+        .extent(vk::Extent3D {
+            width,
+            height,
+            depth,
+        })
+        .mip_levels(1)
+        .array_layers(1)
+        .format(vk::Format::R8G8B8A8_SRGB)
+        .tiling(vk::ImageTiling::OPTIMAL)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST)
+        .samples(vk::SampleCountFlagBits::_1)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+    let allocation_info = vk_mem_erupt::AllocationCreateInfo {
+        usage: vk_mem_erupt::MemoryUsage::GpuOnly,
+        ..Default::default()
+    };
+
+    let (image, allocation, _) = self
+        .allocator
+        .as_ref()
+        .unwrap()
+        .create_image(&image_info, &allocation_info)
         .unwrap();
 
-        let target_cubemap = self.create_blank_cubemap(16, 16, 1, vk::Format::R32G32B32A32_SFLOAT);
-        let combined_descriptors = [
-            CombinedDescriptor {
-                descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                descriptor_count: 1,
-                descriptor_info: DescriptorInfoData::Image {
-                    image_view: base_cubemap.image_view,
-                    sampler: Some(base_cubemap.sampler),
-                    layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                },
-            },
-            CombinedDescriptor {
-                descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
-                descriptor_count: 1,
-                descriptor_info: DescriptorInfoData::Image {
-                    image_view: target_cubemap.image_view,
-                    sampler: None,
-                    layout: vk::ImageLayout::GENERAL,
-                },
-            },
-        ];
-        println!("Running irradiance shader");
-        self.run_arbitrary_compute_shader(
-            self.load_shader("shaders/irradiance.spv".parse().unwrap()),
-            1u32,
-            &combined_descriptors,
-            (
-                target_cubemap.width / 8 + u32::from(target_cubemap.width % 8 == 0),
-                target_cubemap.height / 8 + u32::from(target_cubemap.height % 8 == 0),
-                6,
-            ),
+    let image_view_create_info = vk::ImageViewCreateInfoBuilder::new()
+        .image(image)
+        .view_type(vk::ImageViewType::_3D)
+        .format(image_info.format)
+        .subresource_range(vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        });
+    let image_view = unsafe {
+        self.device
+            .as_ref()
+            .unwrap()
+            .create_image_view(&image_view_create_info, None)
+    }
+    .unwrap();
+
+    let sampler_create_info = vk::SamplerCreateInfoBuilder::new()
+        .mag_filter(vk::Filter::LINEAR)
+        .min_filter(vk::Filter::LINEAR)
+        .address_mode_u(vk::SamplerAddressMode::REPEAT)
+        .address_mode_v(vk::SamplerAddressMode::REPEAT)
+        .address_mode_w(vk::SamplerAddressMode::REPEAT)
+        .anisotropy_enable(true)
+        .max_anisotropy(1.0)
+        .border_color(vk::BorderColor::INT_OPAQUE_WHITE)
+        .unnormalized_coordinates(false)
+        .compare_enable(false)
+        .compare_op(vk::CompareOp::ALWAYS)
+        .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+        .mip_lod_bias(0.0)
+        .min_lod(0.0)
+        .max_lod(vk::LOD_CLAMP_NONE);
+
+    let sampler = unsafe {
+        self.device
+            .as_ref()
+            .unwrap()
+            .create_sampler(&sampler_create_info, None)
+    }
+    .unwrap();
+
+    let (transfer_buffer, transfer_allocation, transfer_allocation_info) = {
+        let buffer_info = vk::BufferCreateInfoBuilder::new()
+        .size((width * height * depth * 4) as u64)
+        .usage(vk::BufferUsageFlags::TRANSFER_SRC);
+        let allocation_info = vk_mem_erupt::AllocationCreateInfo {
+            usage: vk_mem_erupt::MemoryUsage::CpuToGpu,
+            flags: vk_mem_erupt::AllocationCreateFlags::MAPPED, 
+            required_flags: vk::MemoryPropertyFlags::empty(), 
+            preferred_flags: vk::MemoryPropertyFlags::empty(), 
+            memory_type_bits: u32::MAX, 
+            pool: None, 
+            user_data: None
+        };
+
+        self.allocator.as_ref().unwrap().create_buffer(&buffer_info, &allocation_info).expect("Transfer buffer failed")
+    };
+
+
+    for (index, image) in images.into_iter().enumerate(){
+        unsafe{
+            (transfer_allocation_info.get_mapped_data().offset((index * image.len()) as isize)).copy_from_nonoverlapping(image.as_ptr(), image.len());
+        }
+    }
+   
+{    let subresource_range = vk::ImageSubresourceRangeBuilder::new()
+        .level_count(1)
+        .layer_count(1)
+        .aspect_mask(vk::ImageAspectFlags::COLOR)
+        .base_mip_level(0)
+        .base_array_layer(0);
+    let barrier = vk::ImageMemoryBarrierBuilder::new()
+        .old_layout(vk::ImageLayout::UNDEFINED)
+        .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .image(image)
+        .subresource_range(*subresource_range);
+    
+    let subresource = vk::ImageSubresourceLayersBuilder::new().base_array_layer(0).layer_count(1).mip_level(0).aspect_mask(vk::ImageAspectFlags::COLOR);
+    let region = vk::BufferImageCopyBuilder::new()
+        .buffer_image_height(0)
+        .buffer_row_length(0)
+        .image_subresource(subresource.build())
+        .image_offset(vk::Offset3D{
+            x: 0,
+            y: 0,
+            z: 0,
+        })
+        .image_extent(vk::Extent3D{
+            width,
+            height,
+            depth,
+        });
+
+    let command_buffer = self.begin_single_time_commands();
+    unsafe {
+        self.device.as_ref().unwrap().cmd_pipeline_barrier(
+            command_buffer,
+            Some(vk::PipelineStageFlags::ALL_COMMANDS),
+            Some(vk::PipelineStageFlags::ALL_COMMANDS),
+            None,
+            &[],
+            &[],
+            &[barrier],
         );
-
-        let target_barrier = vk::ImageMemoryBarrierBuilder::new()
-            .old_layout(vk::ImageLayout::GENERAL)
-            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(target_cubemap.image)
-            .subresource_range(
-                *vk::ImageSubresourceRangeBuilder::new()
-                    .level_count(1)
-                    .layer_count(6)
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(0)
-                    .base_array_layer(0),
-            );
-
-        let command_buffer = self.begin_single_time_commands();
+        self.device.as_ref().unwrap().cmd_copy_buffer_to_image(command_buffer, transfer_buffer, image,vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[region])
+    }
+    let barrier = vk::ImageMemoryBarrierBuilder::new()
+        .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+        .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .image(image)
+        .subresource_range(*subresource_range);
         unsafe {
             self.device.as_ref().unwrap().cmd_pipeline_barrier(
                 command_buffer,
@@ -5535,41 +5775,46 @@ impl VulkanData {
                 None,
                 &[],
                 &[],
-                &[target_barrier],
+                &[barrier],
+            );
+        }
+
+    self.end_single_time_commands(command_buffer);
+}
+    self.allocator.as_ref().unwrap().destroy_buffer(transfer_buffer, &transfer_allocation);
+
+    return CombinedImage {
+        image,
+        image_view,
+        sampler,
+        allocation,
+        width,
+        height,
+    };
+
+    }
+
+    fn create_cubemap_resources(&mut self) {
+        let cubemap_folders = [
+            PathBuf::from("cubemap_space"),
+            PathBuf::from("cubemap_fire"),
+        ];
+        for cubemap_folder in cubemap_folders{
+            self.cubemap = Some(Cubemap::new(
+                self,
+                cubemap_folder.join("StandardCubeMap.hdr"),
+            ));
+    
+            let base_cubemap = CombinedImage::new(
+                self,
+                cubemap_folder.join("StandardCubeMap.hdr"),
+                vk::ImageViewType::CUBE,
+                vk::Format::R32G32B32A32_SFLOAT,
+                false,
             )
-        };
-
-        self.end_single_time_commands(command_buffer);
-
-        self.irradiance_maps.push(target_cubemap);
-
-        let roughness_mipmaps = 10;
-
-        let target_cubemap = self.create_blank_cubemap(1024, 1024, roughness_mipmaps, vk::Format::R32G32B32A32_SFLOAT);
-
-        for i in 0..roughness_mipmaps {
-            println!("Running environment shader for mip level {:}", i);
-
-            let image_view_create_info = vk::ImageViewCreateInfoBuilder::new()
-                .image(target_cubemap.image)
-                .view_type(vk::ImageViewType::CUBE)
-                .format(vk::Format::R32G32B32A32_SFLOAT)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: i,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 6,
-                });
-
-            let current_mip_image_view = unsafe {
-                self.device
-                    .as_ref()
-                    .unwrap()
-                    .create_image_view(&image_view_create_info, None)
-            }
             .unwrap();
-
+    
+            let target_cubemap = self.create_blank_cubemap(16, 16, 1, vk::Format::R32G32B32A32_SFLOAT, vk::ImageLayout::GENERAL);
             let combined_descriptors = [
                 CombinedDescriptor {
                     descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
@@ -5584,16 +5829,16 @@ impl VulkanData {
                     descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
                     descriptor_count: 1,
                     descriptor_info: DescriptorInfoData::Image {
-                        image_view: current_mip_image_view,
+                        image_view: target_cubemap.image_view,
                         sampler: None,
                         layout: vk::ImageLayout::GENERAL,
                     },
                 },
             ];
-
+            println!("Running irradiance shader");
             self.run_arbitrary_compute_shader(
-                self.load_shader("shaders/environment.spv".parse().unwrap()),
-                i as f32 / (roughness_mipmaps - 1) as f32,
+                self.load_shader("shaders/irradiance.spv".parse().unwrap()),
+                1u32,
                 &combined_descriptors,
                 (
                     target_cubemap.width / 8 + u32::from(target_cubemap.width % 8 == 0),
@@ -5601,39 +5846,133 @@ impl VulkanData {
                     6,
                 ),
             );
+    
+            let target_barrier = vk::ImageMemoryBarrierBuilder::new()
+                .old_layout(vk::ImageLayout::GENERAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(target_cubemap.image)
+                .subresource_range(
+                    *vk::ImageSubresourceRangeBuilder::new()
+                        .level_count(1)
+                        .layer_count(6)
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .base_mip_level(0)
+                        .base_array_layer(0),
+                );
+    
+            let command_buffer = self.begin_single_time_commands();
+            unsafe {
+                self.device.as_ref().unwrap().cmd_pipeline_barrier(
+                    command_buffer,
+                    Some(vk::PipelineStageFlags::ALL_COMMANDS),
+                    Some(vk::PipelineStageFlags::ALL_COMMANDS),
+                    None,
+                    &[],
+                    &[],
+                    &[target_barrier],
+                )
+            };
+    
+            self.end_single_time_commands(command_buffer);
+    
+            self.irradiance_maps.push(target_cubemap);
+    
+            let roughness_mipmaps = 10;
+    
+            let target_cubemap = self.create_blank_cubemap(1024, 1024, roughness_mipmaps, vk::Format::R32G32B32A32_SFLOAT, vk::ImageLayout::GENERAL);
+    
+            for i in 0..roughness_mipmaps {
+                println!("Running environment shader for mip level {:}", i);
+    
+                let image_view_create_info = vk::ImageViewCreateInfoBuilder::new()
+                    .image(target_cubemap.image)
+                    .view_type(vk::ImageViewType::CUBE)
+                    .format(vk::Format::R32G32B32A32_SFLOAT)
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: i,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 6,
+                    });
+    
+                let current_mip_image_view = unsafe {
+                    self.device
+                        .as_ref()
+                        .unwrap()
+                        .create_image_view(&image_view_create_info, None)
+                }
+                .unwrap();
+    
+                let combined_descriptors = [
+                    CombinedDescriptor {
+                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                        descriptor_count: 1,
+                        descriptor_info: DescriptorInfoData::Image {
+                            image_view: base_cubemap.image_view,
+                            sampler: Some(base_cubemap.sampler),
+                            layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                        },
+                    },
+                    CombinedDescriptor {
+                        descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+                        descriptor_count: 1,
+                        descriptor_info: DescriptorInfoData::Image {
+                            image_view: current_mip_image_view,
+                            sampler: None,
+                            layout: vk::ImageLayout::GENERAL,
+                        },
+                    },
+                ];
+    
+                self.run_arbitrary_compute_shader(
+                    self.load_shader("shaders/environment.spv".parse().unwrap()),
+                    i as f32 / (roughness_mipmaps - 1) as f32,
+                    &combined_descriptors,
+                    (
+                        target_cubemap.width / 8 + u32::from(target_cubemap.width % 8 == 0),
+                        target_cubemap.height / 8 + u32::from(target_cubemap.height % 8 == 0),
+                        6,
+                    ),
+                );
+            }
+    
+            let target_barrier = vk::ImageMemoryBarrierBuilder::new()
+                .old_layout(vk::ImageLayout::GENERAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(target_cubemap.image)
+                .subresource_range(
+                    *vk::ImageSubresourceRangeBuilder::new()
+                        .level_count(roughness_mipmaps)
+                        .layer_count(6)
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .base_mip_level(0)
+                        .base_array_layer(0),
+                );
+    
+            let command_buffer = self.begin_single_time_commands();
+            unsafe {
+                self.device.as_ref().unwrap().cmd_pipeline_barrier(
+                    command_buffer,
+                    Some(vk::PipelineStageFlags::ALL_COMMANDS),
+                    Some(vk::PipelineStageFlags::ALL_COMMANDS),
+                    None,
+                    &[],
+                    &[],
+                    &[target_barrier],
+                )
+            };
+    
+            self.end_single_time_commands(command_buffer);
+    
+            self.environment_maps.push(target_cubemap);
         }
 
-        let target_barrier = vk::ImageMemoryBarrierBuilder::new()
-            .old_layout(vk::ImageLayout::GENERAL)
-            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(target_cubemap.image)
-            .subresource_range(
-                *vk::ImageSubresourceRangeBuilder::new()
-                    .level_count(roughness_mipmaps)
-                    .layer_count(6)
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(0)
-                    .base_array_layer(0),
-            );
 
-        let command_buffer = self.begin_single_time_commands();
-        unsafe {
-            self.device.as_ref().unwrap().cmd_pipeline_barrier(
-                command_buffer,
-                Some(vk::PipelineStageFlags::ALL_COMMANDS),
-                Some(vk::PipelineStageFlags::ALL_COMMANDS),
-                None,
-                &[],
-                &[],
-                &[target_barrier],
-            )
-        };
-
-        self.end_single_time_commands(command_buffer);
-
-        self.environment_maps.push(target_cubemap);
 
         self.brdf_lut = CombinedImage::new(
             self,

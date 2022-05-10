@@ -1,0 +1,119 @@
+#version 450
+#include "../map.glsl"
+#include "elevation.glsl"
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0) uniform samplerCube inImage;
+layout(set = 0, binding = 1, rgba32f) uniform imageCube outImage;
+
+// const float PI = 3.14159;
+// const mat3 CORRECTION_MATRIX = mat3(1.0000000,  0.0000000,  0.0000000,
+// 0.0000000,  0.0000000, 1.0000000,
+// 0.0000000,  -1.0000000,  0.0000000);
+
+const mat3 CORRECTION_MATRIX = mat3(1.0000000,  0.0000000,  0.0000000,
+0.0000000,  1.0000000, 0.0000000,
+0.0000000,  0.0000000,  1.0000000);
+
+const float RADIUS = 6378137.0;
+
+//https://stackoverflow.com/a/67920029
+vec3 slerp(vec3 start, vec3 end, float percent)
+{
+     // Dot product - the cosine of the angle between 2 vectors.
+     float dot = dot(start, end);
+
+     // Acos(dot) returns the angle between start and end,
+     // And multiplying that by percent returns the angle between
+     // start and the final result.
+     float theta = acos(dot) * percent;
+     vec3 RelativeVec = end - start * dot;
+     RelativeVec = normalize(RelativeVec);
+
+     // Orthonormal basis
+     // The final result.
+     return ((start*cos(theta)) + (RelativeVec * sin(theta)));
+}
+
+float get_elevation(vec3 v){
+    return shift_elevation(v, texture(inImage, v).r);
+    
+}
+
+void main()
+{
+    vec2 uv = (vec2(gl_GlobalInvocationID.xy) / vec2(imageSize(outImage).xy)) * 2.0 - 1.0;
+    vec3 normal;
+    vec3[] others = {
+        vec3(0.0,1.0,0.0),
+        vec3(0.0,-1.0,0.0),
+        vec3(0.0,0.0,1.0),
+        vec3(0.0,0.0,-1.0),
+        vec3(1.0,0.0,0.0),
+        vec3(-1.0,0.0,0.0)
+
+    };
+    if (gl_GlobalInvocationID.z == 0)
+    { 
+        normal = vec3(1.0f, -uv.y, -uv.x);
+        // other = vec3(0.0,1.0,0.0);
+    }
+    else if (gl_GlobalInvocationID.z == 1)
+    { 
+        normal = vec3(-1.0f, -uv.y, uv.x); 
+        // other = vec3(0.0,-1.0,0.0);
+
+    }
+    else if (gl_GlobalInvocationID.z == 2)
+    { 
+        normal = vec3(uv.x, 1.0f, uv.y); 
+        // other = vec3(0.0,0.0,1.0);
+
+    }
+    else if (gl_GlobalInvocationID.z == 3)
+    { 
+        normal = vec3(uv.x, -1.0f, -uv.y); 
+        // other = vec3(0.0,0.0,-1.0);
+
+    }
+    else if (gl_GlobalInvocationID.z == 4)
+    { 
+        normal = vec3(uv.x, -uv.y, 1.0f); 
+        // other = vec3(1.0,0.0,0.0);
+
+    }
+    else if (gl_GlobalInvocationID.z == 5)
+    { 
+        normal = vec3(-uv.x, -uv.y, -1.0f); 
+        // other = vec3(-1.0,0.0,0.0);
+
+    }
+    vec3 out_normal = vec3(0.0);
+
+    for(int i = 0; i < others.length(); i++){
+        vec3 other = others[i];
+        normal = CORRECTION_MATRIX * normalize(normal);
+        other = CORRECTION_MATRIX * normalize(other);
+        vec3 right = normalize(cross(other, normal));
+        vec3 up = normalize(cross(normal, right));
+
+        right = slerp(right,normal, 0.99);
+        up = slerp(up,normal, 0.99);
+
+        
+        float exaggeration_factor = 10.0; //to make the bumps more interesting when in globe view
+        float normal_elevation = texture(inImage, normal).r * exaggeration_factor; 
+        float right_elevation = texture(inImage, right).r * exaggeration_factor; 
+        float up_elevation = texture(inImage, up).r * exaggeration_factor;
+
+        vec3 a = normal * (RADIUS + normal_elevation);
+        vec3 b = right * (RADIUS + right_elevation);
+        vec3 c = up * (RADIUS + up_elevation);
+    
+        out_normal += normalize(cross(b - a ,c - a));
+
+    }
+
+    out_normal = normalize(out_normal / float(others.length()));
+
+    imageStore(outImage, ivec3(gl_GlobalInvocationID.xyz),vec4(out_normal,1.0));
+}

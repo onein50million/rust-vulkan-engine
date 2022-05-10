@@ -7,7 +7,7 @@ pub const FRAMERATE_TARGET: f64 = 280.0;
 pub const NUM_RANDOM: usize = 100;
 pub const FRAME_SAMPLES: usize = 100;
 pub const NUM_MODELS: usize = 1000;
-pub const NUM_LIGHTS: usize = 1;
+pub const NUM_LIGHTS: usize = 2;
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub struct Inputs {
@@ -47,6 +47,13 @@ pub(crate) mod flags {
     pub(crate) const IS_VIEW_PROJ_MATRIX_IGNORED: u32 = 0b10000;
 }
 
+pub mod map_modes{
+    pub const SATELITE: u8 = 0;
+    pub const PAPER: u8 = 1;
+
+
+}
+
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct Vertex {
@@ -81,19 +88,14 @@ impl Vertex {
 
 #[derive(Copy, Clone)]
 #[repr(C)]
-pub(crate) struct Light {
-    pub(crate) position: Vector4<f32>,
-    pub(crate) color: Vector4<f32>,
+pub struct Light {
+    pub position: Vector4<f32>,
+    pub color: Vector4<f32>,
 }
 impl Light {
-    pub(crate) fn new() -> Self {
-        let _rng = fastrand::Rng::new();
-        let _distance = 5.0;
-        let power = 1.0;
-        let position = Vector4::new(0.0, 0.0, 0.0, 0.0);
-        let color = Vector4::new(1.0, 0.9, 0.9, 0.0) * power;
-
-        println!("Position: {:}", position);
+    pub(crate) fn new(position: Vector3<f32>, color: Vector3<f32>) -> Self {
+        let position = Vector4::new(position.x, position.y, position.z, 1.0);
+        let color = Vector4::new(color.x, color.y, color.z, 1.0);
         Self { position, color }
     }
 }
@@ -160,10 +162,10 @@ pub struct UniformBufferObject {
     pub view: Matrix4<f32>,
     pub proj: Matrix4<f32>,
     pub(crate) random: [Vector4<f32>; NUM_RANDOM], //std140 packing so it needs to be 16 bytes wide
-    pub(crate) lights: [Light; NUM_LIGHTS],        //std140 packing so it needs to be 16 bytes wide
-    pub(crate) player_index: u32,
+    pub lights: [Light; NUM_LIGHTS],        //std140 packing so it needs to be 16 bytes wide
+    pub cubemap_index: u32,
     pub(crate) num_lights: u32,
-    pub(crate) _map_mode: u32,
+    pub map_mode: u32,
     pub exposure: f32,
     pub mouse_position: Vector2<f32>,
     pub(crate) screen_size: Vector2<f32>,
