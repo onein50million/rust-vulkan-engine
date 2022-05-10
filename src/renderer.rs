@@ -4,7 +4,6 @@ use crate::world::World;
 use erupt::extensions;
 use erupt::vk::{DescriptorBufferInfoBuilder, DescriptorImageInfoBuilder};
 
-
 use erupt::{vk, DeviceLoader, EntryLoader, ExtendableFromConst, InstanceLoader, SmallVec};
 
 use gltf::animation::util::{ReadOutputs, Rotations};
@@ -14,7 +13,6 @@ use image::{GenericImageView, ImageFormat};
 use nalgebra::{
     Matrix4, Point3, Quaternion, Scale3, Translation3, UnitQuaternion, Vector2, Vector3, Vector4,
 };
-
 
 use std::collections::HashSet;
 use std::convert::TryInto;
@@ -43,9 +41,8 @@ use winit::window::Window;
 const MIP_LEVELS: u32 = 6;
 const MSAA_ENABLED: bool = false;
 const UI_BUFFER_LENGTH: usize = 8192 * 32;
-const LINE_DATA_BUFFER_MAX_LENGTH: usize = 1<<22;
+const LINE_DATA_BUFFER_MAX_LENGTH: usize = 1 << 22;
 const LINE_WIDTH: f32 = 1.0;
-
 
 #[derive(Debug, Copy, Clone)]
 pub enum DanielError {
@@ -951,23 +948,23 @@ impl Drawable for Cubemap {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-struct LineVertex{
+struct LineVertex {
     position: Vector3<f32>,
     color: Vector4<f32>,
 }
 
-pub struct MappedBufferIterator<T>{
+pub struct MappedBufferIterator<T> {
     ptr: *const T,
     end: *const T,
 }
 
-impl <T> Iterator for MappedBufferIterator<T>{
+impl<T> Iterator for MappedBufferIterator<T> {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.ptr == self.end{
+        if self.ptr == self.end {
             None
-        }else{
+        } else {
             let old = self.ptr;
             self.ptr = unsafe { self.ptr.offset(1) };
 
@@ -976,19 +973,19 @@ impl <T> Iterator for MappedBufferIterator<T>{
     }
 }
 
-pub struct MappedBufferIteratorRef<'a, T>{
+pub struct MappedBufferIteratorRef<'a, T> {
     ptr: *const T,
     end: *const T,
-    phantom: PhantomData<&'a T>
+    phantom: PhantomData<&'a T>,
 }
 
-impl <'a, T> Iterator for MappedBufferIteratorRef<'a, T>{
+impl<'a, T> Iterator for MappedBufferIteratorRef<'a, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.ptr == self.end{
+        if self.ptr == self.end {
             None
-        }else{
+        } else {
             let old = self.ptr;
             self.ptr = unsafe { self.ptr.offset(1) };
 
@@ -997,80 +994,96 @@ impl <'a, T> Iterator for MappedBufferIteratorRef<'a, T>{
     }
 }
 
-pub struct MappedBufferIteratorMutRef<'a, T>{
+pub struct MappedBufferIteratorMutRef<'a, T> {
     ptr: *mut T,
     end: *mut T,
-    phantom: PhantomData<&'a mut T>
+    phantom: PhantomData<&'a mut T>,
 }
 
-impl <'a, T> Iterator for MappedBufferIteratorMutRef<'a, T>{
+impl<'a, T> Iterator for MappedBufferIteratorMutRef<'a, T> {
     type Item = &'a mut T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.ptr == self.end{
+        if self.ptr == self.end {
             None
-        }else{
+        } else {
             let old = self.ptr;
             self.ptr = unsafe { self.ptr.offset(1) };
 
-            Some(unsafe { &mut*old })
+            Some(unsafe { &mut *old })
         }
     }
 }
 
-pub struct UnmappedBuffer<T>{
+pub struct UnmappedBuffer<T> {
     buffer: vk::Buffer,
     count: usize,
     allocation: vk_mem_erupt::Allocation,
     allocation_info: vk_mem_erupt::AllocationInfo,
     phantom: PhantomData<T>,
 }
-impl <T> UnmappedBuffer<T>{
-    fn new(vulkan_data: &VulkanData,usage_flags: vk::BufferUsageFlags,  buffer_data: &[T]) -> Self{
-        
+impl<T> UnmappedBuffer<T> {
+    fn new(vulkan_data: &VulkanData, usage_flags: vk::BufferUsageFlags, buffer_data: &[T]) -> Self {
         let (transfer_buffer, transfer_allocation, transfer_allocation_info) = {
             let buffer_info = vk::BufferCreateInfoBuilder::new()
-            .size((buffer_data.len() * size_of::<T>()) as u64)
-            .usage(vk::BufferUsageFlags::TRANSFER_SRC);
+                .size((buffer_data.len() * size_of::<T>()) as u64)
+                .usage(vk::BufferUsageFlags::TRANSFER_SRC);
             let allocation_info = vk_mem_erupt::AllocationCreateInfo {
                 usage: vk_mem_erupt::MemoryUsage::CpuToGpu,
-                flags: vk_mem_erupt::AllocationCreateFlags::MAPPED, 
-                required_flags: vk::MemoryPropertyFlags::empty(), 
-                preferred_flags: vk::MemoryPropertyFlags::empty(), 
-                memory_type_bits: u32::MAX, 
-                pool: None, 
-                user_data: None
+                flags: vk_mem_erupt::AllocationCreateFlags::MAPPED,
+                required_flags: vk::MemoryPropertyFlags::empty(),
+                preferred_flags: vk::MemoryPropertyFlags::empty(),
+                memory_type_bits: u32::MAX,
+                pool: None,
+                user_data: None,
             };
 
-            vulkan_data.allocator.as_ref().unwrap().create_buffer(&buffer_info, &allocation_info).expect("Transfer buffer failed")
+            vulkan_data
+                .allocator
+                .as_ref()
+                .unwrap()
+                .create_buffer(&buffer_info, &allocation_info)
+                .expect("Transfer buffer failed")
         };
 
+        unsafe {
+            (transfer_allocation_info.get_mapped_data() as *mut T)
+                .copy_from_nonoverlapping(buffer_data.as_ptr(), buffer_data.len());
+        }
 
-        unsafe{
-            (transfer_allocation_info.get_mapped_data() as *mut T).copy_from_nonoverlapping(buffer_data.as_ptr(), buffer_data.len());
-        }        
-        
-        
         let buffer_info = vk::BufferCreateInfoBuilder::new()
-        .size((buffer_data.len() * size_of::<T>()) as u64)
-        .usage(usage_flags);
+            .size((buffer_data.len() * size_of::<T>()) as u64)
+            .usage(usage_flags);
         let allocation_info = vk_mem_erupt::AllocationCreateInfo {
             usage: vk_mem_erupt::MemoryUsage::GpuOnly,
-            flags: vk_mem_erupt::AllocationCreateFlags::empty(), 
-            required_flags: vk::MemoryPropertyFlags::empty(), 
-            preferred_flags: vk::MemoryPropertyFlags::empty(), 
-            memory_type_bits: u32::MAX, 
-            pool: None, 
-            user_data: None
+            flags: vk_mem_erupt::AllocationCreateFlags::empty(),
+            required_flags: vk::MemoryPropertyFlags::empty(),
+            preferred_flags: vk::MemoryPropertyFlags::empty(),
+            memory_type_bits: u32::MAX,
+            pool: None,
+            user_data: None,
         };
 
-        let (buffer, allocation, allocation_info) = vulkan_data.allocator.as_ref().unwrap().create_buffer(&buffer_info, &allocation_info).expect("Unmapped buffer creation failed");
-        
-        vulkan_data.copy_buffer(transfer_buffer,buffer, (buffer_data.len() * size_of::<T>()) as u64 );
+        let (buffer, allocation, allocation_info) = vulkan_data
+            .allocator
+            .as_ref()
+            .unwrap()
+            .create_buffer(&buffer_info, &allocation_info)
+            .expect("Unmapped buffer creation failed");
 
-        vulkan_data.allocator.as_ref().unwrap().destroy_buffer(transfer_buffer, &transfer_allocation);
-        
-        Self{
+        vulkan_data.copy_buffer(
+            transfer_buffer,
+            buffer,
+            (buffer_data.len() * size_of::<T>()) as u64,
+        );
+
+        vulkan_data
+            .allocator
+            .as_ref()
+            .unwrap()
+            .destroy_buffer(transfer_buffer, &transfer_allocation);
+
+        Self {
             buffer,
             count: buffer_data.len(),
             allocation,
@@ -1080,7 +1093,7 @@ impl <T> UnmappedBuffer<T>{
     }
 }
 
-pub struct MappedBuffer<T>{
+pub struct MappedBuffer<T> {
     buffer: vk::Buffer,
     count: usize,
     allocation: vk_mem_erupt::Allocation,
@@ -1088,115 +1101,120 @@ pub struct MappedBuffer<T>{
     phantom: PhantomData<T>,
 }
 
-impl <T> MappedBuffer<T>{
-    fn add_value(&mut self, value: T){
+impl<T> MappedBuffer<T> {
+    fn add_value(&mut self, value: T) {
         assert!(self.count + 1 < LINE_DATA_BUFFER_MAX_LENGTH);
-        unsafe{
-            std::ptr::write::<T>((self.allocation_info.get_mapped_data() as *mut T).offset((self.count) as isize), value)
+        unsafe {
+            std::ptr::write::<T>(
+                (self.allocation_info.get_mapped_data() as *mut T).offset((self.count) as isize),
+                value,
+            )
         }
         self.count += 1;
-
     }
 }
 
-impl <T> Index<usize> for MappedBuffer<T>{
+impl<T> Index<usize> for MappedBuffer<T> {
     type Output = T;
 
     fn index(&self, index: usize) -> &Self::Output {
         assert!(index < self.count);
-        unsafe{
-            &*(self.allocation_info.get_mapped_data() as *mut T).offset(index as isize)
-        }
+        unsafe { &*(self.allocation_info.get_mapped_data() as *mut T).offset(index as isize) }
     }
 }
 
-impl <T> IndexMut<usize> for MappedBuffer<T>{
+impl<T> IndexMut<usize> for MappedBuffer<T> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         assert!(index < self.count);
-        unsafe{
-            &mut *(self.allocation_info.get_mapped_data() as *mut T).offset(index as isize)
-        }
+        unsafe { &mut *(self.allocation_info.get_mapped_data() as *mut T).offset(index as isize) }
     }
 }
 
-impl <T> IntoIterator for MappedBuffer<T>{
+impl<T> IntoIterator for MappedBuffer<T> {
     type Item = T;
 
     type IntoIter = MappedBufferIterator<T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        unsafe{
-            Self::IntoIter{
+        unsafe {
+            Self::IntoIter {
                 ptr: self.allocation_info.get_mapped_data() as *const T,
-                end: (self.allocation_info.get_mapped_data() as *const T).offset(self.count as isize)
-            }    
+                end: (self.allocation_info.get_mapped_data() as *const T)
+                    .offset(self.count as isize),
+            }
         }
     }
 }
 
-impl <'a, T> IntoIterator for &'a MappedBuffer<T>{
+impl<'a, T> IntoIterator for &'a MappedBuffer<T> {
     type Item = &'a T;
 
     type IntoIter = MappedBufferIteratorRef<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        unsafe{
-            Self::IntoIter{
+        unsafe {
+            Self::IntoIter {
                 ptr: self.allocation_info.get_mapped_data() as *const T,
-                end: (self.allocation_info.get_mapped_data() as  *const T).offset(self.count as isize),
-                phantom: PhantomData
-            }    
+                end: (self.allocation_info.get_mapped_data() as *const T)
+                    .offset(self.count as isize),
+                phantom: PhantomData,
+            }
         }
     }
 }
 
-impl <'a, T> IntoIterator for &'a mut MappedBuffer<T>{
+impl<'a, T> IntoIterator for &'a mut MappedBuffer<T> {
     type Item = &'a mut T;
 
     type IntoIter = MappedBufferIteratorMutRef<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        unsafe{
-            Self::IntoIter{
+        unsafe {
+            Self::IntoIter {
                 ptr: self.allocation_info.get_mapped_data() as *mut T,
-                end: (self.allocation_info.get_mapped_data() as  *mut T).offset(self.count as isize),
-                phantom: PhantomData
-            }    
+                end: (self.allocation_info.get_mapped_data() as *mut T).offset(self.count as isize),
+                phantom: PhantomData,
+            }
         }
     }
 }
 
 #[allow(unused)]
-struct LinePushConstants{
+struct LinePushConstants {
     model_view_projection: Matrix4<f32>,
 }
 
-pub struct LineDrawData{
+pub struct LineDrawData {
     vertex_buffer: MappedBuffer<LineVertex>,
     index_buffer: MappedBuffer<u32>,
-    index_map: HashSet<(usize,usize)>,
+    index_map: HashSet<(usize, usize)>,
     pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     descriptor_sets: Vec<vk::DescriptorSet>,
 }
-impl LineDrawData{
-    fn new(vulkan_data: &VulkanData) -> Self{
+impl LineDrawData {
+    fn new(vulkan_data: &VulkanData) -> Self {
         let vertex_buffer = {
             let buffer_info = vk::BufferCreateInfoBuilder::new()
-            .size((LINE_DATA_BUFFER_MAX_LENGTH * size_of::<LineVertex>()) as u64)
-            .usage(vk::BufferUsageFlags::VERTEX_BUFFER);
+                .size((LINE_DATA_BUFFER_MAX_LENGTH * size_of::<LineVertex>()) as u64)
+                .usage(vk::BufferUsageFlags::VERTEX_BUFFER);
             let allocation_info = vk_mem_erupt::AllocationCreateInfo {
                 usage: vk_mem_erupt::MemoryUsage::CpuToGpu,
-                flags: vk_mem_erupt::AllocationCreateFlags::MAPPED, 
-                required_flags: vk::MemoryPropertyFlags::empty(), 
-                preferred_flags: vk::MemoryPropertyFlags::empty(), 
-                memory_type_bits: u32::MAX, 
-                pool: None, 
-                user_data: None
+                flags: vk_mem_erupt::AllocationCreateFlags::MAPPED,
+                required_flags: vk::MemoryPropertyFlags::empty(),
+                preferred_flags: vk::MemoryPropertyFlags::empty(),
+                memory_type_bits: u32::MAX,
+                pool: None,
+                user_data: None,
             };
 
-            let (buffer, allocation, allocation_info) = vulkan_data.allocator.as_ref().unwrap().create_buffer(&buffer_info, &allocation_info).expect("Line Vertex Data Creation failed");
-            MappedBuffer{
+            let (buffer, allocation, allocation_info) = vulkan_data
+                .allocator
+                .as_ref()
+                .unwrap()
+                .create_buffer(&buffer_info, &allocation_info)
+                .expect("Line Vertex Data Creation failed");
+            MappedBuffer {
                 buffer,
                 count: 0,
                 allocation,
@@ -1206,20 +1224,25 @@ impl LineDrawData{
         };
         let index_buffer = {
             let buffer_info = vk::BufferCreateInfoBuilder::new()
-            .size((LINE_DATA_BUFFER_MAX_LENGTH) as u64)
-            .usage(vk::BufferUsageFlags::INDEX_BUFFER);
+                .size((LINE_DATA_BUFFER_MAX_LENGTH) as u64)
+                .usage(vk::BufferUsageFlags::INDEX_BUFFER);
             let allocation_info = vk_mem_erupt::AllocationCreateInfo {
                 usage: vk_mem_erupt::MemoryUsage::CpuToGpu,
-                flags: vk_mem_erupt::AllocationCreateFlags::MAPPED, 
-                required_flags: vk::MemoryPropertyFlags::empty(), 
-                preferred_flags: vk::MemoryPropertyFlags::empty(), 
-                memory_type_bits: u32::MAX, 
-                pool: None, 
-                user_data: None
+                flags: vk_mem_erupt::AllocationCreateFlags::MAPPED,
+                required_flags: vk::MemoryPropertyFlags::empty(),
+                preferred_flags: vk::MemoryPropertyFlags::empty(),
+                memory_type_bits: u32::MAX,
+                pool: None,
+                user_data: None,
             };
 
-            let (buffer, allocation, allocation_info) = vulkan_data.allocator.as_ref().unwrap().create_buffer(&buffer_info, &allocation_info).expect("Line Index Data Creation failed");
-            MappedBuffer{
+            let (buffer, allocation, allocation_info) = vulkan_data
+                .allocator
+                .as_ref()
+                .unwrap()
+                .create_buffer(&buffer_info, &allocation_info)
+                .expect("Line Index Data Creation failed");
+            MappedBuffer {
                 buffer,
                 count: 0,
                 allocation,
@@ -1232,7 +1255,7 @@ impl LineDrawData{
         let pipeline_layout = Self::create_pipeline_layout(vulkan_data, &set_layouts);
         let pipeline = Self::create_pipeline(vulkan_data, pipeline_layout);
 
-        Self{
+        Self {
             vertex_buffer,
             index_buffer,
             pipeline,
@@ -1242,12 +1265,15 @@ impl LineDrawData{
         }
     }
 
-    fn create_descriptor_sets(vulkan_data: &VulkanData) ->( Vec<vk::DescriptorSet>, Vec<vk::DescriptorSetLayout>){
+    fn create_descriptor_sets(
+        vulkan_data: &VulkanData,
+    ) -> (Vec<vk::DescriptorSet>, Vec<vk::DescriptorSetLayout>) {
         let bindings = [];
         let layout_info = vk::DescriptorSetLayoutCreateInfoBuilder::new().bindings(&bindings);
 
         let descriptor_set_layout = unsafe {
-            vulkan_data.device
+            vulkan_data
+                .device
                 .as_ref()
                 .unwrap()
                 .create_descriptor_set_layout(&layout_info, None)
@@ -1259,199 +1285,224 @@ impl LineDrawData{
         let allocate_info = vk::DescriptorSetAllocateInfoBuilder::new()
             .descriptor_pool(vulkan_data.descriptor_pool.unwrap())
             .set_layouts(&layouts);
-        (unsafe {
-            vulkan_data.device
+        (
+            unsafe {
+                vulkan_data
+                    .device
+                    .as_ref()
+                    .unwrap()
+                    .allocate_descriptor_sets(&allocate_info)
+            }
+            .unwrap()
+            .to_vec(),
+            layouts.into_iter().collect(),
+        )
+    }
+
+    fn create_pipeline_layout(
+        vulkan_data: &VulkanData,
+        descriptor_set_layouts: &[vk::DescriptorSetLayout],
+    ) -> vk::PipelineLayout {
+        let push_constant_range = vk::PushConstantRangeBuilder::new()
+            .offset(0)
+            .size(std::mem::size_of::<LinePushConstants>() as u32)
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
+        let push_constant_ranges = [push_constant_range];
+
+        let pipeline_layout_create_info = vk::PipelineLayoutCreateInfoBuilder::new()
+            .set_layouts(descriptor_set_layouts)
+            .push_constant_ranges(&push_constant_ranges);
+
+        unsafe {
+            vulkan_data
+                .device
                 .as_ref()
                 .unwrap()
-                .allocate_descriptor_sets(&allocate_info)
+                .create_pipeline_layout(&pipeline_layout_create_info, None)
         }
-        .unwrap().to_vec(), layouts.into_iter().collect())
-
+        .unwrap()
     }
 
-    fn create_pipeline_layout(vulkan_data: &VulkanData, descriptor_set_layouts: &[vk::DescriptorSetLayout]) -> vk::PipelineLayout{
-        let push_constant_range = vk::PushConstantRangeBuilder::new()
-        .offset(0)
-        .size(std::mem::size_of::<LinePushConstants>() as u32)
-        .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
-    let push_constant_ranges = [push_constant_range];
-
-    let pipeline_layout_create_info = vk::PipelineLayoutCreateInfoBuilder::new()
-        .set_layouts(descriptor_set_layouts)
-        .push_constant_ranges(&push_constant_ranges);
-
-    unsafe {
-        vulkan_data.device
-            .as_ref()
-            .unwrap()
-            .create_pipeline_layout(&pipeline_layout_create_info, None)
-    }
-    .unwrap()
-    }
-
-    fn create_pipeline(vulkan_data: &VulkanData, pipeline_layout: vk::PipelineLayout ) -> vk::Pipeline{
-
-
-            let binding_descriptions = vec![vk::VertexInputBindingDescriptionBuilder::new()
+    fn create_pipeline(
+        vulkan_data: &VulkanData,
+        pipeline_layout: vk::PipelineLayout,
+    ) -> vk::Pipeline {
+        let binding_descriptions = vec![vk::VertexInputBindingDescriptionBuilder::new()
             .binding(0)
             .stride(std::mem::size_of::<LineVertex>() as u32)
             .input_rate(vk::VertexInputRate::VERTEX)];
-            let attribute_descriptions = vec![
-                vk::VertexInputAttributeDescriptionBuilder::new()
-                    .binding(0)
-                    .location(0)
-                    .format(vk::Format::R32G32B32_SFLOAT)
-                    .offset(0),
-                vk::VertexInputAttributeDescriptionBuilder::new()
-                    .binding(0)
-                    .location(1)
-                    .format(vk::Format::R32G32B32A32_SFLOAT)
-                    .offset(12),
-            ];
-            let vertex_input_create_info = vk::PipelineVertexInputStateCreateInfoBuilder::new()
-                .vertex_binding_descriptions(&binding_descriptions)
-                .vertex_attribute_descriptions(&attribute_descriptions);
-    
-            let input_assembly_create_info = vk::PipelineInputAssemblyStateCreateInfoBuilder::new()
-                .topology(vk::PrimitiveTopology::LINE_LIST)
-                .primitive_restart_enable(false);
-            let viewport = vk::ViewportBuilder::new()
-                .x(0.0f32)
-                .y(0.0f32)
-                .width(vulkan_data.surface_capabilities.unwrap().current_extent.width as f32)
-                .height(vulkan_data.surface_capabilities.unwrap().current_extent.height as f32)
-                .min_depth(0.0f32)
-                .max_depth(1.0f32);
-    
-            let scissor = vk::Rect2DBuilder::new()
-                .offset(vk::Offset2D { x: 0, y: 0 })
-                .extent(vulkan_data.surface_capabilities.unwrap().current_extent);
-    
-            let viewports = [viewport];
-            let scissors = [scissor];
-            let viewport_state_create_info = vk::PipelineViewportStateCreateInfoBuilder::new()
-                .viewports(&viewports)
-                .scissors(&scissors);
-    
+        let attribute_descriptions = vec![
+            vk::VertexInputAttributeDescriptionBuilder::new()
+                .binding(0)
+                .location(0)
+                .format(vk::Format::R32G32B32_SFLOAT)
+                .offset(0),
+            vk::VertexInputAttributeDescriptionBuilder::new()
+                .binding(0)
+                .location(1)
+                .format(vk::Format::R32G32B32A32_SFLOAT)
+                .offset(12),
+        ];
+        let vertex_input_create_info = vk::PipelineVertexInputStateCreateInfoBuilder::new()
+            .vertex_binding_descriptions(&binding_descriptions)
+            .vertex_attribute_descriptions(&attribute_descriptions);
 
-            let line_raster = vk::PipelineRasterizationLineStateCreateInfoEXTBuilder::new()
+        let input_assembly_create_info = vk::PipelineInputAssemblyStateCreateInfoBuilder::new()
+            .topology(vk::PrimitiveTopology::LINE_LIST)
+            .primitive_restart_enable(false);
+        let viewport = vk::ViewportBuilder::new()
+            .x(0.0f32)
+            .y(0.0f32)
+            .width(
+                vulkan_data
+                    .surface_capabilities
+                    .unwrap()
+                    .current_extent
+                    .width as f32,
+            )
+            .height(
+                vulkan_data
+                    .surface_capabilities
+                    .unwrap()
+                    .current_extent
+                    .height as f32,
+            )
+            .min_depth(0.0f32)
+            .max_depth(1.0f32);
+
+        let scissor = vk::Rect2DBuilder::new()
+            .offset(vk::Offset2D { x: 0, y: 0 })
+            .extent(vulkan_data.surface_capabilities.unwrap().current_extent);
+
+        let viewports = [viewport];
+        let scissors = [scissor];
+        let viewport_state_create_info = vk::PipelineViewportStateCreateInfoBuilder::new()
+            .viewports(&viewports)
+            .scissors(&scissors);
+
+        let line_raster = vk::PipelineRasterizationLineStateCreateInfoEXTBuilder::new()
             .line_rasterization_mode(vk::LineRasterizationModeEXT::RECTANGULAR_SMOOTH_EXT)
             .stippled_line_enable(false);
-            let rasterizer = vk::PipelineRasterizationStateCreateInfoBuilder::new()
-                .depth_clamp_enable(false)
-                .rasterizer_discard_enable(false)
-                .polygon_mode(vk::PolygonMode::FILL)
-                .cull_mode(vk::CullModeFlags::NONE)
-                .front_face(vk::FrontFace::CLOCKWISE)
-                .depth_bias_enable(false)
-                .line_width(LINE_WIDTH)
-                .extend_from(&line_raster);
-    
-            let multisampling = vk::PipelineMultisampleStateCreateInfoBuilder::new()
-                .sample_shading_enable(false)
-                .rasterization_samples(vulkan_data.msaa_samples);
-    
-            let color_blend_attachment = vk::PipelineColorBlendAttachmentStateBuilder::new()
-                .color_write_mask(vk::ColorComponentFlags::all())
-                .blend_enable(true)
-                .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-                .color_blend_op(vk::BlendOp::ADD)
-                .src_alpha_blend_factor(vk::BlendFactor::ONE)
-                .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
-                .alpha_blend_op(vk::BlendOp::ADD);
-    
-            let color_blend_attachments = [color_blend_attachment];
-    
-            let color_blending = vk::PipelineColorBlendStateCreateInfoBuilder::new()
-                .logic_op_enable(false)
-                .logic_op(vk::LogicOp::OR)
-                .attachments(&color_blend_attachments);
-    
-            let vert_entry_string = CString::new("main").unwrap();
-            let frag_entry_string = CString::new("main").unwrap();
-    
-            let vert_shader_file = std::fs::read("shaders/line/vert.spv").unwrap();
-            let frag_shader_file = std::fs::read("shaders/line/frag.spv").unwrap();
-            let vert_shader_code = erupt::utils::decode_spv(&vert_shader_file).unwrap();
-            let frag_shader_code = erupt::utils::decode_spv(&frag_shader_file).unwrap();
-            let vert_shader_module =
-                VulkanData::create_shader_module(&vulkan_data.device.as_ref().unwrap(), vert_shader_code);
-            let frag_shader_module =
-                VulkanData::create_shader_module(&vulkan_data.device.as_ref().unwrap(), frag_shader_code);
-    
-            let vert_shader_stage_create_info = vk::PipelineShaderStageCreateInfoBuilder::new()
-                .stage(vk::ShaderStageFlagBits::VERTEX)
-                .module(vert_shader_module)
-                .name(vert_entry_string.as_c_str());
-            let frag_shader_stage_create_info = vk::PipelineShaderStageCreateInfoBuilder::new()
-                .stage(vk::ShaderStageFlagBits::FRAGMENT)
-                .module(frag_shader_module)
-                .name(frag_entry_string.as_c_str());
-            let shader_stages = vec![vert_shader_stage_create_info, frag_shader_stage_create_info];
-    
-            let depth_stencil = vk::PipelineDepthStencilStateCreateInfoBuilder::new()
-                .depth_test_enable(true)
-                .depth_write_enable(true)
-                .depth_compare_op(vk::CompareOp::LESS)
-                .depth_bounds_test_enable(false)
-                .min_depth_bounds(0.0)
-                .max_depth_bounds(1.0)
-                .stencil_test_enable(false);
+        let rasterizer = vk::PipelineRasterizationStateCreateInfoBuilder::new()
+            .depth_clamp_enable(false)
+            .rasterizer_discard_enable(false)
+            .polygon_mode(vk::PolygonMode::FILL)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::CLOCKWISE)
+            .depth_bias_enable(false)
+            .line_width(LINE_WIDTH)
+            .extend_from(&line_raster);
 
-            let dynamic_state = vk::PipelineDynamicStateCreateInfoBuilder::new().dynamic_states(&[vk::DynamicState::LINE_WIDTH]);
-            let pipeline_infos = [vk::GraphicsPipelineCreateInfoBuilder::new()
-                .stages(&shader_stages)
-                .vertex_input_state(&vertex_input_create_info)
-                .input_assembly_state(&input_assembly_create_info)
-                .viewport_state(&viewport_state_create_info)
-                .rasterization_state(&rasterizer)
-                .multisample_state(&multisampling)
-                .color_blend_state(&color_blending)
-                .layout(pipeline_layout)
-                .render_pass(vulkan_data.render_pass.unwrap())
-                .subpass(0)
-                .depth_stencil_state(&depth_stencil)
-                .dynamic_state(&dynamic_state)];
-    
-            let pipeline = unsafe {
-                vulkan_data.device
-                    .as_ref()
-                    .unwrap()
-                    .create_graphics_pipelines(None, &pipeline_infos, None)
-            }
-            .unwrap()[0];
-    
-            pipeline
+        let multisampling = vk::PipelineMultisampleStateCreateInfoBuilder::new()
+            .sample_shading_enable(false)
+            .rasterization_samples(vulkan_data.msaa_samples);
+
+        let color_blend_attachment = vk::PipelineColorBlendAttachmentStateBuilder::new()
+            .color_write_mask(vk::ColorComponentFlags::all())
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+            .alpha_blend_op(vk::BlendOp::ADD);
+
+        let color_blend_attachments = [color_blend_attachment];
+
+        let color_blending = vk::PipelineColorBlendStateCreateInfoBuilder::new()
+            .logic_op_enable(false)
+            .logic_op(vk::LogicOp::OR)
+            .attachments(&color_blend_attachments);
+
+        let vert_entry_string = CString::new("main").unwrap();
+        let frag_entry_string = CString::new("main").unwrap();
+
+        let vert_shader_file = std::fs::read("shaders/line/vert.spv").unwrap();
+        let frag_shader_file = std::fs::read("shaders/line/frag.spv").unwrap();
+        let vert_shader_code = erupt::utils::decode_spv(&vert_shader_file).unwrap();
+        let frag_shader_code = erupt::utils::decode_spv(&frag_shader_file).unwrap();
+        let vert_shader_module = VulkanData::create_shader_module(
+            &vulkan_data.device.as_ref().unwrap(),
+            vert_shader_code,
+        );
+        let frag_shader_module = VulkanData::create_shader_module(
+            &vulkan_data.device.as_ref().unwrap(),
+            frag_shader_code,
+        );
+
+        let vert_shader_stage_create_info = vk::PipelineShaderStageCreateInfoBuilder::new()
+            .stage(vk::ShaderStageFlagBits::VERTEX)
+            .module(vert_shader_module)
+            .name(vert_entry_string.as_c_str());
+        let frag_shader_stage_create_info = vk::PipelineShaderStageCreateInfoBuilder::new()
+            .stage(vk::ShaderStageFlagBits::FRAGMENT)
+            .module(frag_shader_module)
+            .name(frag_entry_string.as_c_str());
+        let shader_stages = vec![vert_shader_stage_create_info, frag_shader_stage_create_info];
+
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfoBuilder::new()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(vk::CompareOp::LESS)
+            .depth_bounds_test_enable(false)
+            .min_depth_bounds(0.0)
+            .max_depth_bounds(1.0)
+            .stencil_test_enable(false);
+
+        let dynamic_state = vk::PipelineDynamicStateCreateInfoBuilder::new()
+            .dynamic_states(&[vk::DynamicState::LINE_WIDTH]);
+        let pipeline_infos = [vk::GraphicsPipelineCreateInfoBuilder::new()
+            .stages(&shader_stages)
+            .vertex_input_state(&vertex_input_create_info)
+            .input_assembly_state(&input_assembly_create_info)
+            .viewport_state(&viewport_state_create_info)
+            .rasterization_state(&rasterizer)
+            .multisample_state(&multisampling)
+            .color_blend_state(&color_blending)
+            .layout(pipeline_layout)
+            .render_pass(vulkan_data.render_pass.unwrap())
+            .subpass(0)
+            .depth_stencil_state(&depth_stencil)
+            .dynamic_state(&dynamic_state)];
+
+        let pipeline = unsafe {
+            vulkan_data
+                .device
+                .as_ref()
+                .unwrap()
+                .create_graphics_pipelines(None, &pipeline_infos, None)
+        }
+        .unwrap()[0];
+
+        pipeline
     }
 
-    pub fn add_point(&mut self, point: Vector3<f32>) -> usize{
-        self.vertex_buffer.add_value(LineVertex{
+    pub fn add_point(&mut self, point: Vector3<f32>) -> usize {
+        self.vertex_buffer.add_value(LineVertex {
             position: point,
-            color: Vector4::new(1.0,1.0,1.0, 1.0),
+            color: Vector4::new(1.0, 1.0, 1.0, 1.0),
         });
         self.vertex_buffer.count - 1
     }
 
-    pub fn select_points(&mut self, point_indices: &[usize]){
-
-        for (index, vertex) in (&mut self.vertex_buffer).into_iter().enumerate(){
-            if point_indices.contains(&index){
+    pub fn select_points(&mut self, point_indices: &[usize]) {
+        for (index, vertex) in (&mut self.vertex_buffer).into_iter().enumerate() {
+            if point_indices.contains(&index) {
                 vertex.color.w = 1.0;
-            }else{
+            } else {
                 vertex.color.w = 0.1;
             }
         }
     }
 
-    pub fn set_color(&mut self, point_indices: &[usize], color: Vector4<f32>){
-        for &index in point_indices{
+    pub fn set_color(&mut self, point_indices: &[usize], color: Vector4<f32>) {
+        for &index in point_indices {
             self.vertex_buffer[index].color = color;
         }
     }
 
-    pub fn connect_points(&mut self, first_index: usize, second_index: usize){
-        if !self.index_map.insert((first_index, second_index)){
+    pub fn connect_points(&mut self, first_index: usize, second_index: usize) {
+        if !self.index_map.insert((first_index, second_index)) {
             return;
         }
         self.index_buffer.add_value(first_index as u32);
@@ -1460,12 +1511,12 @@ impl LineDrawData{
 }
 
 #[repr(C)]
-pub struct ElevationVertex{
+pub struct ElevationVertex {
     pub position: Vector3<f32>,
     pub elevation: f32,
 }
 
-pub struct CubemapRender{
+pub struct CubemapRender {
     vertex_buffer: UnmappedBuffer<ElevationVertex>,
     index_buffer: UnmappedBuffer<u32>,
     image: CombinedImage,
@@ -1474,38 +1525,48 @@ pub struct CubemapRender{
     pipeline_layout: vk::PipelineLayout,
     descriptor_sets: Vec<vk::DescriptorSet>,
 }
-impl CubemapRender{
-
+impl CubemapRender {
     pub const CUBEMAP_WIDTH: u32 = 128;
 
-    pub fn new(vulkan_data: &VulkanData, vertices: &[ElevationVertex], indices: &[u32]) -> Self{
+    pub fn new(vulkan_data: &VulkanData, vertices: &[ElevationVertex], indices: &[u32]) -> Self {
         let (descriptor_sets, set_layouts) = Self::create_descriptor_sets(vulkan_data);
         let renderpass = Self::create_render_pass(vulkan_data);
         let pipeline_layout = Self::create_pipeline_layout(vulkan_data, &set_layouts);
         let pipeline = Self::create_pipeline(vulkan_data, pipeline_layout, renderpass);
 
-        let vertex_buffer = UnmappedBuffer::new(vulkan_data,vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST, vertices);
-        let index_buffer = UnmappedBuffer::new(vulkan_data,vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST, indices);
-
+        let vertex_buffer = UnmappedBuffer::new(
+            vulkan_data,
+            vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            vertices,
+        );
+        let index_buffer = UnmappedBuffer::new(
+            vulkan_data,
+            vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            indices,
+        );
 
         // let image = vulkan_data.create_blank_cubemap(Self::CUBEMAP_WIDTH, Self::CUBEMAP_WIDTH, 1,vk::Format::R32_SFLOAT);
         let image = {
             let image_info = vk::ImageCreateInfoBuilder::new()
-            .image_type(vk::ImageType::_2D)
-            .flags(vk::ImageCreateFlags::CUBE_COMPATIBLE)
-            .extent(vk::Extent3D {
-                width:Self::CUBEMAP_WIDTH,
-                height: Self::CUBEMAP_WIDTH,
-                depth: 1,
-            })
-            .mip_levels(1)
-            .array_layers(6)
-            .format(vk::Format::R32_SFLOAT)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
-            .samples(vk::SampleCountFlagBits::_1)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+                .image_type(vk::ImageType::_2D)
+                .flags(vk::ImageCreateFlags::CUBE_COMPATIBLE)
+                .extent(vk::Extent3D {
+                    width: Self::CUBEMAP_WIDTH,
+                    height: Self::CUBEMAP_WIDTH,
+                    depth: 1,
+                })
+                .mip_levels(1)
+                .array_layers(6)
+                .format(vk::Format::R32_SFLOAT)
+                .tiling(vk::ImageTiling::OPTIMAL)
+                .initial_layout(vk::ImageLayout::UNDEFINED)
+                .usage(
+                    vk::ImageUsageFlags::COLOR_ATTACHMENT
+                        | vk::ImageUsageFlags::SAMPLED
+                        | vk::ImageUsageFlags::TRANSFER_SRC,
+                )
+                .samples(vk::SampleCountFlagBits::_1)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
             let allocation_info = vk_mem_erupt::AllocationCreateInfo {
                 usage: vk_mem_erupt::MemoryUsage::GpuOnly,
@@ -1531,7 +1592,8 @@ impl CubemapRender{
                     layer_count: 6,
                 });
             let image_view = unsafe {
-                vulkan_data.device
+                vulkan_data
+                    .device
                     .as_ref()
                     .unwrap()
                     .create_image_view(&image_view_create_info, None)
@@ -1556,7 +1618,8 @@ impl CubemapRender{
                 .max_lod(vk::LOD_CLAMP_NONE);
 
             let sampler = unsafe {
-                vulkan_data.device
+                vulkan_data
+                    .device
                     .as_ref()
                     .unwrap()
                     .create_sampler(&sampler_create_info, None)
@@ -1598,13 +1661,11 @@ impl CubemapRender{
                 sampler,
                 allocation,
                 width: Self::CUBEMAP_WIDTH,
-                height:  Self::CUBEMAP_WIDTH,
+                height: Self::CUBEMAP_WIDTH,
             }
-
         };
 
-
-        Self{
+        Self {
             vertex_buffer,
             index_buffer,
             renderpass,
@@ -1615,12 +1676,15 @@ impl CubemapRender{
         }
     }
 
-    fn create_descriptor_sets(vulkan_data: &VulkanData) ->( Vec<vk::DescriptorSet>, Vec<vk::DescriptorSetLayout>){
+    fn create_descriptor_sets(
+        vulkan_data: &VulkanData,
+    ) -> (Vec<vk::DescriptorSet>, Vec<vk::DescriptorSetLayout>) {
         let bindings = [];
         let layout_info = vk::DescriptorSetLayoutCreateInfoBuilder::new().bindings(&bindings);
 
         let descriptor_set_layout = unsafe {
-            vulkan_data.device
+            vulkan_data
+                .device
                 .as_ref()
                 .unwrap()
                 .create_descriptor_set_layout(&layout_info, None)
@@ -1632,18 +1696,21 @@ impl CubemapRender{
         let allocate_info = vk::DescriptorSetAllocateInfoBuilder::new()
             .descriptor_pool(vulkan_data.descriptor_pool.unwrap())
             .set_layouts(&layouts);
-        (unsafe {
-            vulkan_data.device
-                .as_ref()
-                .unwrap()
-                .allocate_descriptor_sets(&allocate_info)
-        }
-        .unwrap().to_vec(), layouts.into_iter().collect())
-
+        (
+            unsafe {
+                vulkan_data
+                    .device
+                    .as_ref()
+                    .unwrap()
+                    .allocate_descriptor_sets(&allocate_info)
+            }
+            .unwrap()
+            .to_vec(),
+            layouts.into_iter().collect(),
+        )
     }
 
-    fn create_render_pass(vulkan_data: &VulkanData) -> vk::RenderPass{
-
+    fn create_render_pass(vulkan_data: &VulkanData) -> vk::RenderPass {
         let attachments = [vk::AttachmentDescriptionBuilder::new()
             .format(vk::Format::R32_SFLOAT)
             .load_op(vk::AttachmentLoadOp::CLEAR)
@@ -1654,231 +1721,249 @@ impl CubemapRender{
             .final_layout(vk::ImageLayout::GENERAL)
             .samples(vk::SampleCountFlagBits::_1)];
 
+        let color_attachments = [vk::AttachmentReferenceBuilder::new()
+            .attachment(0)
+            .layout(vk::ImageLayout::ATTACHMENT_OPTIMAL_KHR)];
 
-        let color_attachments = [
-            vk::AttachmentReferenceBuilder::new().attachment(0).layout(vk::ImageLayout::ATTACHMENT_OPTIMAL_KHR)
-        ];
-
-        let subpasses = [
-            vk::SubpassDescriptionBuilder::new()
+        let subpasses = [vk::SubpassDescriptionBuilder::new()
             .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-            .color_attachments(&color_attachments)
-        ];
+            .color_attachments(&color_attachments)];
 
+        //     let dependencies = [
+        //         vk::SubpassDependencyBuilder::new()
+        //         .src_subpass(vk::SUBPASS_EXTERNAL)
+        //         .dst_subpass(0)
+        //         .src_stage_mask(vk::PipelineStageFlags::ALL_GRAPHICS)
+        //         .dst_stage_mask(vk::PipelineStageFlags::ALL_GRAPHICS)
+        //         .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+        //         .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+        // ];
 
-    //     let dependencies = [
-    //         vk::SubpassDependencyBuilder::new()
-    //         .src_subpass(vk::SUBPASS_EXTERNAL)
-    //         .dst_subpass(0)
-    //         .src_stage_mask(vk::PipelineStageFlags::ALL_GRAPHICS)
-    //         .dst_stage_mask(vk::PipelineStageFlags::ALL_GRAPHICS)
-    //         .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-    //         .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-    // ];
+        let dependencies = [vk::SubpassDependencyBuilder::new()
+            .src_subpass(vk::SUBPASS_EXTERNAL)
+            .dst_subpass(0)
+            .src_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            )
+            .src_access_mask(vk::AccessFlags::empty())
+            .dst_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            )
+            .dst_access_mask(
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+            )];
 
-    let dependencies = [vk::SubpassDependencyBuilder::new()
-    .src_subpass(vk::SUBPASS_EXTERNAL)
-    .dst_subpass(0)
-    .src_stage_mask(
-        vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-            | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-    )
-    .src_access_mask(vk::AccessFlags::empty())
-    .dst_stage_mask(
-        vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-            | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-    )
-    .dst_access_mask(
-        vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-            | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-    )];
+        let multiview = vk::RenderPassMultiviewCreateInfoBuilder::new()
+            .view_masks(&[0b00111111])
+            .correlation_masks(&[0]);
 
-        let multiview = vk::RenderPassMultiviewCreateInfoBuilder::new().view_masks(&[0b00111111]).correlation_masks(&[0]);
-
-        let render_pass_create_info = 
-            vk::RenderPassCreateInfoBuilder::new()
+        let render_pass_create_info = vk::RenderPassCreateInfoBuilder::new()
             .attachments(&attachments)
             .subpasses(&subpasses)
             .dependencies(&dependencies)
             .extend_from(&multiview);
-        unsafe{
-            vulkan_data.device.as_ref().unwrap().create_render_pass(&render_pass_create_info, None).unwrap()
+        unsafe {
+            vulkan_data
+                .device
+                .as_ref()
+                .unwrap()
+                .create_render_pass(&render_pass_create_info, None)
+                .unwrap()
         }
-
     }
 
-    fn create_pipeline_layout(vulkan_data: &VulkanData, descriptor_set_layouts: &[vk::DescriptorSetLayout]) -> vk::PipelineLayout{
-        let pipeline_layout_create_info = vk::PipelineLayoutCreateInfoBuilder::new()
-        .set_layouts(descriptor_set_layouts);
+    fn create_pipeline_layout(
+        vulkan_data: &VulkanData,
+        descriptor_set_layouts: &[vk::DescriptorSetLayout],
+    ) -> vk::PipelineLayout {
+        let pipeline_layout_create_info =
+            vk::PipelineLayoutCreateInfoBuilder::new().set_layouts(descriptor_set_layouts);
 
-    unsafe {
-        vulkan_data.device
-            .as_ref()
-            .unwrap()
-            .create_pipeline_layout(&pipeline_layout_create_info, None)
+        unsafe {
+            vulkan_data
+                .device
+                .as_ref()
+                .unwrap()
+                .create_pipeline_layout(&pipeline_layout_create_info, None)
+        }
+        .unwrap()
     }
-    .unwrap()
-    }
 
-    fn create_pipeline(vulkan_data: &VulkanData, pipeline_layout: vk::PipelineLayout, renderpass:vk::RenderPass) -> vk::Pipeline{
-
-
-            let binding_descriptions = vec![vk::VertexInputBindingDescriptionBuilder::new()
+    fn create_pipeline(
+        vulkan_data: &VulkanData,
+        pipeline_layout: vk::PipelineLayout,
+        renderpass: vk::RenderPass,
+    ) -> vk::Pipeline {
+        let binding_descriptions = vec![vk::VertexInputBindingDescriptionBuilder::new()
             .binding(0)
             .stride(std::mem::size_of::<ElevationVertex>() as u32)
             .input_rate(vk::VertexInputRate::VERTEX)];
-            let attribute_descriptions = vec![
-                vk::VertexInputAttributeDescriptionBuilder::new()
-                    .binding(0)
-                    .location(0)
-                    .format(vk::Format::R32G32B32_SFLOAT)
-                    .offset(0),
-                vk::VertexInputAttributeDescriptionBuilder::new()
-                    .binding(0)
-                    .location(1)
-                    .format(vk::Format::R32_SFLOAT)
-                    .offset(12),
-            ];
-            let vertex_input_create_info = vk::PipelineVertexInputStateCreateInfoBuilder::new()
-                .vertex_binding_descriptions(&binding_descriptions)
-                .vertex_attribute_descriptions(&attribute_descriptions);
-    
-            let input_assembly_create_info = vk::PipelineInputAssemblyStateCreateInfoBuilder::new()
-                .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-                .primitive_restart_enable(false);
-            let viewport = vk::ViewportBuilder::new()
-                .x(0.0f32)
-                .y(0.0f32)
-                .width(Self::CUBEMAP_WIDTH as f32)
-                .height(Self::CUBEMAP_WIDTH as f32)
-                .min_depth(0.0f32)
-                .max_depth(1.0f32);
-    
-            let scissor = vk::Rect2DBuilder::new()
-                .offset(vk::Offset2D { x: 0, y: 0 })
-                .extent(vk::Extent2DBuilder::new().height(Self::CUBEMAP_WIDTH).width(Self::CUBEMAP_WIDTH).build());
-    
-            let viewports = [viewport];
-            let scissors = [scissor];
-            let viewport_state_create_info = vk::PipelineViewportStateCreateInfoBuilder::new()
-                .viewports(&viewports)
-                .scissors(&scissors);
-    
+        let attribute_descriptions = vec![
+            vk::VertexInputAttributeDescriptionBuilder::new()
+                .binding(0)
+                .location(0)
+                .format(vk::Format::R32G32B32_SFLOAT)
+                .offset(0),
+            vk::VertexInputAttributeDescriptionBuilder::new()
+                .binding(0)
+                .location(1)
+                .format(vk::Format::R32_SFLOAT)
+                .offset(12),
+        ];
+        let vertex_input_create_info = vk::PipelineVertexInputStateCreateInfoBuilder::new()
+            .vertex_binding_descriptions(&binding_descriptions)
+            .vertex_attribute_descriptions(&attribute_descriptions);
 
-            let rasterizer = vk::PipelineRasterizationStateCreateInfoBuilder::new()
-                .depth_clamp_enable(false)
-                .rasterizer_discard_enable(false)
-                .polygon_mode(vk::PolygonMode::FILL)
-                .cull_mode(vk::CullModeFlags::NONE)
-                .front_face(vk::FrontFace::CLOCKWISE)
-                .depth_bias_enable(false)
-                .line_width(1.0);
-    
-            let multisampling = vk::PipelineMultisampleStateCreateInfoBuilder::new()
-                .sample_shading_enable(false)
-                .rasterization_samples(vk::SampleCountFlagBits::_1);
-    
-            let color_blend_attachment = vk::PipelineColorBlendAttachmentStateBuilder::new()
-                .color_write_mask(vk::ColorComponentFlags::all())
-                .blend_enable(false)
-                .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-                .color_blend_op(vk::BlendOp::ADD)
-                .src_alpha_blend_factor(vk::BlendFactor::ONE)
-                .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
-                .alpha_blend_op(vk::BlendOp::ADD);
-    
-            let color_blend_attachments = [color_blend_attachment];
-    
-            let color_blending = vk::PipelineColorBlendStateCreateInfoBuilder::new()
-                .logic_op_enable(false)
-                .logic_op(vk::LogicOp::OR)
-                .attachments(&color_blend_attachments);
-    
-            let vert_entry_string = CString::new("main").unwrap();
-            let frag_entry_string = CString::new("main").unwrap();
-    
-            let vert_shader_file = std::fs::read("shaders/cubemap/vert.spv").unwrap();
-            let frag_shader_file = std::fs::read("shaders/cubemap/frag.spv").unwrap();
-            let vert_shader_code = erupt::utils::decode_spv(&vert_shader_file).unwrap();
-            let frag_shader_code = erupt::utils::decode_spv(&frag_shader_file).unwrap();
-            let vert_shader_module =
-                VulkanData::create_shader_module(&vulkan_data.device.as_ref().unwrap(), vert_shader_code);
-            let frag_shader_module =
-                VulkanData::create_shader_module(&vulkan_data.device.as_ref().unwrap(), frag_shader_code);
-    
-            let vert_shader_stage_create_info = vk::PipelineShaderStageCreateInfoBuilder::new()
-                .stage(vk::ShaderStageFlagBits::VERTEX)
-                .module(vert_shader_module)
-                .name(vert_entry_string.as_c_str());
-            let frag_shader_stage_create_info = vk::PipelineShaderStageCreateInfoBuilder::new()
-                .stage(vk::ShaderStageFlagBits::FRAGMENT)
-                .module(frag_shader_module)
-                .name(frag_entry_string.as_c_str());
-            let shader_stages = vec![vert_shader_stage_create_info, frag_shader_stage_create_info];
-    
-            let depth_stencil = vk::PipelineDepthStencilStateCreateInfoBuilder::new()
-                .depth_test_enable(false)
-                .depth_write_enable(false)
-                .depth_compare_op(vk::CompareOp::ALWAYS)
-                .depth_bounds_test_enable(false)
-                .min_depth_bounds(0.0)
-                .max_depth_bounds(1.0)
-                .stencil_test_enable(false);
+        let input_assembly_create_info = vk::PipelineInputAssemblyStateCreateInfoBuilder::new()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+            .primitive_restart_enable(false);
+        let viewport = vk::ViewportBuilder::new()
+            .x(0.0f32)
+            .y(0.0f32)
+            .width(Self::CUBEMAP_WIDTH as f32)
+            .height(Self::CUBEMAP_WIDTH as f32)
+            .min_depth(0.0f32)
+            .max_depth(1.0f32);
 
-            let pipeline_infos = [vk::GraphicsPipelineCreateInfoBuilder::new()
-                .stages(&shader_stages)
-                .vertex_input_state(&vertex_input_create_info)
-                .input_assembly_state(&input_assembly_create_info)
-                .viewport_state(&viewport_state_create_info)
-                .rasterization_state(&rasterizer)
-                .multisample_state(&multisampling)
-                .color_blend_state(&color_blending)
-                .layout(pipeline_layout)
-                .render_pass(renderpass)
-                .subpass(0)
-                .depth_stencil_state(&depth_stencil)];
-    
-            let pipeline = unsafe {
-                vulkan_data.device
-                    .as_ref()
-                    .unwrap()
-                    .create_graphics_pipelines(None, &pipeline_infos, None)
-            }
-            .unwrap()[0];
-    
-            pipeline
+        let scissor = vk::Rect2DBuilder::new()
+            .offset(vk::Offset2D { x: 0, y: 0 })
+            .extent(
+                vk::Extent2DBuilder::new()
+                    .height(Self::CUBEMAP_WIDTH)
+                    .width(Self::CUBEMAP_WIDTH)
+                    .build(),
+            );
+
+        let viewports = [viewport];
+        let scissors = [scissor];
+        let viewport_state_create_info = vk::PipelineViewportStateCreateInfoBuilder::new()
+            .viewports(&viewports)
+            .scissors(&scissors);
+
+        let rasterizer = vk::PipelineRasterizationStateCreateInfoBuilder::new()
+            .depth_clamp_enable(false)
+            .rasterizer_discard_enable(false)
+            .polygon_mode(vk::PolygonMode::FILL)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::CLOCKWISE)
+            .depth_bias_enable(false)
+            .line_width(1.0);
+
+        let multisampling = vk::PipelineMultisampleStateCreateInfoBuilder::new()
+            .sample_shading_enable(false)
+            .rasterization_samples(vk::SampleCountFlagBits::_1);
+
+        let color_blend_attachment = vk::PipelineColorBlendAttachmentStateBuilder::new()
+            .color_write_mask(vk::ColorComponentFlags::all())
+            .blend_enable(false)
+            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+            .alpha_blend_op(vk::BlendOp::ADD);
+
+        let color_blend_attachments = [color_blend_attachment];
+
+        let color_blending = vk::PipelineColorBlendStateCreateInfoBuilder::new()
+            .logic_op_enable(false)
+            .logic_op(vk::LogicOp::OR)
+            .attachments(&color_blend_attachments);
+
+        let vert_entry_string = CString::new("main").unwrap();
+        let frag_entry_string = CString::new("main").unwrap();
+
+        let vert_shader_file = std::fs::read("shaders/cubemap/vert.spv").unwrap();
+        let frag_shader_file = std::fs::read("shaders/cubemap/frag.spv").unwrap();
+        let vert_shader_code = erupt::utils::decode_spv(&vert_shader_file).unwrap();
+        let frag_shader_code = erupt::utils::decode_spv(&frag_shader_file).unwrap();
+        let vert_shader_module = VulkanData::create_shader_module(
+            &vulkan_data.device.as_ref().unwrap(),
+            vert_shader_code,
+        );
+        let frag_shader_module = VulkanData::create_shader_module(
+            &vulkan_data.device.as_ref().unwrap(),
+            frag_shader_code,
+        );
+
+        let vert_shader_stage_create_info = vk::PipelineShaderStageCreateInfoBuilder::new()
+            .stage(vk::ShaderStageFlagBits::VERTEX)
+            .module(vert_shader_module)
+            .name(vert_entry_string.as_c_str());
+        let frag_shader_stage_create_info = vk::PipelineShaderStageCreateInfoBuilder::new()
+            .stage(vk::ShaderStageFlagBits::FRAGMENT)
+            .module(frag_shader_module)
+            .name(frag_entry_string.as_c_str());
+        let shader_stages = vec![vert_shader_stage_create_info, frag_shader_stage_create_info];
+
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfoBuilder::new()
+            .depth_test_enable(false)
+            .depth_write_enable(false)
+            .depth_compare_op(vk::CompareOp::ALWAYS)
+            .depth_bounds_test_enable(false)
+            .min_depth_bounds(0.0)
+            .max_depth_bounds(1.0)
+            .stencil_test_enable(false);
+
+        let pipeline_infos = [vk::GraphicsPipelineCreateInfoBuilder::new()
+            .stages(&shader_stages)
+            .vertex_input_state(&vertex_input_create_info)
+            .input_assembly_state(&input_assembly_create_info)
+            .viewport_state(&viewport_state_create_info)
+            .rasterization_state(&rasterizer)
+            .multisample_state(&multisampling)
+            .color_blend_state(&color_blending)
+            .layout(pipeline_layout)
+            .render_pass(renderpass)
+            .subpass(0)
+            .depth_stencil_state(&depth_stencil)];
+
+        let pipeline = unsafe {
+            vulkan_data
+                .device
+                .as_ref()
+                .unwrap()
+                .create_graphics_pipelines(None, &pipeline_infos, None)
+        }
+        .unwrap()[0];
+
+        pipeline
     }
 
-    pub fn render(&mut self, vulkan_data: &VulkanData){
+    pub fn render(&mut self, vulkan_data: &VulkanData) {
         let command_buffer = vulkan_data.begin_single_time_commands();
         let device = vulkan_data.device.as_ref().unwrap();
 
         let attachments = [self.image.image_view];
 
         let framebuffer_create_info = vk::FramebufferCreateInfoBuilder::new()
-        .render_pass(self.renderpass)
-        .attachments(&attachments)
-        .width(Self::CUBEMAP_WIDTH)
-        .height(Self::CUBEMAP_WIDTH)
-        .layers(1);
-        
-        let framebuffer = unsafe { device.create_framebuffer(&framebuffer_create_info, None)}.unwrap();
+            .render_pass(self.renderpass)
+            .attachments(&attachments)
+            .width(Self::CUBEMAP_WIDTH)
+            .height(Self::CUBEMAP_WIDTH)
+            .layers(1);
 
-        let clear_colors = vec![
-            vk::ClearValue {
-                color: vk::ClearColorValue {
-                    float32: [f32::NAN, f32::NAN, f32::NAN, f32::NAN],
-                },
-            }
-        ];
+        let framebuffer =
+            unsafe { device.create_framebuffer(&framebuffer_create_info, None) }.unwrap();
+
+        let clear_colors = vec![vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: [f32::NAN, f32::NAN, f32::NAN, f32::NAN],
+            },
+        }];
 
         let render_pass_info = vk::RenderPassBeginInfoBuilder::new()
             .render_pass(self.renderpass)
             .framebuffer(framebuffer)
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
-                extent: vk::Extent2D {width: Self::CUBEMAP_WIDTH, height: Self::CUBEMAP_WIDTH}
+                extent: vk::Extent2D {
+                    width: Self::CUBEMAP_WIDTH,
+                    height: Self::CUBEMAP_WIDTH,
+                },
             })
             .clear_values(&clear_colors);
         unsafe {
@@ -1893,14 +1978,9 @@ impl CubemapRender{
                 self.pipeline,
             );
 
-        let vertex_buffers = [self.vertex_buffer.buffer];
-        let offsets = [0 as vk::DeviceSize];
-            device.cmd_bind_vertex_buffers(
-                command_buffer,
-                0,
-                &vertex_buffers,
-                &offsets,
-            )
+            let vertex_buffers = [self.vertex_buffer.buffer];
+            let offsets = [0 as vk::DeviceSize];
+            device.cmd_bind_vertex_buffers(command_buffer, 0, &vertex_buffers, &offsets)
         };
 
         unsafe {
@@ -1924,13 +2004,18 @@ impl CubemapRender{
             device.cmd_draw_indexed(command_buffer, self.index_buffer.count as u32, 1, 0, 0, 0);
 
             device.cmd_end_render_pass(command_buffer)
-
         }
         vulkan_data.end_single_time_commands(command_buffer);
     }
 
-    pub fn get_normal(&self, vulkan_data: &mut VulkanData) -> CombinedImage{
-        let normal_cubemap = vulkan_data.create_blank_cubemap(2048, 2048, 1, vk::Format::R32G32B32A32_SFLOAT, vk::ImageLayout::GENERAL);
+    pub fn get_normal(&self, vulkan_data: &mut VulkanData) -> CombinedImage {
+        let normal_cubemap = vulkan_data.create_blank_cubemap(
+            2048,
+            2048,
+            1,
+            vk::Format::R32G32B32A32_SFLOAT,
+            vk::ImageLayout::GENERAL,
+        );
         let combined_descriptors = [
             CombinedDescriptor {
                 descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
@@ -1994,27 +2079,29 @@ impl CubemapRender{
         vulkan_data.end_single_time_commands(command_buffer);
         normal_cubemap
     }
-    pub fn into_image(&self, vulkan_data: &VulkanData) -> Vec<f32>{
-        
-
-        let float_count = (6*Self::CUBEMAP_WIDTH * Self::CUBEMAP_WIDTH) as usize;
+    pub fn into_image(&self, vulkan_data: &VulkanData) -> Vec<f32> {
+        let float_count = (6 * Self::CUBEMAP_WIDTH * Self::CUBEMAP_WIDTH) as usize;
         let (transfer_buffer, transfer_allocation, transfer_allocation_info) = {
             let buffer_info = vk::BufferCreateInfoBuilder::new()
-            .size((float_count * size_of::<f32>()) as u64)
-            .usage(vk::BufferUsageFlags::TRANSFER_DST);
+                .size((float_count * size_of::<f32>()) as u64)
+                .usage(vk::BufferUsageFlags::TRANSFER_DST);
             let allocation_info = vk_mem_erupt::AllocationCreateInfo {
                 usage: vk_mem_erupt::MemoryUsage::GpuToCpu,
-                flags: vk_mem_erupt::AllocationCreateFlags::MAPPED, 
-                required_flags: vk::MemoryPropertyFlags::empty(), 
-                preferred_flags: vk::MemoryPropertyFlags::empty(), 
-                memory_type_bits: u32::MAX, 
-                pool: None, 
-                user_data: None
+                flags: vk_mem_erupt::AllocationCreateFlags::MAPPED,
+                required_flags: vk::MemoryPropertyFlags::empty(),
+                preferred_flags: vk::MemoryPropertyFlags::empty(),
+                memory_type_bits: u32::MAX,
+                pool: None,
+                user_data: None,
             };
 
-            vulkan_data.allocator.as_ref().unwrap().create_buffer(&buffer_info, &allocation_info).expect("Transfer buffer failed")
+            vulkan_data
+                .allocator
+                .as_ref()
+                .unwrap()
+                .create_buffer(&buffer_info, &allocation_info)
+                .expect("Transfer buffer failed")
         };
-
 
         let command_buffer = vulkan_data.begin_single_time_commands();
 
@@ -2036,33 +2123,38 @@ impl CubemapRender{
             });
 
         unsafe {
-            vulkan_data.device.as_ref().unwrap().cmd_copy_image_to_buffer(
-                command_buffer,
-                self.image.image,
-                vk::ImageLayout::GENERAL,
-                transfer_buffer,
-                &[region],
-            )
+            vulkan_data
+                .device
+                .as_ref()
+                .unwrap()
+                .cmd_copy_image_to_buffer(
+                    command_buffer,
+                    self.image.image,
+                    vk::ImageLayout::GENERAL,
+                    transfer_buffer,
+                    &[region],
+                )
         };
 
         vulkan_data.end_single_time_commands(command_buffer);
 
-
-
         let mut out = Vec::with_capacity(float_count);
 
-        unsafe{
-            (transfer_allocation_info.get_mapped_data() as *mut f32).copy_to_nonoverlapping(out.as_mut_ptr(), float_count);
+        unsafe {
+            (transfer_allocation_info.get_mapped_data() as *mut f32)
+                .copy_to_nonoverlapping(out.as_mut_ptr(), float_count);
             out.set_len(float_count);
         }
 
-        vulkan_data.allocator.as_ref().unwrap().destroy_buffer(transfer_buffer, &transfer_allocation);
+        vulkan_data
+            .allocator
+            .as_ref()
+            .unwrap()
+            .destroy_buffer(transfer_buffer, &transfer_allocation);
 
         out
     }
 }
-
-
 
 //TODO: Clean this up, maybe split it into multiple structs so it's less of a mess
 pub struct VulkanData {
@@ -2161,8 +2253,11 @@ impl VulkanData {
         // }
 
         let lights = [
-            Light::new(Vector3::zeros(), Vector3::new(1.0,1.0,1.0)),
-            Light::new(Vector3::new((World::RADIUS * 2.0) as f32, 0.0, 0.0), Vector3::new(254.0/255.0, 196.0/255.0, 127.0/255.0) * 4.06e13),
+            Light::new(Vector3::zeros(), Vector3::new(1.0, 1.0, 1.0)),
+            Light::new(
+                Vector3::new((World::RADIUS * 2.0) as f32, 0.0, 0.0),
+                Vector3::new(254.0 / 255.0, 196.0 / 255.0, 127.0 / 255.0) * 4.06e13,
+            ),
         ];
         let uniform_buffer_object = UniformBufferObject {
             view: Matrix4::identity(),
@@ -2378,14 +2473,17 @@ impl VulkanData {
             .position(|queue| queue.queue_flags.contains(vk::QueueFlags::GRAPHICS))
             .unwrap() as u32,
         );
-        let queue_create_info = vk::DeviceQueueCreateInfoBuilder::new() 
+        let queue_create_info = vk::DeviceQueueCreateInfoBuilder::new()
             .queue_family_index(self.main_queue_index.unwrap())
             .queue_priorities(&[1.0f32]);
         let queue_create_infos = &[queue_create_info];
 
-        let device_features = vk::PhysicalDeviceFeaturesBuilder::new().sampler_anisotropy(true).wide_lines(true);
+        let device_features = vk::PhysicalDeviceFeaturesBuilder::new()
+            .sampler_anisotropy(true)
+            .wide_lines(true);
 
-        let mut multiview_features = vk::PhysicalDeviceMultiviewFeaturesBuilder::new().multiview(true);
+        let mut multiview_features =
+            vk::PhysicalDeviceMultiviewFeaturesBuilder::new().multiview(true);
         // let mut multiview_properties = vk1_1::PhysicalDeviceMultiviewPropertiesBuilder::new().max_multiview_instance_index(6).max_multiview_view_count(6);
 
         let mut extended_dynamic_state_features =
@@ -3354,7 +3452,6 @@ impl VulkanData {
                 .descriptor_count(NUM_MODELS as u32)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
-
         ];
 
         let layout_info =
@@ -3581,18 +3678,14 @@ impl VulkanData {
                     .range(size_of::<ShaderStorageBufferObject>() as vk::DeviceSize)
                     .offset(0)];
 
-                let planet_normal_info = match &self.planet_normal_map{
-                    Some(planet_normal_map) => {
-                        Some([vk::DescriptorImageInfoBuilder::new()
+                let planet_normal_info = match &self.planet_normal_map {
+                    Some(planet_normal_map) => Some([vk::DescriptorImageInfoBuilder::new()
                         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                         .image_view(planet_normal_map.image_view)
-                        .sampler(planet_normal_map.sampler)])
-                    },
+                        .sampler(planet_normal_map.sampler)]),
                     None => None,
                 };
 
-                
-                
                 let mut images_3d_info = vec![];
                 for image_3d in &self.images_3d {
                     images_3d_info.push(
@@ -3674,25 +3767,25 @@ impl VulkanData {
                         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                         .image_info(&cpu_image_infos),
                 ];
-                match &planet_normal_info{
-                    Some(planet_normal_info) => {
-                        descriptor_writes.push(vk::WriteDescriptorSetBuilder::new()
+                match &planet_normal_info {
+                    Some(planet_normal_info) => descriptor_writes.push(
+                        vk::WriteDescriptorSetBuilder::new()
+                            .dst_set(*descriptor_set)
+                            .dst_binding(10)
+                            .dst_array_element(0)
+                            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                            .image_info(planet_normal_info),
+                    ),
+                    None => {}
+                }
+                descriptor_writes.push(
+                    vk::WriteDescriptorSetBuilder::new()
                         .dst_set(*descriptor_set)
-                        .dst_binding(10)
+                        .dst_binding(11)
                         .dst_array_element(0)
                         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .image_info(planet_normal_info))
-
-                    },
-                    None => {},
-                }
-                descriptor_writes.push(vk::WriteDescriptorSetBuilder::new()
-                    .dst_set(*descriptor_set)
-                    .dst_binding(11)
-                    .dst_array_element(0)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(&images_3d_info));
-
+                        .image_info(&images_3d_info),
+                );
 
                 unsafe {
                     self.device
@@ -4328,7 +4421,7 @@ impl VulkanData {
         };
     }
 
-    fn create_line_data(&mut self){
+    fn create_line_data(&mut self) {
         let line_data = LineDrawData::new(self);
         self.line_data = Some(line_data);
     }
@@ -4343,8 +4436,6 @@ impl VulkanData {
             self.create_index_buffer();
         }
     }
-
-
 
     fn find_memory_type(&self, type_filter: u32, properties: vk::MemoryPropertyFlags) -> u32 {
         let memory_properties = unsafe {
@@ -5317,9 +5408,8 @@ impl VulkanData {
                         .cmd_set_depth_test_enable_ext(*command_buffer, true)
                 };
 
-                if let Some(line_data) = &self.line_data{
-                    unsafe{
-
+                if let Some(line_data) = &self.line_data {
+                    unsafe {
                         self.device.as_ref().unwrap().cmd_bind_pipeline(
                             *command_buffer,
                             vk::PipelineBindPoint::GRAPHICS,
@@ -5332,7 +5422,7 @@ impl VulkanData {
                             &[line_data.vertex_buffer.buffer],
                             &offsets,
                         );
-        
+
                         self.device.as_ref().unwrap().cmd_bind_index_buffer(
                             *command_buffer,
                             line_data.index_buffer.buffer,
@@ -5348,9 +5438,13 @@ impl VulkanData {
                             &[],
                         );
 
-                        self.device.as_ref().unwrap().cmd_set_line_width(*command_buffer, LINE_WIDTH);
-                        let push_constant = LinePushConstants{
-                            model_view_projection: self.uniform_buffer_object.proj * self.uniform_buffer_object.view,
+                        self.device
+                            .as_ref()
+                            .unwrap()
+                            .cmd_set_line_width(*command_buffer, LINE_WIDTH);
+                        let push_constant = LinePushConstants {
+                            model_view_projection: self.uniform_buffer_object.proj
+                                * self.uniform_buffer_object.view,
                         };
                         self.device.as_ref().unwrap().cmd_push_constants(
                             *command_buffer,
@@ -5360,7 +5454,14 @@ impl VulkanData {
                             size_of::<LinePushConstants>() as u32,
                             &push_constant as *const _ as *const c_void,
                         );
-                        self.device.as_ref().unwrap().cmd_draw_indexed(*command_buffer, line_data.index_buffer.count as u32, 1, 0, 0, 0);
+                        self.device.as_ref().unwrap().cmd_draw_indexed(
+                            *command_buffer,
+                            line_data.index_buffer.count as u32,
+                            1,
+                            0,
+                            0,
+                            0,
+                        );
                     }
                 }
 
@@ -5458,8 +5559,11 @@ impl VulkanData {
 
         self.create_compute_pipelines();
         self.create_ui_pipeline();
-        if self.line_data.is_some(){
-            self.line_data.as_mut().unwrap().pipeline = LineDrawData::create_pipeline(self, self.line_data.as_ref().unwrap().pipeline_layout);
+        if self.line_data.is_some() {
+            self.line_data.as_mut().unwrap().pipeline = LineDrawData::create_pipeline(
+                self,
+                self.line_data.as_ref().unwrap().pipeline_layout,
+            );
         }
         self.create_command_buffers();
         self.update_descriptor_sets();
@@ -5486,7 +5590,14 @@ impl VulkanData {
             Some(self.create_image_view(color_image, color_format, vk::ImageAspectFlags::COLOR, 1));
     }
 
-    fn create_blank_cubemap(&self, width: u32, height: u32, mip_levels: u32, format: vk::Format, final_layout: vk::ImageLayout) -> CombinedImage {
+    fn create_blank_cubemap(
+        &self,
+        width: u32,
+        height: u32,
+        mip_levels: u32,
+        format: vk::Format,
+        final_layout: vk::ImageLayout,
+    ) -> CombinedImage {
         let image_info = vk::ImageCreateInfoBuilder::new()
             .image_type(vk::ImageType::_2D)
             .flags(vk::ImageCreateFlags::CUBE_COMPATIBLE)
@@ -5599,21 +5710,26 @@ impl VulkanData {
         };
     }
 
-    fn create_array_image_resources(&mut self){
-        self.images_3d.push(
-            self.load_image_sequence(&Path::new("models/planet/drawn-globe/mountain_drawn"))
-        )
+    fn create_array_image_resources(&mut self) {
+        self.images_3d
+            .push(self.load_image_sequence(&Path::new("models/planet/drawn-globe/mountain_drawn")))
     }
 
-    fn load_image_sequence(&self, folder: &Path, ) -> CombinedImage{
+    fn load_image_sequence(&self, folder: &Path) -> CombinedImage {
         let mut images = vec![];
-        for file in folder.read_dir().expect("Failed to read_dir"){
-            let dynamic_image = image::io::Reader::open(file.unwrap().path()).unwrap().decode().unwrap();
+        for file in folder.read_dir().expect("Failed to read_dir") {
+            let dynamic_image = image::io::Reader::open(file.unwrap().path())
+                .unwrap()
+                .decode()
+                .unwrap();
             images.push(dynamic_image.into_rgba8());
         }
         assert_ne!(images.len(), 0);
-        for image in &images{
-            assert_eq!(image.width() * image.height(), images[0].width() * images[0].height());
+        for image in &images {
+            assert_eq!(
+                image.width() * image.height(),
+                images[0].width() * images[0].height()
+            );
         }
 
         let width = images[0].width();
@@ -5621,177 +5737,192 @@ impl VulkanData {
         let depth = images.len() as u32;
 
         let image_info = vk::ImageCreateInfoBuilder::new()
-        .image_type(vk::ImageType::_3D)
-        .flags(vk::ImageCreateFlags::empty())
-        .extent(vk::Extent3D {
-            width,
-            height,
-            depth,
-        })
-        .mip_levels(1)
-        .array_layers(1)
-        .format(vk::Format::R8G8B8A8_SRGB)
-        .tiling(vk::ImageTiling::OPTIMAL)
-        .initial_layout(vk::ImageLayout::UNDEFINED)
-        .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST)
-        .samples(vk::SampleCountFlagBits::_1)
-        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            .image_type(vk::ImageType::_3D)
+            .flags(vk::ImageCreateFlags::empty())
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .format(vk::Format::R8G8B8A8_SRGB)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST)
+            .samples(vk::SampleCountFlagBits::_1)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
-    let allocation_info = vk_mem_erupt::AllocationCreateInfo {
-        usage: vk_mem_erupt::MemoryUsage::GpuOnly,
-        ..Default::default()
-    };
-
-    let (image, allocation, _) = self
-        .allocator
-        .as_ref()
-        .unwrap()
-        .create_image(&image_info, &allocation_info)
-        .unwrap();
-
-    let image_view_create_info = vk::ImageViewCreateInfoBuilder::new()
-        .image(image)
-        .view_type(vk::ImageViewType::_3D)
-        .format(image_info.format)
-        .subresource_range(vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::COLOR,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
-        });
-    let image_view = unsafe {
-        self.device
-            .as_ref()
-            .unwrap()
-            .create_image_view(&image_view_create_info, None)
-    }
-    .unwrap();
-
-    let sampler_create_info = vk::SamplerCreateInfoBuilder::new()
-        .mag_filter(vk::Filter::LINEAR)
-        .min_filter(vk::Filter::LINEAR)
-        .address_mode_u(vk::SamplerAddressMode::REPEAT)
-        .address_mode_v(vk::SamplerAddressMode::REPEAT)
-        .address_mode_w(vk::SamplerAddressMode::REPEAT)
-        .anisotropy_enable(true)
-        .max_anisotropy(1.0)
-        .border_color(vk::BorderColor::INT_OPAQUE_WHITE)
-        .unnormalized_coordinates(false)
-        .compare_enable(false)
-        .compare_op(vk::CompareOp::ALWAYS)
-        .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
-        .mip_lod_bias(0.0)
-        .min_lod(0.0)
-        .max_lod(vk::LOD_CLAMP_NONE);
-
-    let sampler = unsafe {
-        self.device
-            .as_ref()
-            .unwrap()
-            .create_sampler(&sampler_create_info, None)
-    }
-    .unwrap();
-
-    let (transfer_buffer, transfer_allocation, transfer_allocation_info) = {
-        let buffer_info = vk::BufferCreateInfoBuilder::new()
-        .size((width * height * depth * 4) as u64)
-        .usage(vk::BufferUsageFlags::TRANSFER_SRC);
         let allocation_info = vk_mem_erupt::AllocationCreateInfo {
-            usage: vk_mem_erupt::MemoryUsage::CpuToGpu,
-            flags: vk_mem_erupt::AllocationCreateFlags::MAPPED, 
-            required_flags: vk::MemoryPropertyFlags::empty(), 
-            preferred_flags: vk::MemoryPropertyFlags::empty(), 
-            memory_type_bits: u32::MAX, 
-            pool: None, 
-            user_data: None
+            usage: vk_mem_erupt::MemoryUsage::GpuOnly,
+            ..Default::default()
         };
 
-        self.allocator.as_ref().unwrap().create_buffer(&buffer_info, &allocation_info).expect("Transfer buffer failed")
-    };
+        let (image, allocation, _) = self
+            .allocator
+            .as_ref()
+            .unwrap()
+            .create_image(&image_info, &allocation_info)
+            .unwrap();
 
-
-    for (index, image) in images.into_iter().enumerate(){
-        unsafe{
-            (transfer_allocation_info.get_mapped_data().offset((index * image.len()) as isize)).copy_from_nonoverlapping(image.as_ptr(), image.len());
+        let image_view_create_info = vk::ImageViewCreateInfoBuilder::new()
+            .image(image)
+            .view_type(vk::ImageViewType::_3D)
+            .format(image_info.format)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+        let image_view = unsafe {
+            self.device
+                .as_ref()
+                .unwrap()
+                .create_image_view(&image_view_create_info, None)
         }
-    }
-   
-{    let subresource_range = vk::ImageSubresourceRangeBuilder::new()
-        .level_count(1)
-        .layer_count(1)
-        .aspect_mask(vk::ImageAspectFlags::COLOR)
-        .base_mip_level(0)
-        .base_array_layer(0);
-    let barrier = vk::ImageMemoryBarrierBuilder::new()
-        .old_layout(vk::ImageLayout::UNDEFINED)
-        .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .image(image)
-        .subresource_range(*subresource_range);
-    
-    let subresource = vk::ImageSubresourceLayersBuilder::new().base_array_layer(0).layer_count(1).mip_level(0).aspect_mask(vk::ImageAspectFlags::COLOR);
-    let region = vk::BufferImageCopyBuilder::new()
-        .buffer_image_height(0)
-        .buffer_row_length(0)
-        .image_subresource(subresource.build())
-        .image_offset(vk::Offset3D{
-            x: 0,
-            y: 0,
-            z: 0,
-        })
-        .image_extent(vk::Extent3D{
+        .unwrap();
+
+        let sampler_create_info = vk::SamplerCreateInfoBuilder::new()
+            .mag_filter(vk::Filter::LINEAR)
+            .min_filter(vk::Filter::LINEAR)
+            .address_mode_u(vk::SamplerAddressMode::REPEAT)
+            .address_mode_v(vk::SamplerAddressMode::REPEAT)
+            .address_mode_w(vk::SamplerAddressMode::REPEAT)
+            .anisotropy_enable(true)
+            .max_anisotropy(1.0)
+            .border_color(vk::BorderColor::INT_OPAQUE_WHITE)
+            .unnormalized_coordinates(false)
+            .compare_enable(false)
+            .compare_op(vk::CompareOp::ALWAYS)
+            .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+            .mip_lod_bias(0.0)
+            .min_lod(0.0)
+            .max_lod(vk::LOD_CLAMP_NONE);
+
+        let sampler = unsafe {
+            self.device
+                .as_ref()
+                .unwrap()
+                .create_sampler(&sampler_create_info, None)
+        }
+        .unwrap();
+
+        let (transfer_buffer, transfer_allocation, transfer_allocation_info) = {
+            let buffer_info = vk::BufferCreateInfoBuilder::new()
+                .size((width * height * depth * 4) as u64)
+                .usage(vk::BufferUsageFlags::TRANSFER_SRC);
+            let allocation_info = vk_mem_erupt::AllocationCreateInfo {
+                usage: vk_mem_erupt::MemoryUsage::CpuToGpu,
+                flags: vk_mem_erupt::AllocationCreateFlags::MAPPED,
+                required_flags: vk::MemoryPropertyFlags::empty(),
+                preferred_flags: vk::MemoryPropertyFlags::empty(),
+                memory_type_bits: u32::MAX,
+                pool: None,
+                user_data: None,
+            };
+
+            self.allocator
+                .as_ref()
+                .unwrap()
+                .create_buffer(&buffer_info, &allocation_info)
+                .expect("Transfer buffer failed")
+        };
+
+        for (index, image) in images.into_iter().enumerate() {
+            unsafe {
+                (transfer_allocation_info
+                    .get_mapped_data()
+                    .offset((index * image.len()) as isize))
+                .copy_from_nonoverlapping(image.as_ptr(), image.len());
+            }
+        }
+
+        {
+            let subresource_range = vk::ImageSubresourceRangeBuilder::new()
+                .level_count(1)
+                .layer_count(1)
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .base_mip_level(0)
+                .base_array_layer(0);
+            let barrier = vk::ImageMemoryBarrierBuilder::new()
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(image)
+                .subresource_range(*subresource_range);
+
+            let subresource = vk::ImageSubresourceLayersBuilder::new()
+                .base_array_layer(0)
+                .layer_count(1)
+                .mip_level(0)
+                .aspect_mask(vk::ImageAspectFlags::COLOR);
+            let region = vk::BufferImageCopyBuilder::new()
+                .buffer_image_height(0)
+                .buffer_row_length(0)
+                .image_subresource(subresource.build())
+                .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+                .image_extent(vk::Extent3D {
+                    width,
+                    height,
+                    depth,
+                });
+
+            let command_buffer = self.begin_single_time_commands();
+            unsafe {
+                self.device.as_ref().unwrap().cmd_pipeline_barrier(
+                    command_buffer,
+                    Some(vk::PipelineStageFlags::ALL_COMMANDS),
+                    Some(vk::PipelineStageFlags::ALL_COMMANDS),
+                    None,
+                    &[],
+                    &[],
+                    &[barrier],
+                );
+                self.device.as_ref().unwrap().cmd_copy_buffer_to_image(
+                    command_buffer,
+                    transfer_buffer,
+                    image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &[region],
+                )
+            }
+            let barrier = vk::ImageMemoryBarrierBuilder::new()
+                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(image)
+                .subresource_range(*subresource_range);
+            unsafe {
+                self.device.as_ref().unwrap().cmd_pipeline_barrier(
+                    command_buffer,
+                    Some(vk::PipelineStageFlags::ALL_COMMANDS),
+                    Some(vk::PipelineStageFlags::ALL_COMMANDS),
+                    None,
+                    &[],
+                    &[],
+                    &[barrier],
+                );
+            }
+
+            self.end_single_time_commands(command_buffer);
+        }
+        self.allocator
+            .as_ref()
+            .unwrap()
+            .destroy_buffer(transfer_buffer, &transfer_allocation);
+
+        return CombinedImage {
+            image,
+            image_view,
+            sampler,
+            allocation,
             width,
             height,
-            depth,
-        });
-
-    let command_buffer = self.begin_single_time_commands();
-    unsafe {
-        self.device.as_ref().unwrap().cmd_pipeline_barrier(
-            command_buffer,
-            Some(vk::PipelineStageFlags::ALL_COMMANDS),
-            Some(vk::PipelineStageFlags::ALL_COMMANDS),
-            None,
-            &[],
-            &[],
-            &[barrier],
-        );
-        self.device.as_ref().unwrap().cmd_copy_buffer_to_image(command_buffer, transfer_buffer, image,vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[region])
-    }
-    let barrier = vk::ImageMemoryBarrierBuilder::new()
-        .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-        .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-        .image(image)
-        .subresource_range(*subresource_range);
-        unsafe {
-            self.device.as_ref().unwrap().cmd_pipeline_barrier(
-                command_buffer,
-                Some(vk::PipelineStageFlags::ALL_COMMANDS),
-                Some(vk::PipelineStageFlags::ALL_COMMANDS),
-                None,
-                &[],
-                &[],
-                &[barrier],
-            );
-        }
-
-    self.end_single_time_commands(command_buffer);
-}
-    self.allocator.as_ref().unwrap().destroy_buffer(transfer_buffer, &transfer_allocation);
-
-    return CombinedImage {
-        image,
-        image_view,
-        sampler,
-        allocation,
-        width,
-        height,
-    };
-
+        };
     }
 
     fn create_cubemap_resources(&mut self) {
@@ -5799,12 +5930,12 @@ impl VulkanData {
             PathBuf::from("cubemap_space"),
             PathBuf::from("cubemap_fire"),
         ];
-        for cubemap_folder in cubemap_folders{
+        for cubemap_folder in cubemap_folders {
             self.cubemap = Some(Cubemap::new(
                 self,
                 cubemap_folder.join("StandardCubeMap.hdr"),
             ));
-    
+
             let base_cubemap = CombinedImage::new(
                 self,
                 cubemap_folder.join("StandardCubeMap.hdr"),
@@ -5813,8 +5944,14 @@ impl VulkanData {
                 false,
             )
             .unwrap();
-    
-            let target_cubemap = self.create_blank_cubemap(16, 16, 1, vk::Format::R32G32B32A32_SFLOAT, vk::ImageLayout::GENERAL);
+
+            let target_cubemap = self.create_blank_cubemap(
+                16,
+                16,
+                1,
+                vk::Format::R32G32B32A32_SFLOAT,
+                vk::ImageLayout::GENERAL,
+            );
             let combined_descriptors = [
                 CombinedDescriptor {
                     descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
@@ -5846,7 +5983,7 @@ impl VulkanData {
                     6,
                 ),
             );
-    
+
             let target_barrier = vk::ImageMemoryBarrierBuilder::new()
                 .old_layout(vk::ImageLayout::GENERAL)
                 .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -5861,7 +5998,7 @@ impl VulkanData {
                         .base_mip_level(0)
                         .base_array_layer(0),
                 );
-    
+
             let command_buffer = self.begin_single_time_commands();
             unsafe {
                 self.device.as_ref().unwrap().cmd_pipeline_barrier(
@@ -5874,18 +6011,24 @@ impl VulkanData {
                     &[target_barrier],
                 )
             };
-    
+
             self.end_single_time_commands(command_buffer);
-    
+
             self.irradiance_maps.push(target_cubemap);
-    
+
             let roughness_mipmaps = 10;
-    
-            let target_cubemap = self.create_blank_cubemap(1024, 1024, roughness_mipmaps, vk::Format::R32G32B32A32_SFLOAT, vk::ImageLayout::GENERAL);
-    
+
+            let target_cubemap = self.create_blank_cubemap(
+                1024,
+                1024,
+                roughness_mipmaps,
+                vk::Format::R32G32B32A32_SFLOAT,
+                vk::ImageLayout::GENERAL,
+            );
+
             for i in 0..roughness_mipmaps {
                 println!("Running environment shader for mip level {:}", i);
-    
+
                 let image_view_create_info = vk::ImageViewCreateInfoBuilder::new()
                     .image(target_cubemap.image)
                     .view_type(vk::ImageViewType::CUBE)
@@ -5897,7 +6040,7 @@ impl VulkanData {
                         base_array_layer: 0,
                         layer_count: 6,
                     });
-    
+
                 let current_mip_image_view = unsafe {
                     self.device
                         .as_ref()
@@ -5905,7 +6048,7 @@ impl VulkanData {
                         .create_image_view(&image_view_create_info, None)
                 }
                 .unwrap();
-    
+
                 let combined_descriptors = [
                     CombinedDescriptor {
                         descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
@@ -5926,7 +6069,7 @@ impl VulkanData {
                         },
                     },
                 ];
-    
+
                 self.run_arbitrary_compute_shader(
                     self.load_shader("shaders/environment.spv".parse().unwrap()),
                     i as f32 / (roughness_mipmaps - 1) as f32,
@@ -5938,7 +6081,7 @@ impl VulkanData {
                     ),
                 );
             }
-    
+
             let target_barrier = vk::ImageMemoryBarrierBuilder::new()
                 .old_layout(vk::ImageLayout::GENERAL)
                 .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -5953,7 +6096,7 @@ impl VulkanData {
                         .base_mip_level(0)
                         .base_array_layer(0),
                 );
-    
+
             let command_buffer = self.begin_single_time_commands();
             unsafe {
                 self.device.as_ref().unwrap().cmd_pipeline_barrier(
@@ -5966,13 +6109,11 @@ impl VulkanData {
                     &[target_barrier],
                 )
             };
-    
+
             self.end_single_time_commands(command_buffer);
-    
+
             self.environment_maps.push(target_cubemap);
         }
-
-
 
         self.brdf_lut = CombinedImage::new(
             self,
@@ -6256,14 +6397,13 @@ impl VulkanData {
                 .as_ref()
                 .unwrap()
                 .destroy_pipeline(self.ui_data.pipeline, None);
-            
-            if let Some(line_data) = &self.line_data{
-                self.device
-                .as_ref()
-                .unwrap()
-                .destroy_pipeline(Some(line_data.pipeline), None);
-            }
 
+            if let Some(line_data) = &self.line_data {
+                self.device
+                    .as_ref()
+                    .unwrap()
+                    .destroy_pipeline(Some(line_data.pipeline), None);
+            }
         }
 
         unsafe {

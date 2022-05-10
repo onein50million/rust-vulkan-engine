@@ -23,13 +23,10 @@ pub mod directions {
     pub const FORWARDS: Vector3<f64> = Vector3::new(0.0, 0.0, 1.0);
     pub const BACKWARDS: Vector3<f64> = Vector3::new(0.0, 0.0, -1.0);
 
-    pub const ISOMETRIC_DOWN: Vector3<f64> =
-        Vector3::new(-FRAC_1_SQRT_2, 0.0, -FRAC_1_SQRT_2);
+    pub const ISOMETRIC_DOWN: Vector3<f64> = Vector3::new(-FRAC_1_SQRT_2, 0.0, -FRAC_1_SQRT_2);
     pub const ISOMETRIC_UP: Vector3<f64> = Vector3::new(FRAC_1_SQRT_2, 0.0, FRAC_1_SQRT_2);
-    pub const ISOMETRIC_RIGHT: Vector3<f64> =
-        Vector3::new(-FRAC_1_SQRT_2, 0.0, FRAC_1_SQRT_2);
-    pub const ISOMETRIC_LEFT: Vector3<f64> =
-        Vector3::new(FRAC_1_SQRT_2, 0.0, -FRAC_1_SQRT_2);
+    pub const ISOMETRIC_RIGHT: Vector3<f64> = Vector3::new(-FRAC_1_SQRT_2, 0.0, FRAC_1_SQRT_2);
+    pub const ISOMETRIC_LEFT: Vector3<f64> = Vector3::new(FRAC_1_SQRT_2, 0.0, -FRAC_1_SQRT_2);
 }
 
 pub(crate) mod server {
@@ -77,7 +74,7 @@ pub mod client {
     use crate::support::Inputs;
     use crate::world::World;
     use float_ord::FloatOrd;
-    use nalgebra::{Matrix4, Translation3, UnitQuaternion, Vector2, Vector3, Perspective3, Point3};
+    use nalgebra::{Matrix4, Perspective3, Point3, Translation3, UnitQuaternion, Vector2, Vector3};
 
     pub struct AnimationHandler {
         pub index: usize,
@@ -196,15 +193,36 @@ pub mod client {
                 self.camera.longitude += delta_mouse.x * 1.0;
             }
 
-            if self.inputs.left_click{
+            if self.inputs.left_click {
                 self.selected_province = {
                     //TODO: Figure out why I have to make these negative. Probably something to do with the inconsistent coordinate system
-                    let direction = self.camera.get_view_matrix().try_inverse().unwrap().transform_vector(&projection.unproject_point(&Point3::new(-self.mouse_position.x, -self.mouse_position.y, 1.0)).coords);
-                    
-                    match World::intersect_planet(self.camera.get_position(), -direction.xyz()){
-                        Some(point) => {
-                            Some(self.world.provinces.iter().enumerate().min_by_key(|(_, province)|{FloatOrd((point - province.position).magnitude())}).expect("Failed to find closest provice to click").0)
-                        }
+                    let direction = self
+                        .camera
+                        .get_view_matrix()
+                        .try_inverse()
+                        .unwrap()
+                        .transform_vector(
+                            &projection
+                                .unproject_point(&Point3::new(
+                                    -self.mouse_position.x,
+                                    -self.mouse_position.y,
+                                    1.0,
+                                ))
+                                .coords,
+                        );
+
+                    match World::intersect_planet(self.camera.get_position(), -direction.xyz()) {
+                        Some(point) => Some(
+                            self.world
+                                .provinces
+                                .iter()
+                                .enumerate()
+                                .min_by_key(|(_, province)| {
+                                    FloatOrd((point - province.position).magnitude())
+                                })
+                                .expect("Failed to find closest provice to click")
+                                .0,
+                        ),
                         None => None,
                     }
                 };

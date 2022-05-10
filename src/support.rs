@@ -47,11 +47,9 @@ pub(crate) mod flags {
     pub(crate) const IS_VIEW_PROJ_MATRIX_IGNORED: u32 = 0b10000;
 }
 
-pub mod map_modes{
+pub mod map_modes {
     pub const SATELITE: u8 = 0;
     pub const PAPER: u8 = 1;
-
-
 }
 
 #[derive(Copy, Clone)]
@@ -162,7 +160,7 @@ pub struct UniformBufferObject {
     pub view: Matrix4<f32>,
     pub proj: Matrix4<f32>,
     pub(crate) random: [Vector4<f32>; NUM_RANDOM], //std140 packing so it needs to be 16 bytes wide
-    pub lights: [Light; NUM_LIGHTS],        //std140 packing so it needs to be 16 bytes wide
+    pub lights: [Light; NUM_LIGHTS],               //std140 packing so it needs to be 16 bytes wide
     pub cubemap_index: u32,
     pub(crate) num_lights: u32,
     pub map_mode: u32,

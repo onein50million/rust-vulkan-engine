@@ -2,7 +2,6 @@ use crate::support::Inputs;
 
 use serde::{Deserialize, Serialize};
 
-
 /*
 Client requests Connection
 Server Accepts connection

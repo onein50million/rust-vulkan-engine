@@ -5,7 +5,9 @@ use genmesh::generators::{IcoSphere, IndexedPolygon, SharedVertex};
 use nalgebra::{Vector2, Vector3, Vector4};
 use std::{
     collections::{HashMap, HashSet},
-    fs::read_dir, ops::{Add, Mul}, fmt::Debug,
+    fmt::Debug,
+    fs::read_dir,
+    ops::{Add, Mul},
 };
 
 pub struct MeshOutput {
@@ -40,7 +42,6 @@ struct VertexData {
 //     let ratio2 = dbg!(f3.cross(&f1).magnitude()/total_area);
 //     let ratio3 = dbg!(f1.cross(&f2).magnitude()/total_area);
 
-
 //     if ratio1 > 0.0 && ratio2 > 0.0 && ratio3 > 0.0{
 //         Some(first_point.1 * ratio1 + second_point.1 * ratio2 + third_point.1 * ratio3)
 //     }else{
@@ -50,41 +51,56 @@ struct VertexData {
 // }
 
 //https://answers.unity.com/questions/383804/calculate-uv-coordinates-of-3d-point-on-plane-of-m.html
-pub fn triangle_interpolate<T>(target_point: Vector3<f32>,first_point: (Vector3<f32>, T),second_point: (Vector3<f32>, T),third_point: (Vector3<f32>, T)) -> Option<T>
-where T:  Mul<f32, Output = T> + Add<Output = T> + Copy
+pub fn triangle_interpolate<T>(
+    target_point: Vector3<f32>,
+    first_point: (Vector3<f32>, T),
+    second_point: (Vector3<f32>, T),
+    third_point: (Vector3<f32>, T),
+) -> Option<T>
+where
+    T: Mul<f32, Output = T> + Add<Output = T> + Copy,
 {
     let f1 = target_point - first_point.0;
     let f2 = target_point - second_point.0;
     let f3 = target_point - third_point.0;
 
-
     let main_cross = (first_point.0 - second_point.0).cross(&(first_point.0 - third_point.0));
     let cross1 = f2.cross(&f3);
     let cross2 = f3.cross(&f1);
     let cross3 = f1.cross(&f2);
-    
-    let total_area = main_cross.magnitude();
-    let ratio1 = cross1.magnitude()/total_area * main_cross.dot(&cross1).signum();
-    let ratio2 = cross2.magnitude()/total_area * main_cross.dot(&cross2).signum();
-    let ratio3 = cross3.magnitude()/total_area * main_cross.dot(&cross3).signum();
 
-    if ratio1 >= -0.1 && ratio2 >= -0.1 && ratio3 >= -0.1 && ratio1 <= 1.0 && ratio2 <= 1.0 && ratio3 <= 1.0 {
+    let total_area = main_cross.magnitude();
+    let ratio1 = cross1.magnitude() / total_area * main_cross.dot(&cross1).signum();
+    let ratio2 = cross2.magnitude() / total_area * main_cross.dot(&cross2).signum();
+    let ratio3 = cross3.magnitude() / total_area * main_cross.dot(&cross3).signum();
+
+    if ratio1 >= -0.1
+        && ratio2 >= -0.1
+        && ratio3 >= -0.1
+        && ratio1 <= 1.0
+        && ratio2 <= 1.0
+        && ratio3 <= 1.0
+    {
         Some(first_point.1 * ratio1 + second_point.1 * ratio2 + third_point.1 * ratio3)
-    }else{
+    } else {
         None
     }
-
 }
 
-pub fn interoplate_on_mesh<T>(point: Vector3<f32>, vertices: &[(Vector3<f32>, T)], indices: &[usize]) -> T
-where T:  Mul<f32, Output = T> + Add<Output = T> + Copy + Debug
+pub fn interoplate_on_mesh<T>(
+    point: Vector3<f32>,
+    vertices: &[(Vector3<f32>, T)],
+    indices: &[usize],
+) -> T
+where
+    T: Mul<f32, Output = T> + Add<Output = T> + Copy + Debug,
 {
-    for triangle in indices.chunks(3){
+    for triangle in indices.chunks(3) {
         let first_point = vertices[triangle[0]];
         let second_point = vertices[triangle[1]];
         let third_point = vertices[triangle[2]];
-        
-        if let Some(value) = triangle_interpolate(point,first_point, second_point, third_point){
+
+        if let Some(value) = triangle_interpolate(point, first_point, second_point, third_point) {
             return value;
         }
     }
@@ -102,7 +118,6 @@ where T:  Mul<f32, Output = T> + Add<Output = T> + Copy + Debug
 //         let sample_vector = point1.slerp(&point2, progress) * World::RADIUS as f32;
 //         let interpolate = interoplate_on_mesh(sample_vector, vertices, indices);
 
-        
 //         if interpolate < 0.0{
 //             return false;
 //         }
@@ -110,16 +125,20 @@ where T:  Mul<f32, Output = T> + Add<Output = T> + Copy + Debug
 //     true
 // }
 
-pub fn are_points_contiguous(point1: Vector3<f32>, point2: Vector3<f32>, vertices: &[(Vector3<f32>, f32)], indices: &[usize]) -> bool{
+pub fn are_points_contiguous(
+    point1: Vector3<f32>,
+    point2: Vector3<f32>,
+    vertices: &[(Vector3<f32>, f32)],
+    indices: &[usize],
+) -> bool {
     const NUM_SAMPLES: usize = 100;
-    for sample in 0..NUM_SAMPLES{
+    for sample in 0..NUM_SAMPLES {
         let progress = (sample as f32 + 0.5) / NUM_SAMPLES as f32;
 
         let sample_vector = point1.slerp(&point2, progress) * World::RADIUS as f32;
         let interpolate = interoplate_on_mesh(sample_vector, vertices, indices);
 
-        
-        if interpolate < 0.0{
+        if interpolate < 0.0 {
             return false;
         }
     }
@@ -128,9 +147,8 @@ pub fn are_points_contiguous(point1: Vector3<f32>, point2: Vector3<f32>, vertice
 
 const NUM_BUCKETS: f32 = 8.0; //Number of buckets to quantize elevations into
 
-fn quantized_to_actual(quantized: i8, range: f32) -> f32{
+fn quantized_to_actual(quantized: i8, range: f32) -> f32 {
     (quantized as f32 / NUM_BUCKETS) * range
-
 }
 
 pub fn get_planet(radius: f32) -> MeshOutput {
@@ -314,10 +332,10 @@ pub fn get_planet(radius: f32) -> MeshOutput {
 
     dbg!(&vertex_data[5]);
 
-    for vertex in &mut vertex_data{
+    for vertex in &mut vertex_data {
         let divisor = 2500.0;
-        if vertex.elevation < 0.0{
-            vertex.elevation = (vertex.elevation/divisor).ceil()*divisor;
+        if vertex.elevation < 0.0 {
+            vertex.elevation = (vertex.elevation / divisor).ceil() * divisor;
         }
     }
 
@@ -334,12 +352,12 @@ pub fn get_planet(radius: f32) -> MeshOutput {
     }
 
     let mut quantized_elevations = HashSet::new();
-    for vertex in &vertex_data{
+    for vertex in &vertex_data {
         quantized_elevations.insert(vertex.quantized_elevation);
     }
     let mut quantized_elevations: Vec<_> = quantized_elevations.iter().collect();
     quantized_elevations.sort();
-    for elevation in quantized_elevations{
+    for elevation in quantized_elevations {
         let actual = quantized_to_actual(*elevation, max_elevation.max(min_elevation.abs()));
         println!("Quantized: {elevation} Actual: {actual}");
     }
@@ -347,13 +365,12 @@ pub fn get_planet(radius: f32) -> MeshOutput {
     let mut start_instant = std::time::Instant::now();
     let mut current_try = 0;
     'wave_function: loop {
-        current_try += 1; 
+        current_try += 1;
         println!("Current try: {:}", current_try);
         let mut wave_function_collapse = ElevationWaveFunctionCollapse::new(&vertex_data);
-    
+
         let mut num_collapses = 0;
         loop {
-
             let mut lowest_entropy_cells = vec![];
             let mut lowest_entropy = wave_function_collapse.get_cell_entropy(0);
             let mut unfinished_cell_indices = HashSet::new();
@@ -363,10 +380,10 @@ pub fn get_planet(radius: f32) -> MeshOutput {
                 .enumerate()
             {
                 let cell_entropy = wave_function_collapse.get_cell_entropy(index);
-                if cell_entropy > lowest_entropy{
+                if cell_entropy > lowest_entropy {
                     lowest_entropy = cell_entropy;
                     lowest_entropy_cells = vec![index];
-                }else if cell_entropy == lowest_entropy{
+                } else if cell_entropy == lowest_entropy {
                     lowest_entropy_cells.push(index);
                 }
 
@@ -374,7 +391,10 @@ pub fn get_planet(radius: f32) -> MeshOutput {
                     CellState::Collapsed(quantized_elevation) => {
                         // vertex.elevation = (quantized_elevation as f32 / 4.0)
                         //     * max_elevation.max(min_elevation.abs());
-                        vertex.elevation = quantized_to_actual(quantized_elevation, max_elevation.max(min_elevation.abs()));
+                        vertex.elevation = quantized_to_actual(
+                            quantized_elevation,
+                            max_elevation.max(min_elevation.abs()),
+                        );
                         // vertex.position += vertex.position.normalize() * vertex.elevation * 1.0;
                     }
                     CellState::Superposition(_) => {
@@ -382,23 +402,24 @@ pub fn get_planet(radius: f32) -> MeshOutput {
                     }
                 }
             }
-            if start_instant.elapsed().as_secs_f64() > 1.0{
+            if start_instant.elapsed().as_secs_f64() > 1.0 {
                 start_instant = std::time::Instant::now();
                 println!("{:} collapses to go", unfinished_cell_indices.len())
             }
             if unfinished_cell_indices.len() > 0 {
                 let rand_index = fastrand::usize(0..lowest_entropy_cells.len());
                 match wave_function_collapse
-                    .collapse_cell(*lowest_entropy_cells.iter().nth(rand_index).unwrap()){
-                        Ok(_) => {
-                            num_collapses += 1;
-                        },
-                        Err(_) => {
-                            println!("Wave function collapse failed");
-                            println!("Made it {:} collapses", num_collapses);
-                            continue 'wave_function;
-                        },
+                    .collapse_cell(*lowest_entropy_cells.iter().nth(rand_index).unwrap())
+                {
+                    Ok(_) => {
+                        num_collapses += 1;
                     }
+                    Err(_) => {
+                        println!("Wave function collapse failed");
+                        println!("Made it {:} collapses", num_collapses);
+                        continue 'wave_function;
+                    }
+                }
             } else {
                 break 'wave_function;
             }
@@ -428,10 +449,9 @@ pub fn get_planet(radius: f32) -> MeshOutput {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Error{
-    PropogationFailed
+enum Error {
+    PropogationFailed,
 }
-
 
 #[derive(Clone, Debug)]
 struct Cell {
@@ -441,23 +461,21 @@ struct Cell {
 
 #[derive(Clone, Debug)]
 enum CellState {
-    Collapsed(i8),              //Collapsed cell has only one value
+    Collapsed(i8),                   //Collapsed cell has only one value
     Superposition(HashMap<i8, f32>), //Cell is in a superposition of all possible values
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Ratio{
-    RawSamples{
-        sample_count: u32
-    },
-    Data(f32)
+enum Ratio {
+    RawSamples { sample_count: u32 },
+    Data(f32),
 }
-impl Ratio{
-    fn add_sample(&mut self){
-        match self{
-            Ratio::RawSamples {sample_count } => {
+impl Ratio {
+    fn add_sample(&mut self) {
+        match self {
+            Ratio::RawSamples { sample_count } => {
                 *sample_count += 1;
-            },
+            }
             Ratio::Data(_) => panic!("Already averaged"),
         }
     }
@@ -472,12 +490,11 @@ impl Ratio{
     // }
 }
 
-fn balance_ratios(hashmap: &mut HashMap<i8, f32>){
-    
+fn balance_ratios(hashmap: &mut HashMap<i8, f32>) {
     let ratio_sum: f32 = hashmap.values().sum();
     assert_ne!(ratio_sum, 0.0);
 
-    for ratio in hashmap.values_mut(){
+    for ratio in hashmap.values_mut() {
         *ratio /= ratio_sum;
     }
 }
@@ -496,7 +513,9 @@ impl ElevationWaveFunctionCollapse {
                 .entry(vertex_data[i].quantized_elevation)
                 .or_insert(HashMap::new());
             for neighbour in &vertex_data[i].neighbours {
-                let entry = inner_map.entry(vertex_data[*neighbour].quantized_elevation).or_insert(Ratio::RawSamples {sample_count: 0 });
+                let entry = inner_map
+                    .entry(vertex_data[*neighbour].quantized_elevation)
+                    .or_insert(Ratio::RawSamples { sample_count: 0 });
                 entry.add_sample();
                 // if !inner_map.contains(&vertex_data[*neighbour].quantized_elevation) {
                 //     inner_map.insert(vertex_data[*neighbour].quantized_elevation);
@@ -504,26 +523,21 @@ impl ElevationWaveFunctionCollapse {
             }
         }
 
-        for raw_samples in elevation_mapping.values_mut(){
-            let total: f32 = raw_samples.values().map(|sample_set|{
-                match sample_set{
-                    Ratio::RawSamples {sample_count } => {
-                        *sample_count as f32
-                    },
-                    Ratio::Data(ratio) => {
-                        *ratio
-                    },
-                }
-            }).sum();
+        for raw_samples in elevation_mapping.values_mut() {
+            let total: f32 = raw_samples
+                .values()
+                .map(|sample_set| match sample_set {
+                    Ratio::RawSamples { sample_count } => *sample_count as f32,
+                    Ratio::Data(ratio) => *ratio,
+                })
+                .sum();
 
-            for raw_sample in raw_samples.values_mut(){
-                let new_value = match raw_sample{
-                    Ratio::RawSamples {sample_count } => {
-                        (*sample_count as f32)/total
-                    },
+            for raw_sample in raw_samples.values_mut() {
+                let new_value = match raw_sample {
+                    Ratio::RawSamples { sample_count } => (*sample_count as f32) / total,
                     Ratio::Data(_) => {
                         panic!("Data already averaged")
-                    },
+                    }
                 };
 
                 *raw_sample = Ratio::Data(new_value);
@@ -531,18 +545,18 @@ impl ElevationWaveFunctionCollapse {
         }
 
         // dbg!(raw_samp)
-        
+
         let cells: Vec<_> = vertex_data
             .iter()
             .map(|vertex| {
                 let mut superpositions = HashMap::new();
 
                 for ratio_map in elevation_mapping.values() {
-                    for (potential_elevation, ratio) in ratio_map{
-                        if let Ratio::Data(ratio) = ratio{
+                    for (potential_elevation, ratio) in ratio_map {
+                        if let Ratio::Data(ratio) = ratio {
                             let entry = superpositions.entry(*potential_elevation).or_insert(0.0);
                             *entry += ratio;
-                        }else{
+                        } else {
                             panic!("Data not averaged")
                         }
                     }
@@ -557,33 +571,33 @@ impl ElevationWaveFunctionCollapse {
             })
             .collect();
 
-        let out =Self {
+        let out = Self {
             cells,
             elevation_mapping,
         };
-        out    
-
+        out
     }
-
 
     //will be unbalanced
     fn get_possible_states(&self, index: usize) -> HashMap<i8, f32> {
         match &self.cells[index].cell_state {
             CellState::Collapsed(state) => {
-                HashMap::from_iter(self.elevation_mapping[&state].iter().map(|(key, value)|{
-                    match value{
-                        Ratio::RawSamples{..} => panic!("Unfinished ratio map"),
+                HashMap::from_iter(self.elevation_mapping[&state].iter().map(|(key, value)| {
+                    match value {
+                        Ratio::RawSamples { .. } => panic!("Unfinished ratio map"),
                         Ratio::Data(new_value) => (*key, *new_value),
                     }
                 }))
-            },
+            }
             CellState::Superposition(states) => {
                 let mut output = HashMap::new();
-                for (quantized_elevation, ratio) in states{
-                    for (possible_quantized_elevation, possible_ratio) in &self.elevation_mapping[quantized_elevation]{
+                for (quantized_elevation, ratio) in states {
+                    for (possible_quantized_elevation, possible_ratio) in
+                        &self.elevation_mapping[quantized_elevation]
+                    {
                         let entry = output.entry(*possible_quantized_elevation).or_insert(0.0);
-                        if let Ratio::Data(possible_ratio) = possible_ratio{
-                            *entry += ratio * possible_ratio;  
+                        if let Ratio::Data(possible_ratio) = possible_ratio {
+                            *entry += ratio * possible_ratio;
                         }
                     }
                 }
@@ -605,8 +619,12 @@ impl ElevationWaveFunctionCollapse {
                         // dbg!(states.len());
                         let mut neighbour_states = HashMap::new();
                         for neighbour_index in &self.cells[i].neighbours {
-                            for (neighbour_state_elevation, neighbour_state_ratio) in self.get_possible_states(*neighbour_index).iter(){
-                                let entry = neighbour_states.entry(*neighbour_state_elevation).or_insert(0.0);
+                            for (neighbour_state_elevation, neighbour_state_ratio) in
+                                self.get_possible_states(*neighbour_index).iter()
+                            {
+                                let entry = neighbour_states
+                                    .entry(*neighbour_state_elevation)
+                                    .or_insert(0.0);
                                 *entry += neighbour_state_ratio * states[neighbour_state_elevation];
                             }
                         }
@@ -615,14 +633,14 @@ impl ElevationWaveFunctionCollapse {
 
                         // dbg!(&neighbour_states);
                         // dbg!(&states);
-                        for (neighbour_quantized_elevation, neighbour_state_ratio) in &neighbour_states{
+                        for (neighbour_quantized_elevation, neighbour_state_ratio) in
+                            &neighbour_states
+                        {
                             let state_ratio = states[neighbour_quantized_elevation];
-                            if (state_ratio - *neighbour_state_ratio).abs() > EPSILON{
+                            if (state_ratio - *neighbour_state_ratio).abs() > EPSILON {
                                 done = false;
                             }
                         }
-
-                        
 
                         // let out: HashSet<_> = neighbour_states
                         //     .intersection(states)
@@ -638,7 +656,7 @@ impl ElevationWaveFunctionCollapse {
                 // dbg!(&new_states);
 
                 if new_states.len() == 0 {
-                    return Err(Error::PropogationFailed)
+                    return Err(Error::PropogationFailed);
                 } else if new_states.len() == 1 {
                     self.cells[i].cell_state =
                         CellState::Collapsed(*new_states.iter().next().unwrap().0)
@@ -654,14 +672,10 @@ impl ElevationWaveFunctionCollapse {
         Ok(())
     }
 
-    fn get_cell_entropy(&self, index: usize) -> usize{
-        match &self.cells[index].cell_state{
-            CellState::Collapsed(_) => {
-                1
-            },
-            CellState::Superposition(states) => {
-                states.iter().count()
-            },
+    fn get_cell_entropy(&self, index: usize) -> usize {
+        match &self.cells[index].cell_state {
+            CellState::Collapsed(_) => 1,
+            CellState::Superposition(states) => states.iter().count(),
         }
     }
 
@@ -672,15 +686,17 @@ impl ElevationWaveFunctionCollapse {
             CellState::Superposition(superpositions) => {
                 let random = fastrand::f32();
                 let mut probability_sum = 0.0;
-                for (quantized_elevation, probability) in superpositions{
+                for (quantized_elevation, probability) in superpositions {
                     probability_sum += probability;
-                    if random <= probability_sum{
+                    if random <= probability_sum {
                         collapsed_value = Some(*quantized_elevation)
                     }
                 }
             }
         }
-        self.cells[index].cell_state = CellState::Collapsed(collapsed_value.expect("Cell Collapse failed. This probably shouldn't happen... maybe"));
+        self.cells[index].cell_state = CellState::Collapsed(
+            collapsed_value.expect("Cell Collapse failed. This probably shouldn't happen... maybe"),
+        );
         self.propogate_changes()
     }
     fn collapse_cell_to_value(&mut self, index: usize, value: i8) -> Result<(), Error> {

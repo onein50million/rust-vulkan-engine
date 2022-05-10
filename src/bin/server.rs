@@ -45,7 +45,9 @@ struct Server {
 impl Server {
     fn new() -> Self {
         let socket = UdpSocket::bind("127.0.0.1:2022").unwrap();
-        socket.set_nonblocking(true).expect("Failed to set socket as nonblocking");
+        socket
+            .set_nonblocking(true)
+            .expect("Failed to set socket as nonblocking");
         Self {
             clients: HashMap::new(),
             socket,

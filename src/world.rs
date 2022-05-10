@@ -1,11 +1,9 @@
 use std::{fmt::Display, mem::MaybeUninit};
 
 use float_ord::FloatOrd;
-use nalgebra::{Vector3, Isometry3, Point3, Vector2};
+use nalgebra::Vector3;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use variant_count::VariantCount;
-
-
 
 #[repr(usize)]
 #[derive(Clone, Copy, VariantCount, Debug, IntoPrimitive, TryFromPrimitive)]
@@ -227,7 +225,6 @@ impl Display for Province {
     }
 }
 
-
 #[derive(Debug)]
 pub struct World {
     pub points: Vec<Vector3<f32>>,
@@ -236,46 +233,42 @@ pub struct World {
 
 impl World {
     pub const RADIUS: f64 = 6_378_137.0; //in meters
-    
-    pub fn intersect_planet(ray_origin: Vector3<f64>, ray_direction: Vector3<f64>) -> Option<Vector3<f64>>{
+
+    pub fn intersect_planet(
+        ray_origin: Vector3<f64>,
+        ray_direction: Vector3<f64>,
+    ) -> Option<Vector3<f64>> {
         let a = ray_direction.dot(&ray_direction);
         let b = 2.0 * ray_origin.dot(&ray_direction);
         let c = ray_origin.dot(&ray_origin) - (Self::RADIUS * Self::RADIUS);
-        let discriminant = b*b - 4.0*a*c;
-        if discriminant < 0.0{
+        let discriminant = b * b - 4.0 * a * c;
+        if discriminant < 0.0 {
             return None;
-        }else{
+        } else {
             let ray_ratio = (-b + discriminant.sqrt()) / (2.0 * a);
             return Some(ray_origin + ray_direction * ray_ratio);
         }
     }
-    
-    pub fn new(vertices: &[Vector3<f32>],province_indices_slice: &[Vec<usize>]) -> Self {
-        
+
+    pub fn new(vertices: &[Vector3<f32>], province_indices_slice: &[Vec<usize>]) -> Self {
         let mut provinces = vec![];
-        for province_indices in province_indices_slice{
-            let province_origin  = province_indices.iter().map(|&index| vertices[index]).sum::<Vector3<f32>>() / province_indices.len() as f32;
+        for province_indices in province_indices_slice {
+            let province_origin = province_indices
+                .iter()
+                .map(|&index| vertices[index])
+                .sum::<Vector3<f32>>()
+                / province_indices.len() as f32;
             let normal = province_origin.normalize();
             let province_origin = province_origin.normalize() * Self::RADIUS as f32;
             let mut sorted_indices = province_indices.clone();
 
-
             // after many attempts this seemed to work the best https://stackoverflow.com/a/65422749
-            let origin_latlong = (
-                normal.z.asin(),
-                normal.y.atan2(normal.x)
-            );
-            sorted_indices.sort_by(|&a,&b|{
+            let origin_latlong = (normal.z.asin(), normal.y.atan2(normal.x));
+            sorted_indices.sort_by(|&a, &b| {
                 let a_normal = vertices[a].normalize();
-                let a_latlong = (
-                    a_normal.z.asin(),
-                    a_normal.y.atan2(a_normal.x)
-                );
+                let a_latlong = (a_normal.z.asin(), a_normal.y.atan2(a_normal.x));
                 let b_normal = vertices[b].normalize();
-                let b_latlong = (
-                    b_normal.z.asin(),
-                    b_normal.y.atan2(b_normal.x)
-                );
+                let b_latlong = (b_normal.z.asin(), b_normal.y.atan2(b_normal.x));
 
                 let a1 = (a_latlong.0 - origin_latlong.0).atan2(a_latlong.1 - origin_latlong.1);
                 let a2 = (b_latlong.0 - origin_latlong.0).atan2(b_latlong.1 - origin_latlong.1);
@@ -284,7 +277,7 @@ impl World {
             });
 
             let mut out_indices = vec![];
-            for index in sorted_indices.windows(2){
+            for index in sorted_indices.windows(2) {
                 out_indices.push(index[0]);
                 out_indices.push(index[1]);
             }
@@ -303,12 +296,11 @@ impl World {
                     supply_demand_error_integral: [0.0; Good::VARIANT_COUNT],
                 },
             })
-
         }
 
         Self {
-            points:vertices.iter().map(|vertex| *vertex).collect(),
-            provinces: provinces.into_boxed_slice()
+            points: vertices.iter().map(|vertex| *vertex).collect(),
+            provinces: provinces.into_boxed_slice(),
         }
     }
 
