@@ -1486,13 +1486,17 @@ impl LineDrawData {
     }
 
     pub fn select_points(&mut self, point_indices: &[usize]) {
-        for (index, vertex) in (&mut self.vertex_buffer).into_iter().enumerate() {
-            if point_indices.contains(&index) {
-                vertex.color.w = 1.0;
-            } else {
-                vertex.color.w = 0.1;
-            }
+        self.index_buffer.count = 0;
+        for &index in point_indices{
+            self.index_buffer.add_value(index as u32);
         }
+        // for (index, vertex) in (&mut self.vertex_buffer).into_iter().enumerate() {
+        //     if point_indices.contains(&index) {
+        //         vertex.color.w = 1.0;
+        //     } else {
+        //         vertex.color.w = 0.1;
+        //     }
+        // }
     }
 
     pub fn set_color(&mut self, point_indices: &[usize], color: Vector4<f32>) {
@@ -1526,7 +1530,7 @@ pub struct CubemapRender {
     descriptor_sets: Vec<vk::DescriptorSet>,
 }
 impl CubemapRender {
-    pub const CUBEMAP_WIDTH: u32 = 128;
+    pub const CUBEMAP_WIDTH: u32 = 256;
 
     pub fn new(vulkan_data: &VulkanData, vertices: &[ElevationVertex], indices: &[u32]) -> Self {
         let (descriptor_sets, set_layouts) = Self::create_descriptor_sets(vulkan_data);
@@ -5711,8 +5715,10 @@ impl VulkanData {
     }
 
     fn create_array_image_resources(&mut self) {
-        self.images_3d
-            .push(self.load_image_sequence(&Path::new("models/planet/drawn-globe/mountain_drawn")))
+        self.images_3d.push(self.load_image_sequence(&Path::new("models/planet/drawn-globe/mountain_drawn")));
+        self.images_3d.push(self.load_image_sequence(&Path::new("models/planet/drawn-globe/grass")));
+        self.images_3d.push(self.load_image_sequence(&Path::new("models/planet/drawn-globe/trees")));
+        self.images_3d.push(self.load_image_sequence(&Path::new("models/planet/drawn-globe/wavygrass")));
     }
 
     fn load_image_sequence(&self, folder: &Path) -> CombinedImage {

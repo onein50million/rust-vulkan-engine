@@ -184,6 +184,8 @@ pub mod client {
         }
         pub fn process(&mut self, delta_time: f64, projection: &Perspective3<f64>) {
             self.world.process(delta_time);
+            // let total_money: f64 = self.world.provinces.iter().map(|a|a.pops.pop_slices.iter().map(|b|b.money).sum::<f64>()).sum();
+            // dbg!(total_money);
 
             let delta_mouse = self.last_mouse_position - self.mouse_position;
             self.last_mouse_position = self.mouse_position;

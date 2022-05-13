@@ -13,6 +13,7 @@ use egui_winit::winit::event::{ElementState, Event, VirtualKeyCode, WindowEvent}
 use egui_winit::winit::event_loop::{ControlFlow, EventLoop};
 use egui_winit::winit::window::WindowBuilder;
 
+use float_ord::FloatOrd;
 use nalgebra::Matrix3;
 
 use nalgebra::Point3;
@@ -30,6 +31,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 
+use std::f32::consts::PI;
 use std::net::UdpSocket;
 use std::time::Instant;
 
@@ -45,9 +47,6 @@ use winit::event::{MouseButton, MouseScrollDelta};
 
 const CUBEMAP_WIDTH: usize = CubemapRender::CUBEMAP_WIDTH as usize;
 
-fn province_shift(perlin: &noise::Perlin, point: &Vector3<f64>, w: f64) -> f64 {
-    (perlin.get([point.x as f64, point.y as f64, point.z as f64, w]) * 2.0 - 1.0) * 0.01
-}
 
 fn index_to_coordinate(index: usize) -> Vector3<f32> {
     const CORRECTION_MATRIX: Matrix3<f64> = Matrix3::new(
@@ -245,6 +244,20 @@ fn get_neighbour_pixels(index: usize) -> Box<[usize]> {
     out.into_boxed_slice()
 }
 
+//includes diagonals
+fn get_full_neighbour_pixels(index: usize) -> Box<[usize]> {
+    let neighbours = get_neighbour_pixels(index);
+    let out_neighbours = neighbours.to_vec();
+    // let left = neighbours[0];
+    // out_neighbours.push(get_neighbour_pixels(left)[2]);
+    // out_neighbours.push(get_neighbour_pixels(left)[3]);
+
+    // let right = neighbours[1];
+    // out_neighbours.push(get_neighbour_pixels(right)[2]);
+    // out_neighbours.push(get_neighbour_pixels(right)[3]);
+
+    out_neighbours.into_boxed_slice()
+}
 #[derive(Debug, Clone)]
 struct CategorizedElevation {
     position: Vector3<f32>,
@@ -417,12 +430,12 @@ fn main() {
             Some(index) => {
                 let mut queue = VecDeque::new();
                 queue.push_back(index);
-                while queue.len() > 0 && num_set < (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) / 10000 {
+                while queue.len() > 0 && num_set < (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) / 5000 {
                     let n = queue.pop_front().unwrap();
                     if elevations[n].province_id.is_none() && elevations[n].elevation > 0.0 {
                         elevations[n].province_id = Some(current_id);
                         num_set += 1;
-                        queue.extend(get_neighbour_pixels(n).iter());
+                        queue.extend(get_full_neighbour_pixels(n).iter());
                     }
                 }
             }
@@ -443,7 +456,7 @@ fn main() {
                 None
             }
         });
-        let neighbours: Box<[_]> = province.map(|a| get_neighbour_pixels(a)).collect();
+        let neighbours: Box<[_]> = province.map(|a| get_full_neighbour_pixels(a)).collect();
         let num_neighbours = neighbours
             .into_iter()
             .map(|a| a.into_iter())
@@ -451,23 +464,22 @@ fn main() {
             .filter(|&&a| elevations[a].province_id.unwrap() != id)
             .count();
         let neighbour_ratio = (num_neighbours as f64) / (num_pixels as f64);
-        if !(num_pixels > 5 || neighbour_ratio < 10.0) {
+        if false && !(num_pixels > 5 || neighbour_ratio < 10.0) {
             bad_provinces.insert(id);
         }
     }
 
     let mut found_borders = HashSet::new();
     for i in 0..elevations.len() {
-        if elevations[i].elevation < 0.0
-            || bad_provinces.contains(&elevations[i].province_id.unwrap())
+        if bad_provinces.contains(&elevations[i].province_id.unwrap())
         {
             continue;
         }
-        let neighbours = get_neighbour_pixels(i);
+        let neighbours = get_full_neighbour_pixels(i);
 
         for &neighbour in neighbours.iter() {
-            if elevations[neighbour].elevation > 0.0
-                && elevations[i].province_id != elevations[neighbour].province_id
+            if elevations[i].province_id != elevations[neighbour].province_id
+
             {
                 found_borders.insert(if i > neighbour {
                     (i, neighbour)
@@ -485,60 +497,78 @@ fn main() {
         }
     }
 
-    let mut province_map = HashMap::new();
+    let mut province_index_map = HashMap::new();
     let mut province_points = vec![];
-    let perlin = noise::Perlin::new();
 
     for &pair in found_borders.iter() {
         let midpoint = elevations[pair.0]
             .position
             .lerp(&elevations[pair.1].position, 0.5);
-        let noise_point = midpoint.normalize().cast() * 30.0;
-        let noise_shift = if true || elevations[pair.0].is_coastal || elevations[pair.1].is_coastal
-        {
-            Vector3::zeros()
-        } else {
-            Vector3::new(
-                province_shift(&perlin, &noise_point, 0.0),
-                province_shift(&perlin, &noise_point, 100.0),
-                province_shift(&perlin, &noise_point, 1000.0),
-            )
-        };
         let shifted_position: Vector3<f32> =
-            ((midpoint.normalize().cast() + noise_shift).normalize() * World::RADIUS).cast()
+            (midpoint.normalize().cast() * World::RADIUS).cast()
                 * 1.001;
 
         //point a
-        let entry = province_map
-            .entry(elevations[pair.0].province_id.unwrap())
-            .or_insert(vec![]);
-        entry.push(province_points.len());
+        if elevations[pair.0].elevation > 0.0 {
+            let entry = province_index_map
+                .entry(elevations[pair.0].province_id.unwrap())
+                .or_insert(vec![]);
+            entry.push(province_points.len());
+            province_points.push(shifted_position);
+        }
 
         //point b
-        let entry = province_map
-            .entry(elevations[pair.1].province_id.unwrap())
-            .or_insert(vec![]);
-        entry.push(province_points.len());
-        province_points.push(shifted_position);
-    }
+        if elevations[pair.1].elevation > 0.0 {
+            let entry = province_index_map
+                .entry(elevations[pair.1].province_id.unwrap())
+                .or_insert(vec![]);
+            entry.push(province_points.len());
+            province_points.push(shifted_position);
 
-    let province_indices: Box<[_]> = province_map.into_values().collect();
-    let world = World::new(&province_points, &province_indices);
+        }
+    }
+    // let mut province_map = HashMap::new();
+    // let mut province_points = vec![];
+    // for categorized_elevation in &elevations{
+    //     province_map.entry(categorized_elevation.province_id).or_insert(vec![]).push(province_points.len());
+    //     province_points.push(categorized_elevation.position);
+    // }
+
+    let province_data_map = {
+        let mut province_data_map = HashMap::new();
+
+        let perlin = noise::Perlin::new();
+        for categorized_elevation in &elevations{
+            let aridity = (((1.0 - categorized_elevation.position.normalize().y.abs())) + 0.01).powf(2.0).clamp(0.0, 1.0);
+            let ore_sample_point = [
+                categorized_elevation.position.normalize().cast().x,
+                categorized_elevation.position.normalize().cast().y,
+                categorized_elevation.position.normalize().cast().z,
+            ];
+            let ore = ((perlin.get(ore_sample_point) + 1.0)/2.0) as f32;
+            province_data_map.entry(categorized_elevation.province_id.unwrap()).or_insert(ProvinceData::new()).add_sample(
+                categorized_elevation.elevation, aridity, ore);
+        }
+        province_data_map
+    };
+
+    // let province_indices: Box<[_]> = province_index_map.into_values().collect();
+    let world = World::new(&province_points, &province_index_map, &province_data_map);
 
     if let Some(line_data) = &mut vulkan_data.line_data {
         for point in &world.points {
             line_data.add_point(*point);
         }
-        for province in world.provinces.iter() {
-            for chunk in province.point_indices.chunks(2) {
-                if chunk.len() < 2 {
-                    continue;
-                }
-                let first_point = chunk[0];
-                let second_point = chunk[1];
-                line_data.connect_points(first_point, second_point);
-            }
-        }
+        // for province in world.provinces.iter() {
+        //     for chunk in province.point_indices.chunks(2) {
+        //         if chunk.len() < 2 {
+        //             continue;
+        //         }
+        //         let first_point = chunk[0];
+        //         let second_point = chunk[1];
+        //         line_data.connect_points(first_point, second_point);
+        //     }
+        // }
     }
 
     let planet_render_object_index = VulkanData::load_vertices_and_indices(
@@ -576,20 +606,21 @@ fn main() {
 
     let last_time_check = std::time::Instant::now();
     //Do some simulation to see if state stabilizes
-    let days = 12 * 100;
+    let pre_sim_steps = 12 * 100;
     let mut histories = Histories {
-        population: vec![VecDeque::with_capacity(days); game.world.provinces.len()]
+        population: vec![VecDeque::with_capacity(pre_sim_steps); game.world.provinces.len()]
             .into_boxed_slice(),
         prices: vec![
-            vec![VecDeque::with_capacity(days); Good::VARIANT_COUNT].into_boxed_slice();
+            vec![VecDeque::with_capacity(pre_sim_steps); Good::VARIANT_COUNT].into_boxed_slice();
             game.world.provinces.len()
         ]
         .into_boxed_slice(),
         last_time_check,
     };
-    for day in 0..days {
-        histories.add_new_tick(&game.world, day, true);
-        game.world.process(1.0 / 365.0);
+    let step_length = 1.0/12.0;
+    for step in 0..pre_sim_steps {
+        histories.add_new_tick(&game.world, step, true);
+        game.world.process(step_length);
     }
 
     client
@@ -603,12 +634,14 @@ fn main() {
         .unwrap();
     client.state = ClientState::ConnectionAwaiting;
 
-    let mut current_day = days;
+    let mut current_day = pre_sim_steps;
     let mut texture_version = 0;
 
     let mut population_graph_window_open = false;
     let mut price_graph_window_open = false;
     let mut pop_table_open = false;
+    let mut province_info_open = false;
+    let mut global_market_open = false;
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
 
@@ -631,6 +664,8 @@ fn main() {
                 ui.checkbox(&mut population_graph_window_open, "Population Plot");
                 ui.checkbox(&mut pop_table_open, "Pops Table");
                 ui.checkbox(&mut price_graph_window_open, "Price Plots");
+                ui.checkbox(&mut province_info_open, "Province Info");
+                ui.checkbox(&mut global_market_open, "Global Market");
             });
         });
 
@@ -682,21 +717,79 @@ fn main() {
                         ui.label(format!("Owned {:?}", Good::try_from(good_index).unwrap()));
                     }
                     ui.end_row();
-                    for (i, slice) in game.world.provinces[0].pops.pop_slices.iter().enumerate() {
-                        let culture = Culture::try_from(i / Industry::VARIANT_COUNT).unwrap();
-                        let industry = Industry::try_from(i % Industry::VARIANT_COUNT).unwrap();
-                        ui.label(format!("{:?}", culture));
-                        ui.label(format!("{:?}", industry));
-                        ui.label(format!("{:.0}", slice.population));
-                        ui.label(format!("{:.2}", slice.money));
-                        for good_index in 0..Good::VARIANT_COUNT {
-                            ui.label(format!("{:.2}", slice.owned_goods[good_index]));
+                    match game.selected_province{
+                        Some(selected_province) => {
+                            for (i, slice) in game.world.provinces[selected_province].pops.pop_slices.iter().enumerate() {
+                                let culture = Culture::try_from(i / Industry::VARIANT_COUNT).unwrap();
+                                let industry = Industry::try_from(i % Industry::VARIANT_COUNT).unwrap();
+                                ui.label(format!("{:?}", culture));
+                                ui.label(format!("{:?}", industry));
+                                ui.label(format!("{:.0}", slice.population));
+                                ui.label(format!("{:.2}", slice.money));
+                                for good_index in 0..Good::VARIANT_COUNT {
+                                    ui.label(format!("{:.2}", slice.owned_goods[good_index]));
+                                }
+                                ui.end_row();
+                            }
                         }
-                        ui.end_row();
+                        None => {}
+
                     }
                 })
             });
         }
+        if province_info_open {
+            Window::new("Province Info").show(&ctx, |ui| {
+                Grid::new("province_info_grid").striped(true).show(ui, |ui| {
+                    ui.label("Id");
+                    ui.label("Position");
+                    ui.label("Population");
+                    ui.label("Money");
+                    for industry_index in 0..Industry::VARIANT_COUNT {
+                        ui.label(format!("{:?} Productivity", Industry::try_from(industry_index).unwrap()));
+                    }
+                    ui.end_row();
+                    match game.selected_province{
+                        Some(province_index) => {
+                            let province = &game.world.provinces[province_index];
+                            let province_population: f64 = province.pops.pop_slices.iter().map(|a|(a.population)).sum();
+                            let province_money: f64 = province.pops.pop_slices.iter().map(|a|(a.money)).sum();
+                            ui.label(format!("{:?}", province.province_id));
+                            ui.label(format!("{:?}", province.position));
+                            ui.label(format!("{:.0}", province_population));
+                            ui.label(format!("{:.2}", province_money));
+                            for industry_index in 0..Industry::VARIANT_COUNT {
+                                ui.label(format!("{:.2}", province.productivity[industry_index]));
+                            }
+                            ui.end_row();
+        
+                        },
+                        None => {},
+                    }
+                })
+            });
+        }
+        // if global_market_open {
+        //     Window::new("Global Price Plots").show(&ctx, |ui| {
+        //         ScrollArea::vertical().show(ui, |ui|{
+        //                 for good_index in 0..Good::VARIANT_COUNT {
+        //                     let good = Good::try_from(good_index).unwrap();
+
+        //                     let values =
+        //                         histories.prices[selected_province][good_index].as_slices();
+        //                     add_plot(
+        //                         ui,
+        //                         &[values.0, values.1].concat(),
+        //                         &format!("{:?} Price", good),
+        //                         1000,
+        //                         0,
+        //                     );
+        //                 }
+        //             }
+        //             None => {}
+        //         });
+        //     });
+        // }
         // println!("egui texture version: {:?}", ctx.texture().version);
 
         let (output, shapes) = ctx.end_frame();
