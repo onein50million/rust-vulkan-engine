@@ -251,3 +251,18 @@ pub(crate) fn map_range_linear(
     );
     return result;
 }
+
+pub(crate) fn map_range_linear_f64(
+    value: f64,
+    from_min: f64,
+    from_max: f64,
+    to_min: f64,
+    to_max: f64,
+) -> f64 {
+    let result = f64::clamp(
+        to_min + ((value - from_min) / (from_max - from_min)) * (to_max - to_min),
+        f64::min(to_min, to_max),
+        f64::max(to_max, to_min),
+    );
+    return result;
+}

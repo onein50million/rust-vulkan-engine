@@ -47,7 +47,6 @@ use winit::event::{MouseButton, MouseScrollDelta};
 
 const CUBEMAP_WIDTH: usize = CubemapRender::CUBEMAP_WIDTH as usize;
 
-
 fn index_to_coordinate(index: usize) -> Vector3<f32> {
     const CORRECTION_MATRIX: Matrix3<f64> = Matrix3::new(
         1.0000000, 0.0000000, 0.0000000, 0.0000000, 0.0000000, 1.0000000, 0.0000000, -1.0000000,
@@ -332,6 +331,7 @@ fn add_plot(ui: &mut Ui, values: &[Value], heading: &str, num_samples: usize, st
 struct Histories {
     population: Box<[VecDeque<Value>]>,
     prices: Box<[Box<[VecDeque<Value>]>]>,
+    global_prices: Box<[VecDeque<Value>]>,
     last_time_check: Instant,
 }
 impl Histories {
@@ -339,7 +339,7 @@ impl Histories {
         for (province_index, province) in world.provinces.iter().enumerate() {
             if print_progress && self.last_time_check.elapsed().as_secs_f64() > 1.0 {
                 self.last_time_check = std::time::Instant::now();
-                println!("Day: {month}");
+                println!("Simulation Step: {month}");
             }
             if self.population[province_index].len() > 10000 {
                 self.population[province_index].pop_back();
@@ -354,6 +354,15 @@ impl Histories {
                 self.prices[province_index][good_index]
                     .push_front(Value::new(month as f64, province.market.price[good_index]));
             }
+        }
+        for good_index in 0..Good::VARIANT_COUNT {
+            if self.global_prices[good_index].len() > 10000 {
+                self.global_prices[good_index].pop_back();
+            }
+            self.global_prices[good_index].push_front(Value::new(
+                month as f64,
+                world.global_market.price[good_index],
+            ));
         }
     }
 }
@@ -471,16 +480,13 @@ fn main() {
 
     let mut found_borders = HashSet::new();
     for i in 0..elevations.len() {
-        if bad_provinces.contains(&elevations[i].province_id.unwrap())
-        {
+        if bad_provinces.contains(&elevations[i].province_id.unwrap()) {
             continue;
         }
         let neighbours = get_full_neighbour_pixels(i);
 
         for &neighbour in neighbours.iter() {
-            if elevations[i].province_id != elevations[neighbour].province_id
-
-            {
+            if elevations[i].province_id != elevations[neighbour].province_id {
                 found_borders.insert(if i > neighbour {
                     (i, neighbour)
                 } else {
@@ -505,8 +511,7 @@ fn main() {
             .position
             .lerp(&elevations[pair.1].position, 0.5);
         let shifted_position: Vector3<f32> =
-            (midpoint.normalize().cast() * World::RADIUS).cast()
-                * 1.001;
+            (midpoint.normalize().cast() * World::RADIUS).cast() * 1.001;
 
         //point a
         if elevations[pair.0].elevation > 0.0 {
@@ -524,7 +529,6 @@ fn main() {
                 .or_insert(vec![]);
             entry.push(province_points.len());
             province_points.push(shifted_position);
-
         }
     }
     // let mut province_map = HashMap::new();
@@ -538,16 +542,20 @@ fn main() {
         let mut province_data_map = HashMap::new();
 
         let perlin = noise::Perlin::new();
-        for categorized_elevation in &elevations{
-            let aridity = (((1.0 - categorized_elevation.position.normalize().y.abs())) + 0.01).powf(2.0).clamp(0.0, 1.0);
+        for categorized_elevation in &elevations {
+            let aridity = ((1.0 - categorized_elevation.position.normalize().y.abs()) + 0.01)
+                .powf(2.0)
+                .clamp(0.0, 1.0);
             let ore_sample_point = [
                 categorized_elevation.position.normalize().cast().x,
                 categorized_elevation.position.normalize().cast().y,
                 categorized_elevation.position.normalize().cast().z,
             ];
-            let ore = ((perlin.get(ore_sample_point) + 1.0)/2.0) as f32;
-            province_data_map.entry(categorized_elevation.province_id.unwrap()).or_insert(ProvinceData::new()).add_sample(
-                categorized_elevation.elevation, aridity, ore);
+            let ore = ((perlin.get(ore_sample_point) + 1.0) / 2.0) as f32;
+            province_data_map
+                .entry(categorized_elevation.province_id.unwrap())
+                .or_insert(ProvinceData::new())
+                .add_sample(categorized_elevation.elevation, aridity, ore);
         }
         province_data_map
     };
@@ -611,13 +619,16 @@ fn main() {
         population: vec![VecDeque::with_capacity(pre_sim_steps); game.world.provinces.len()]
             .into_boxed_slice(),
         prices: vec![
-            vec![VecDeque::with_capacity(pre_sim_steps); Good::VARIANT_COUNT].into_boxed_slice();
+            vec![VecDeque::with_capacity(pre_sim_steps); Good::VARIANT_COUNT]
+                .into_boxed_slice();
             game.world.provinces.len()
         ]
         .into_boxed_slice(),
         last_time_check,
+        global_prices: vec![VecDeque::with_capacity(pre_sim_steps); Good::VARIANT_COUNT]
+            .into_boxed_slice(),
     };
-    let step_length = 1.0/12.0;
+    let step_length = 1.0 / 12.0;
     for step in 0..pre_sim_steps {
         histories.add_new_tick(&game.world, step, true);
         game.world.process(step_length);
@@ -717,11 +728,18 @@ fn main() {
                         ui.label(format!("Owned {:?}", Good::try_from(good_index).unwrap()));
                     }
                     ui.end_row();
-                    match game.selected_province{
+                    match game.selected_province {
                         Some(selected_province) => {
-                            for (i, slice) in game.world.provinces[selected_province].pops.pop_slices.iter().enumerate() {
-                                let culture = Culture::try_from(i / Industry::VARIANT_COUNT).unwrap();
-                                let industry = Industry::try_from(i % Industry::VARIANT_COUNT).unwrap();
+                            for (i, slice) in game.world.provinces[selected_province]
+                                .pops
+                                .pop_slices
+                                .iter()
+                                .enumerate()
+                            {
+                                let culture =
+                                    Culture::try_from(i / Industry::VARIANT_COUNT).unwrap();
+                                let industry =
+                                    Industry::try_from(i % Industry::VARIANT_COUNT).unwrap();
                                 ui.label(format!("{:?}", culture));
                                 ui.label(format!("{:?}", industry));
                                 ui.label(format!("{:.0}", slice.population));
@@ -733,63 +751,72 @@ fn main() {
                             }
                         }
                         None => {}
-
                     }
                 })
             });
         }
         if province_info_open {
             Window::new("Province Info").show(&ctx, |ui| {
-                Grid::new("province_info_grid").striped(true).show(ui, |ui| {
-                    ui.label("Id");
-                    ui.label("Position");
-                    ui.label("Population");
-                    ui.label("Money");
-                    for industry_index in 0..Industry::VARIANT_COUNT {
-                        ui.label(format!("{:?} Productivity", Industry::try_from(industry_index).unwrap()));
-                    }
-                    ui.end_row();
-                    match game.selected_province{
-                        Some(province_index) => {
-                            let province = &game.world.provinces[province_index];
-                            let province_population: f64 = province.pops.pop_slices.iter().map(|a|(a.population)).sum();
-                            let province_money: f64 = province.pops.pop_slices.iter().map(|a|(a.money)).sum();
-                            ui.label(format!("{:?}", province.province_id));
-                            ui.label(format!("{:?}", province.position));
-                            ui.label(format!("{:.0}", province_population));
-                            ui.label(format!("{:.2}", province_money));
-                            for industry_index in 0..Industry::VARIANT_COUNT {
-                                ui.label(format!("{:.2}", province.productivity[industry_index]));
+                Grid::new("province_info_grid")
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.label("Id");
+                        ui.label("Position");
+                        ui.label("Population");
+                        ui.label("Money");
+                        for industry_index in 0..Industry::VARIANT_COUNT {
+                            ui.label(format!(
+                                "{:?} Productivity",
+                                Industry::try_from(industry_index).unwrap()
+                            ));
+                        }
+                        ui.end_row();
+                        match game.selected_province {
+                            Some(province_index) => {
+                                let province = &game.world.provinces[province_index];
+                                let province_population: f64 = province
+                                    .pops
+                                    .pop_slices
+                                    .iter()
+                                    .map(|a| (a.population))
+                                    .sum();
+                                let province_money: f64 =
+                                    province.pops.pop_slices.iter().map(|a| (a.money)).sum();
+                                ui.label(format!("{:?}", province.province_id));
+                                ui.label(format!("{:?}", province.position));
+                                ui.label(format!("{:.0}", province_population));
+                                ui.label(format!("{:.2}", province_money));
+                                for industry_index in 0..Industry::VARIANT_COUNT {
+                                    ui.label(format!(
+                                        "{:.2}",
+                                        province.industry_data[industry_index].productivity
+                                    ));
+                                }
+                                ui.end_row();
                             }
-                            ui.end_row();
-        
-                        },
-                        None => {},
-                    }
-                })
+                            None => {}
+                        }
+                    })
             });
         }
-        // if global_market_open {
-        //     Window::new("Global Price Plots").show(&ctx, |ui| {
-        //         ScrollArea::vertical().show(ui, |ui|{
-        //                 for good_index in 0..Good::VARIANT_COUNT {
-        //                     let good = Good::try_from(good_index).unwrap();
+        if global_market_open {
+            Window::new("Global Price Plots").show(&ctx, |ui| {
+                ScrollArea::vertical().show(ui, |ui| {
+                    for good_index in 0..Good::VARIANT_COUNT {
+                        let good = Good::try_from(good_index).unwrap();
 
-        //                     let values =
-        //                         histories.prices[selected_province][good_index].as_slices();
-        //                     add_plot(
-        //                         ui,
-        //                         &[values.0, values.1].concat(),
-        //                         &format!("{:?} Price", good),
-        //                         1000,
-        //                         0,
-        //                     );
-        //                 }
-        //             }
-        //             None => {}
-        //         });
-        //     });
-        // }
+                        let values = histories.global_prices[good_index].as_slices();
+                        add_plot(
+                            ui,
+                            &[values.0, values.1].concat(),
+                            &format!("{:?} Price", good),
+                            1000,
+                            0,
+                        );
+                    }
+                });
+            });
+        }
         // println!("egui texture version: {:?}", ctx.texture().version);
 
         let (output, shapes) = ctx.end_frame();
@@ -857,11 +884,11 @@ fn main() {
                             _ => {}
                         },
                         WindowEvent::KeyboardInput { input, .. } => {
-                            if input.virtual_keycode == Some(VirtualKeyCode::Escape)
-                                && input.state == ElementState::Released
-                            {
-                                close_app(&mut vulkan_data, control_flow);
-                            }
+                            // if input.virtual_keycode == Some(VirtualKeyCode::Escape)
+                            //     && input.state == ElementState::Released
+                            // {
+                            //     close_app(&mut vulkan_data, control_flow);
+                            // }
                             if input.virtual_keycode == Some(VirtualKeyCode::W) {
                                 game.inputs.up = match input.state {
                                     ElementState::Released => 0.0,
@@ -959,7 +986,7 @@ fn main() {
                     window.set_title(format!("Frametimes: {:}", average_frametime).as_str());
 
                     histories.add_new_tick(&game.world, current_day, false);
-                    game.process(1.0 / 365.0, &vulkan_data.get_projection(game.inputs.zoom));
+                    game.process(step_length, &vulkan_data.get_projection(game.inputs.zoom));
 
                     if let Some(selected_province) = game.selected_province {
                         let province_indices =

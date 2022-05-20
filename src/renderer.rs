@@ -1487,7 +1487,7 @@ impl LineDrawData {
 
     pub fn select_points(&mut self, point_indices: &[usize]) {
         self.index_buffer.count = 0;
-        for &index in point_indices{
+        for &index in point_indices {
             self.index_buffer.add_value(index as u32);
         }
         // for (index, vertex) in (&mut self.vertex_buffer).into_iter().enumerate() {
@@ -5715,10 +5715,14 @@ impl VulkanData {
     }
 
     fn create_array_image_resources(&mut self) {
-        self.images_3d.push(self.load_image_sequence(&Path::new("models/planet/drawn-globe/mountain_drawn")));
-        self.images_3d.push(self.load_image_sequence(&Path::new("models/planet/drawn-globe/grass")));
-        self.images_3d.push(self.load_image_sequence(&Path::new("models/planet/drawn-globe/trees")));
-        self.images_3d.push(self.load_image_sequence(&Path::new("models/planet/drawn-globe/wavygrass")));
+        self.images_3d
+            .push(self.load_image_sequence(&Path::new("models/planet/drawn-globe/mountain_drawn")));
+        self.images_3d
+            .push(self.load_image_sequence(&Path::new("models/planet/drawn-globe/grass")));
+        self.images_3d
+            .push(self.load_image_sequence(&Path::new("models/planet/drawn-globe/trees")));
+        self.images_3d
+            .push(self.load_image_sequence(&Path::new("models/planet/drawn-globe/wavygrass")));
     }
 
     fn load_image_sequence(&self, folder: &Path) -> CombinedImage {
