@@ -1,13 +1,18 @@
-use crate::{support::Vertex, world::World};
+use crate::{
+    support::{coordinate_to_index, index_to_coordinate, Vertex, CUBEMAP_WIDTH},
+    world::World,
+};
 use float_ord::FloatOrd;
-use gdal::errors::GdalError;
+use gdal::raster::GdalType;
 use genmesh::generators::{IcoSphere, IndexedPolygon, SharedVertex};
 use nalgebra::{Vector2, Vector3, Vector4};
+use serde::Deserialize;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fmt::Debug,
     fs::read_dir,
-    ops::{Add, Mul},
+    ops::{Add, AddAssign, Mul},
+    path::{Path, PathBuf},
 };
 
 pub struct MeshOutput {
@@ -28,27 +33,8 @@ struct VertexData {
     quantized_elevation: i8,
     neighbours: Vec<usize>,
 }
-// //https://answers.unity.com/questions/383804/calculate-uv-coordinates-of-3d-point-on-plane-of-m.html
-// pub fn triangle_interpolate<T>(target_point: Vector3<f32>,first_point: (Vector3<f32>, T),second_point: (Vector3<f32>, T),third_point: (Vector3<f32>, T)) -> Option<T>
-// where T:  Mul<f32, Output = T> + Add<Output = T> + Copy
-// {
-//     let f1 = first_point.0 - target_point;
-//     let f2 = second_point.0 - target_point;
-//     let f3 = third_point.0 - target_point;
 
-//     let total_area = dbg!((first_point.0 - second_point.0).cross(&(first_point.0 - third_point.0)).magnitude());
-
-//     let ratio1 = dbg!(f2.cross(&f3).magnitude()/total_area);
-//     let ratio2 = dbg!(f3.cross(&f1).magnitude()/total_area);
-//     let ratio3 = dbg!(f1.cross(&f2).magnitude()/total_area);
-
-//     if ratio1 > 0.0 && ratio2 > 0.0 && ratio3 > 0.0{
-//         Some(first_point.1 * ratio1 + second_point.1 * ratio2 + third_point.1 * ratio3)
-//     }else{
-//         None
-//     }
-
-// }
+const KELVIN_TO_CELSIUS: f64 = -273.15;
 
 //https://answers.unity.com/questions/383804/calculate-uv-coordinates-of-3d-point-on-plane-of-m.html
 pub fn triangle_interpolate<T>(
@@ -107,24 +93,6 @@ where
     panic!("Failed to find point on mesh: point: {point}")
 }
 
-// pub fn are_points_contiguous(point1: Vector3<f32>, point2: Vector3<f32>, vertices: &[(Vector3<f32>, f32)], indices: &[usize]) -> bool{
-//     const SAMPLES_PER_RADIAN: usize = 100;
-//     let angle = point1.angle(&point2);
-//     let num_samples = ((angle * SAMPLES_PER_RADIAN as f32) as usize).max(1);
-
-//     for sample in 0..num_samples{
-//         let progress = sample as f32 / num_samples as f32;
-
-//         let sample_vector = point1.slerp(&point2, progress) * World::RADIUS as f32;
-//         let interpolate = interoplate_on_mesh(sample_vector, vertices, indices);
-
-//         if interpolate < 0.0{
-//             return false;
-//         }
-//     }
-//     true
-// }
-
 pub fn are_points_contiguous(
     point1: Vector3<f32>,
     point2: Vector3<f32>,
@@ -145,307 +113,289 @@ pub fn are_points_contiguous(
     true
 }
 
-const NUM_BUCKETS: f32 = 8.0; //Number of buckets to quantize elevations into
-
-fn quantized_to_actual(quantized: i8, range: f32) -> f32 {
-    (quantized as f32 / NUM_BUCKETS) * range
-}
-
 pub fn get_planet(radius: f32) -> MeshOutput {
     let sphere = IcoSphere::subdivide(3);
 
-    let _rng = fastrand::Rng::new();
-    let mut vertices: Vec<_> = sphere
+    let vertices: Vec<_> = sphere
         .shared_vertex_iter()
         .map(|vertex| Vertex {
-            position: Vector3::new(vertex.pos.x, vertex.pos.y, vertex.pos.z),
+            position: Vector3::new(vertex.pos.x, vertex.pos.y, vertex.pos.z).normalize() * radius,
             normal: Vector3::new(vertex.pos.x, vertex.pos.y, vertex.pos.z).normalize(),
             tangent: Vector4::zeros(),
             texture_coordinate: Vector2::zeros(),
             texture_type: 0,
             bone_indices: Vector4::zeros(),
             bone_weights: Vector4::zeros(),
-            elevation: 0.0,
         })
         .collect();
-
-    let paths = std::fs::read_dir("../GSG/elevation_gebco").unwrap();
-
-    let wgs_84 = gdal::spatial_ref::SpatialRef::from_epsg(4326).unwrap();
-
-    println!("Loading elevation data");
-    let mut raw_vertex_data = vec![
-        RawVertexData {
-            sum: 0.0,
-            sample_count: 0,
-            data_priority: 0
-        };
-        vertices.len()
-    ];
-    for folder in paths.filter_map(|s| s.ok()) {
-        let data_priority = if folder.file_name().to_str().unwrap() == "arctic" {
-            1
-        } else {
-            0
-        };
-
-        let image_files = read_dir(folder.path()).unwrap();
-        let path = image_files
-            .filter_map(|s| s.ok())
-            .find(|image_file| {
-                if let Ok(file_name) = image_file.file_name().into_string() {
-                    file_name.to_lowercase().contains("mea")
-                } else {
-                    false
-                }
-            })
-            .unwrap()
-            .path();
-
-        let dataset = gdal::Dataset::open(path).unwrap();
-        let mut transform = dataset.geo_transform().unwrap();
-        let mut inv_transform = [0.0f64; 6];
-        unsafe {
-            assert_eq!(
-                gdal_sys::GDALInvGeoTransform(transform.as_mut_ptr(), inv_transform.as_mut_ptr(),),
-                1,
-                "InvGeoTransform failed"
-            );
-        }
-        let rasterband = dataset.rasterband(1).unwrap();
-        let no_data_value = rasterband.no_data_value().unwrap();
-        let spatial_ref = dataset.spatial_ref().unwrap();
-        let mut instant = std::time::Instant::now();
-
-        for (i, (vertex, raw_vertex)) in vertices.iter().zip(raw_vertex_data.iter_mut()).enumerate()
-        {
-            let time_elapsed = instant.elapsed().as_secs_f64();
-            if time_elapsed > 1.0 {
-                instant = std::time::Instant::now();
-                println!("Percent done file: {:}", i as f64 / vertices.len() as f64);
-            };
-
-            let latitude = (vertex.position.y.asin() as f64).to_degrees();
-
-            let longitude = (vertex.position.z.atan2(vertex.position.x) as f64).to_degrees();
-
-            let transformed_coords = if spatial_ref.name().unwrap() != wgs_84.name().unwrap() {
-                let coord_transform =
-                    gdal::spatial_ref::CoordTransform::new(&wgs_84, &spatial_ref).unwrap();
-                let mut x = [latitude];
-                let mut y = [longitude];
-                let mut z = [];
-                match coord_transform.transform_coords(&mut x, &mut y, &mut z) {
-                    Ok(_) => {}
-                    Err(error) => {
-                        match error {
-                            GdalError::InvalidCoordinateRange { .. } => {}
-                            _ => {
-                                println!("Unknown Transform Coords error: {:?}", error);
-                            }
-                        }
-                        continue;
-                    }
-                }
-                (x[0], y[0])
-            } else {
-                (latitude, longitude)
-            };
-
-            let x = inv_transform[0]
-                + transformed_coords.1 * inv_transform[1]
-                + transformed_coords.0 * inv_transform[2];
-            let y = inv_transform[3]
-                + transformed_coords.1 * inv_transform[4]
-                + transformed_coords.0 * inv_transform[5];
-
-            if x >= 0.0
-                && x < rasterband.size().0 as f64
-                && y >= 0.0
-                && y < rasterband.size().1 as f64
-            {
-                let mut slice = [0f64];
-
-                // println!("x: {:}, y: {:}", x, y);
-                match rasterband.read_into_slice(
-                    (x as isize, y as isize),
-                    (1, 1),
-                    (1, 1),
-                    &mut slice,
-                    Some(gdal::raster::ResampleAlg::Bilinear),
-                ) {
-                    Err(error) => {
-                        println!("GDAL Error: {:?}", error)
-                    }
-                    Ok(..) => {
-                        if slice[0] != no_data_value && data_priority >= raw_vertex.data_priority {
-                            if data_priority > raw_vertex.data_priority {
-                                raw_vertex.sum = 0.0;
-                                raw_vertex.sample_count = 0;
-                                raw_vertex.data_priority = data_priority;
-                            }
-                            raw_vertex.sum += slice[0];
-                            raw_vertex.sample_count += 1;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    for (vertex, raw_vertex) in vertices.iter_mut().zip(raw_vertex_data.iter()) {
-        if raw_vertex.sample_count > 0 {
-            vertex.elevation = (raw_vertex.sum / raw_vertex.sample_count as f64) as f32;
-        }
-        // vertex.elevation = 1000.0;
-        // vertex.position *= radius;
-    }
 
     let indices: Vec<_> = sphere
         .indexed_polygon_iter()
         .map(|triangle| [triangle.x, triangle.y, triangle.z].into_iter())
         .flatten()
         .collect();
+    return MeshOutput { vertices, indices };
+}
 
-    let mut vertex_data: Vec<_> = vertices
+pub fn get_elevations() -> Vec<f32> {
+    // let paths = std::fs::read_dir("../GSG/elevation_gebco_small").unwrap();
+    let mut samples = vec![(0.0, 0); (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) as usize];
+    // for folder in paths.filter_map(|s| s.ok()) {
+    //     let image_files = read_dir(folder.path()).unwrap();
+    //     let path = image_files
+    //         .filter_map(|s| s.ok())
+    //         .find(|image_file| {
+    //             if let Ok(file_name) = image_file.file_name().into_string() {
+    //                 file_name.to_lowercase().contains("mea")
+    //             } else {
+    //                 false
+    //             }
+    //         })
+    //         .unwrap()
+    //         .path();
+
+    //     load_raster_file(&path, &mut samples, |a|{a - 76.0});
+    // }
+
+    // for path in paths{
+    //     if let Ok(path) = path{
+    //         load_raster_file(&path.path(), &mut samples, |a|{a - 76.0})
+    //     }
+    // }
+
+    load_raster_file(
+        &PathBuf::from("../GSG/elevation_gebco_small/gebco_combined.tif"),
+        &mut samples,
+        |a, _| a - 76.0,
+    );
+    samples
         .iter()
-        .enumerate()
-        .map(|(_index, vertex)| {
-            const NUM_NEIGHBOURS: usize = 6;
-            let mut closest_vertices = vertices.iter().enumerate().collect::<Vec<_>>();
-
-            closest_vertices.sort_by_key(|potential_closest| {
-                FloatOrd((potential_closest.1.position - vertex.position).magnitude())
-            });
-
-            VertexData {
-                elevation: vertex.elevation,
-                quantized_elevation: 0,
-                neighbours: closest_vertices
-                    .iter()
-                    .map(|(index, _)| *index)
-                    .take(NUM_NEIGHBOURS)
-                    .collect(),
+        .map(|&(sum, count)| {
+            if count > 0 {
+                (sum / count as f64) as f32
+            } else {
+                0.0
             }
         })
+        .collect()
+}
+
+pub fn get_aridity() -> Vec<f32> {
+    let mut samples = vec![(0.0, 0); (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) as usize];
+    // load_raster_file(&PathBuf::from("../GSG/aridity/ai_v3_yr.tif"), &mut samples, |a|{a / 10_000.0});
+    load_raster_file(
+        &PathBuf::from("../GSG/aridity_small/aridity.tif"),
+        &mut samples,
+        |a, _| a / 10_000.0,
+    );
+
+    samples
+        .iter()
+        .map(|&(sum, count)| {
+            if count > 0 {
+                (sum / count as f64) as f32
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
+pub fn get_feb_temps() -> Vec<f32> {
+    //TODO: global temperature change
+
+    let mut samples = vec![(0.0, 0); (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) as usize];
+    load_raster_file(
+        &PathBuf::from("../GSG/temperature6/FebruaryTemp.tif"),
+        &mut samples,
+        |a, _| a + KELVIN_TO_CELSIUS,
+    );
+
+    samples
+        .iter()
+        .map(|&(sum, count)| {
+            if count > 0 {
+                (sum / count as f64) as f32
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
+pub fn get_july_temps() -> Vec<f32> {
+    let mut samples = vec![(0.0, 0); (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) as usize];
+    load_raster_file(
+        &PathBuf::from("../GSG/temperature6/JulyTemp.tif"),
+        &mut samples,
+        |a, _| a + KELVIN_TO_CELSIUS,
+    );
+
+    samples
+        .iter()
+        .map(|&(sum, count)| {
+            if count > 0 {
+                (sum / count as f64) as f32
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
+pub fn get_populations(elevations: &[f32]) -> (Vec<f32>, f32) {
+    let mut samples = vec![(0.0, 0); (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) as usize];
+    // load_raster_file(&PathBuf::from("../GSG/population2/gpw_v4_population_count_adjusted_to_2015_unwpp_country_totals_rev11_2020_30_sec.tif"), &mut samples, |a|{a});
+    load_raster_file(
+        &PathBuf::from("../GSG/population2/small.tif"),
+        &mut samples,
+        |a, _| a,
+    );
+    // load_raster_file(&PathBuf::from("../GSG/population_small/population.tif"), &mut samples, |a|{a});
+
+    let mut pops_underwater = 0.0;
+    (
+        samples
+            .iter()
+            .enumerate()
+            .map(|(i, &(sum, _))| {
+                let total_population = sum as f32;
+                if elevations[i] <= 0.0 {
+                    pops_underwater += total_population;
+                }
+                total_population
+            })
+            .collect(),
+        pops_underwater,
+    )
+}
+
+trait Convert<T> {
+    fn convert(self) -> T;
+}
+
+impl Convert<u16> for f64 {
+    fn convert(self) -> u16 {
+        self as u16
+    }
+}
+
+impl<T> Convert<Self> for T {
+    fn convert(self) -> Self {
+        self
+    }
+}
+
+pub fn get_countries() -> (Box<[Option<u16>]>, Box<[String]>) {
+    let mut samples = vec![(0u16, 0); (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) as usize];
+    load_raster_file(
+        &PathBuf::from("../GSG/nations/nations.tif"),
+        &mut samples,
+        |a, samples| if samples == 0 { a } else { 0 },
+    );
+    let ids = samples
+        .iter()
+        .map(|&(a, _)| if a == 0 { None } else { Some(a - 1) })
         .collect();
 
-    dbg!(&vertex_data[5]);
+    #[derive(Debug, Deserialize)]
+    struct CsvRow {
+        name: String,
+        country_id: u16,
+    }
+    let mut reader =
+        csv::Reader::from_path("../GSG/nations/nations.csv").expect("Failed to open nations csv");
+    let country_names: Box<[String]> = reader
+        .deserialize()
+        .map(|a: Result<CsvRow, _>| a.expect("failed to deserialize nations csv").name)
+        .collect();
 
-    for vertex in &mut vertex_data {
-        let divisor = 2500.0;
-        if vertex.elevation < 0.0 {
-            vertex.elevation = (vertex.elevation / divisor).ceil() * divisor;
+    (ids, country_names)
+}
+
+fn load_raster_file<F, T>(path: &Path, samples: &mut Vec<(T, u32)>, additional_processing: F)
+where
+    F: Fn(T, u32) -> T,
+    T: AddAssign + Default + GdalType + Clone + Copy + PartialEq,
+    f64: Convert<T>,
+{
+    println!("Loading file: {:?}", path);
+    let dataset = gdal::Dataset::open(path).unwrap();
+    let raster_band = dataset.rasterband(1).unwrap();
+
+    let transform = dataset.geo_transform().unwrap();
+    let mut instant = std::time::Instant::now();
+
+    let num_pixels = raster_band.size().0 * raster_band.size().1;
+    dbg!(raster_band.size());
+    let mut slice = vec![T::default(); num_pixels].into_boxed_slice();
+    match raster_band.read_into_slice(
+        (0, 0),
+        raster_band.size(),
+        raster_band.size(),
+        &mut slice,
+        Some(gdal::raster::ResampleAlg::Bilinear),
+    ) {
+        Err(error) => {
+            println!("GDAL Error: {:?}", error)
         }
-    }
-
-    let min_elevation = vertex_data
-        .iter()
-        .fold(f32::INFINITY, |a, b| a.min(b.elevation));
-    let max_elevation = vertex_data
-        .iter()
-        .fold(f32::NEG_INFINITY, |a, b| a.max(b.elevation));
-
-    for vertex in &mut vertex_data {
-        vertex.quantized_elevation =
-            ((vertex.elevation / max_elevation.max(min_elevation.abs())) * NUM_BUCKETS) as i8
-    }
-
-    let mut quantized_elevations = HashSet::new();
-    for vertex in &vertex_data {
-        quantized_elevations.insert(vertex.quantized_elevation);
-    }
-    let mut quantized_elevations: Vec<_> = quantized_elevations.iter().collect();
-    quantized_elevations.sort();
-    for elevation in quantized_elevations {
-        let actual = quantized_to_actual(*elevation, max_elevation.max(min_elevation.abs()));
-        println!("Quantized: {elevation} Actual: {actual}");
-    }
-
-    let mut start_instant = std::time::Instant::now();
-    let mut current_try = 0;
-    'wave_function: loop {
-        current_try += 1;
-        println!("Current try: {:}", current_try);
-        let mut wave_function_collapse = ElevationWaveFunctionCollapse::new(&vertex_data);
-
-        let mut num_collapses = 0;
-        loop {
-            let mut lowest_entropy_cells = vec![];
-            let mut lowest_entropy = wave_function_collapse.get_cell_entropy(0);
-            let mut unfinished_cell_indices = HashSet::new();
-            for (index, (vertex, cell)) in vertices
-                .iter_mut()
-                .zip(wave_function_collapse.cells.iter())
-                .enumerate()
-            {
-                let cell_entropy = wave_function_collapse.get_cell_entropy(index);
-                if cell_entropy > lowest_entropy {
-                    lowest_entropy = cell_entropy;
-                    lowest_entropy_cells = vec![index];
-                } else if cell_entropy == lowest_entropy {
-                    lowest_entropy_cells.push(index);
+        Ok(..) => {
+            for (index, pixel) in slice.iter().enumerate() {
+                let time_elapsed = instant.elapsed().as_secs_f64();
+                if time_elapsed > 1.0 {
+                    instant = std::time::Instant::now();
+                    // let index = longitude + latitude * raster_band.size().0;
+                    // let index = latitude + longitude * raster_band.size().1;
+                    println!("Percent done file: {:}", index as f64 / num_pixels as f64);
+                };
+                let longitude = index % raster_band.size().0;
+                let latitude = index / raster_band.size().0;
+                // dbg!(longitude);
+                // dbg!(latitude);
+                let transformed_longitude = (transform[0]
+                    + longitude as f64 * transform[1]
+                    + latitude as f64 * transform[2])
+                    .to_radians();
+                let transformed_latitude = (transform[3]
+                    + longitude as f64 * transform[4]
+                    + latitude as f64 * transform[5])
+                    .to_radians();
+                // dbg!(transformed_longitude);
+                // dbg!(transformed_latitude);
+                let raster_coordinate = Vector3::new(
+                    transformed_latitude.cos() * transformed_longitude.cos(),
+                    transformed_latitude.sin(),
+                    transformed_latitude.cos() * transformed_longitude.sin(),
+                );
+                // dbg!(raster_coordinate);
+                // let closest_index = samples.iter().enumerate().min_by_key(|&(index, _)|{
+                //     let coordinate = index_to_coordinate(index).normalize().cast();
+                //     FloatOrd((raster_coordinate - coordinate).magnitude())
+                // }).unwrap().0;
+                let mut closest_index = coordinate_to_index(raster_coordinate);
+                if closest_index >= CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6 {
+                    dbg!(closest_index);
+                    closest_index = CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6 - 1;
                 }
-
-                match cell.cell_state {
-                    CellState::Collapsed(quantized_elevation) => {
-                        // vertex.elevation = (quantized_elevation as f32 / 4.0)
-                        //     * max_elevation.max(min_elevation.abs());
-                        vertex.elevation = quantized_to_actual(
-                            quantized_elevation,
-                            max_elevation.max(min_elevation.abs()),
-                        );
-                        // vertex.position += vertex.position.normalize() * vertex.elevation * 1.0;
+                // dbg!(closest_index);
+                // dbg!(index_to_coordinate(closest_index).normalize());
+                // dbg!(pixel);
+                let num_samples = samples[closest_index].1;
+                match raster_band.no_data_value() {
+                    Some(no_data_value) => {
+                        if *pixel != no_data_value.convert() {
+                            samples[closest_index].0 += additional_processing(*pixel, num_samples);
+                            samples[closest_index].1 += 1;
+                        }
                     }
-                    CellState::Superposition(_) => {
-                        unfinished_cell_indices.insert(index);
+                    None => {
+                        samples[closest_index].0 += additional_processing(*pixel, num_samples);
+                        samples[closest_index].1 += 1;
                     }
                 }
             }
-            if start_instant.elapsed().as_secs_f64() > 1.0 {
-                start_instant = std::time::Instant::now();
-                println!("{:} collapses to go", unfinished_cell_indices.len())
-            }
-            if unfinished_cell_indices.len() > 0 {
-                let rand_index = fastrand::usize(0..lowest_entropy_cells.len());
-                match wave_function_collapse
-                    .collapse_cell(*lowest_entropy_cells.iter().nth(rand_index).unwrap())
-                {
-                    Ok(_) => {
-                        num_collapses += 1;
-                    }
-                    Err(_) => {
-                        println!("Wave function collapse failed");
-                        println!("Made it {:} collapses", num_collapses);
-                        continue 'wave_function;
-                    }
-                }
-            } else {
-                break 'wave_function;
-            }
         }
     }
-
-    for vertex in &mut vertices {
-        vertex.normal = Vector3::zeros();
-        vertex.position *= radius + vertex.elevation * 1.0;
-    }
-
-    for triangle_index in (0..indices.len()).step_by(3) {
-        let edge1 = vertices[indices[triangle_index] as usize].position
-            - vertices[indices[triangle_index + 1] as usize].position;
-        let edge2 = vertices[indices[triangle_index] as usize].position
-            - vertices[indices[triangle_index + 2] as usize].position;
-        let weighted_normal = edge1.cross(&edge2);
-        for i in 0..3 {
-            vertices[indices[triangle_index + i] as usize].normal += weighted_normal
-        }
-    }
-    for vertex in &mut vertices {
-        vertex.normal = vertex.normal.normalize();
-    }
-
-    return MeshOutput { vertices, indices };
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -496,211 +446,5 @@ fn balance_ratios(hashmap: &mut HashMap<i8, f32>) {
 
     for ratio in hashmap.values_mut() {
         *ratio /= ratio_sum;
-    }
-}
-
-#[derive(Clone, Debug)]
-struct ElevationWaveFunctionCollapse {
-    cells: Vec<Cell>,
-    elevation_mapping: HashMap<i8, HashMap<i8, Ratio>>, //given quantized elevation it gives you the possible states and their probabilities
-}
-
-impl ElevationWaveFunctionCollapse {
-    fn new(vertex_data: &[VertexData]) -> Self {
-        let mut elevation_mapping = HashMap::new();
-        for i in 0..vertex_data.len() {
-            let inner_map = elevation_mapping
-                .entry(vertex_data[i].quantized_elevation)
-                .or_insert(HashMap::new());
-            for neighbour in &vertex_data[i].neighbours {
-                let entry = inner_map
-                    .entry(vertex_data[*neighbour].quantized_elevation)
-                    .or_insert(Ratio::RawSamples { sample_count: 0 });
-                entry.add_sample();
-                // if !inner_map.contains(&vertex_data[*neighbour].quantized_elevation) {
-                //     inner_map.insert(vertex_data[*neighbour].quantized_elevation);
-                // }
-            }
-        }
-
-        for raw_samples in elevation_mapping.values_mut() {
-            let total: f32 = raw_samples
-                .values()
-                .map(|sample_set| match sample_set {
-                    Ratio::RawSamples { sample_count } => *sample_count as f32,
-                    Ratio::Data(ratio) => *ratio,
-                })
-                .sum();
-
-            for raw_sample in raw_samples.values_mut() {
-                let new_value = match raw_sample {
-                    Ratio::RawSamples { sample_count } => (*sample_count as f32) / total,
-                    Ratio::Data(_) => {
-                        panic!("Data already averaged")
-                    }
-                };
-
-                *raw_sample = Ratio::Data(new_value);
-            }
-        }
-
-        // dbg!(raw_samp)
-
-        let cells: Vec<_> = vertex_data
-            .iter()
-            .map(|vertex| {
-                let mut superpositions = HashMap::new();
-
-                for ratio_map in elevation_mapping.values() {
-                    for (potential_elevation, ratio) in ratio_map {
-                        if let Ratio::Data(ratio) = ratio {
-                            let entry = superpositions.entry(*potential_elevation).or_insert(0.0);
-                            *entry += ratio;
-                        } else {
-                            panic!("Data not averaged")
-                        }
-                    }
-                }
-
-                balance_ratios(&mut superpositions);
-
-                Cell {
-                    cell_state: CellState::Superposition(superpositions),
-                    neighbours: vertex.neighbours.clone(),
-                }
-            })
-            .collect();
-
-        let out = Self {
-            cells,
-            elevation_mapping,
-        };
-        out
-    }
-
-    //will be unbalanced
-    fn get_possible_states(&self, index: usize) -> HashMap<i8, f32> {
-        match &self.cells[index].cell_state {
-            CellState::Collapsed(state) => {
-                HashMap::from_iter(self.elevation_mapping[&state].iter().map(|(key, value)| {
-                    match value {
-                        Ratio::RawSamples { .. } => panic!("Unfinished ratio map"),
-                        Ratio::Data(new_value) => (*key, *new_value),
-                    }
-                }))
-            }
-            CellState::Superposition(states) => {
-                let mut output = HashMap::new();
-                for (quantized_elevation, ratio) in states {
-                    for (possible_quantized_elevation, possible_ratio) in
-                        &self.elevation_mapping[quantized_elevation]
-                    {
-                        let entry = output.entry(*possible_quantized_elevation).or_insert(0.0);
-                        if let Ratio::Data(possible_ratio) = possible_ratio {
-                            *entry += ratio * possible_ratio;
-                        }
-                    }
-                }
-                // balance_ratios(&mut output);
-                output
-            }
-        }
-    }
-
-    fn propogate_changes(&mut self) -> Result<(), Error> {
-        let mut done = true;
-        loop {
-            // println!("propogate changes loop");
-            // dbg!(self.cells.len());
-            for i in 0..self.cells.len() {
-                let new_states = match &self.cells[i].cell_state {
-                    CellState::Collapsed(_) => continue,
-                    CellState::Superposition(states) => {
-                        // dbg!(states.len());
-                        let mut neighbour_states = HashMap::new();
-                        for neighbour_index in &self.cells[i].neighbours {
-                            for (neighbour_state_elevation, neighbour_state_ratio) in
-                                self.get_possible_states(*neighbour_index).iter()
-                            {
-                                let entry = neighbour_states
-                                    .entry(*neighbour_state_elevation)
-                                    .or_insert(0.0);
-                                *entry += neighbour_state_ratio * states[neighbour_state_elevation];
-                            }
-                        }
-                        balance_ratios(&mut neighbour_states);
-                        const EPSILON: f32 = 0.001;
-
-                        // dbg!(&neighbour_states);
-                        // dbg!(&states);
-                        for (neighbour_quantized_elevation, neighbour_state_ratio) in
-                            &neighbour_states
-                        {
-                            let state_ratio = states[neighbour_quantized_elevation];
-                            if (state_ratio - *neighbour_state_ratio).abs() > EPSILON {
-                                done = false;
-                            }
-                        }
-
-                        // let out: HashSet<_> = neighbour_states
-                        //     .intersection(states)
-                        //     .map(|&state| state)
-                        //     .collect();
-                        // if &out != states {
-                        //     done = false;
-                        // }
-                        neighbour_states
-                    }
-                };
-
-                // dbg!(&new_states);
-
-                if new_states.len() == 0 {
-                    return Err(Error::PropogationFailed);
-                } else if new_states.len() == 1 {
-                    self.cells[i].cell_state =
-                        CellState::Collapsed(*new_states.iter().next().unwrap().0)
-                } else {
-                    self.cells[i].cell_state = CellState::Superposition(new_states)
-                }
-            }
-            if done {
-                break;
-            }
-            done = true;
-        }
-        Ok(())
-    }
-
-    fn get_cell_entropy(&self, index: usize) -> usize {
-        match &self.cells[index].cell_state {
-            CellState::Collapsed(_) => 1,
-            CellState::Superposition(states) => states.iter().count(),
-        }
-    }
-
-    fn collapse_cell(&mut self, index: usize) -> Result<(), Error> {
-        let mut collapsed_value = None;
-        match &self.cells[index].cell_state {
-            CellState::Collapsed(_) => return Ok(()),
-            CellState::Superposition(superpositions) => {
-                let random = fastrand::f32();
-                let mut probability_sum = 0.0;
-                for (quantized_elevation, probability) in superpositions {
-                    probability_sum += probability;
-                    if random <= probability_sum {
-                        collapsed_value = Some(*quantized_elevation)
-                    }
-                }
-            }
-        }
-        self.cells[index].cell_state = CellState::Collapsed(
-            collapsed_value.expect("Cell Collapse failed. This probably shouldn't happen... maybe"),
-        );
-        self.propogate_changes()
-    }
-    fn collapse_cell_to_value(&mut self, index: usize, value: i8) -> Result<(), Error> {
-        self.cells[index].cell_state = CellState::Collapsed(value);
-        self.propogate_changes()
     }
 }

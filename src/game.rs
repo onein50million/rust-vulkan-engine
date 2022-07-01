@@ -11,6 +11,7 @@ Server object: calculated purely on server, client just copies data from server
 Client predicted: Uses client side prediction to reduce latency
 Client only (Animations, particles)
  */
+const GAME_SPEEDS: [f64; 5] = [0.0, 1.0, 24.0, 120.0, 240.0];
 
 pub mod directions {
     use nalgebra::Vector3;
@@ -70,11 +71,13 @@ pub mod client {
     use std::f64::consts::PI;
     use std::time::Instant;
 
-    use crate::renderer::VulkanData;
     use crate::support::Inputs;
-    use crate::world::World;
+    use crate::world::{ProvinceKey, World};
+    use crate::{renderer::VulkanData, world::organization::OrganizationKey};
     use float_ord::FloatOrd;
     use nalgebra::{Matrix4, Perspective3, Point3, Translation3, UnitQuaternion, Vector2, Vector3};
+
+    use super::GAME_SPEEDS;
 
     pub struct AnimationHandler {
         pub index: usize,
@@ -139,9 +142,10 @@ pub mod client {
                 * UnitQuaternion::from_euler_angles(0.0, 0.0, self.latitude)
                 * Vector3::new(10_000_000.0, 0.0, 0.0);
         }
-        pub fn get_view_matrix(&self) -> Matrix4<f64> {
-            (Matrix4::from(Translation3::from(self.get_position()))
-                * self.get_rotation().to_homogeneous())
+        pub fn get_view_matrix(&self, planet_transform: Matrix4<f64>) -> Matrix4<f64> {
+            (planet_transform
+                * (Matrix4::from(Translation3::from(self.get_position()))
+                    * self.get_rotation().to_homogeneous()))
             .try_inverse()
             .unwrap()
         }
@@ -153,7 +157,12 @@ pub mod client {
         pub render_object_index: usize,
         pub animation_handler: Option<AnimationHandler>,
     }
-
+    impl GameObject {
+        pub fn get_transform(&self) -> Matrix4<f64> {
+            return Matrix4::from(Translation3::from(self.position))
+                * self.rotation.to_homogeneous();
+        }
+    }
     pub struct Game {
         pub world: World,
         pub inputs: Inputs,
@@ -162,7 +171,6 @@ pub mod client {
         pub planet: GameObject,
         pub start_time: Instant,
         pub camera: Camera,
-        pub selected_province: Option<usize>,
     }
     impl Game {
         pub fn new(planet_render_index: usize, world: World) -> Self {
@@ -179,11 +187,18 @@ pub mod client {
                 camera: Camera::new(),
                 last_mouse_position: Vector2::zeros(),
                 world,
-                selected_province: None,
             }
         }
-        pub fn process(&mut self, delta_time: f64, projection: &Perspective3<f64>) {
-            self.world.process(delta_time);
+        pub fn process(
+            &mut self,
+            delta_time: f64,
+            projection: &Perspective3<f64>,
+            game_speed: u16,
+        ) {
+            let speed = GAME_SPEEDS[(game_speed as usize) % GAME_SPEEDS.len()];
+            if speed > 0.0 {
+                self.world.process(World::STEP_LENGTH * speed);
+            }
             // let total_money: f64 = self.world.provinces.iter().map(|a|a.pops.pop_slices.iter().map(|b|b.money).sum::<f64>()).sum();
             // dbg!(total_money);
 
@@ -195,14 +210,23 @@ pub mod client {
                 self.camera.longitude += delta_mouse.x * 1.0;
             }
 
+            self.planet.rotation =
+                UnitQuaternion::from_euler_angles(23.43644f64.to_radians(), 0.0, 0.0)
+                    * UnitQuaternion::from_euler_angles(
+                        0.0,
+                        -std::f64::consts::PI * 2.0 * 365.25 * self.world.current_year,
+                        0.0,
+                    );
+
             if self.inputs.left_click {
-                self.selected_province = {
+                self.world.selected_province = {
                     //TODO: Figure out why I have to make these negative. Probably something to do with the inconsistent coordinate system
-                    let direction = self
+                    let view_matrix_inverse = self
                         .camera
-                        .get_view_matrix()
+                        .get_view_matrix(self.planet.get_transform())
                         .try_inverse()
-                        .unwrap()
+                        .unwrap();
+                    let direction = view_matrix_inverse
                         .transform_vector(
                             &projection
                                 .unproject_point(&Point3::new(
@@ -211,16 +235,28 @@ pub mod client {
                                     1.0,
                                 ))
                                 .coords,
-                        );
+                        )
+                        .normalize();
 
-                    match World::intersect_planet(self.camera.get_position(), -direction.xyz()) {
+                    let origin = view_matrix_inverse
+                        .transform_point(&Point3::from(Vector3::zeros()))
+                        .coords;
+                    match World::intersect_planet(origin, -direction.xyz()) {
                         Some(point) => Some(
-                            self.world
+                            *self
+                                .world
                                 .provinces
                                 .iter()
-                                .enumerate()
                                 .min_by_key(|(_, province)| {
-                                    FloatOrd((point - province.position).magnitude())
+                                    FloatOrd(
+                                        (point
+                                            - self
+                                                .planet
+                                                .get_transform()
+                                                .transform_point(&Point3::from(province.position))
+                                                .coords)
+                                            .magnitude(),
+                                    )
                                 })
                                 .expect("Failed to find closest provice to click")
                                 .0,

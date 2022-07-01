@@ -13,9 +13,11 @@ gltf = "0.16.0"
 fastrand = "1.5.0"
 erupt = "0.20.0"
 vk-mem-erupt = {git = "https://github.com/onein50million/vk-mem-erupt.git", rev = "0888bf9f0903b12b638f8498316e473301a18689"}
-nalgebra = { version = "0.30", features = ["serde-serialize"] }
-bincode = { version = "2.0.0-alpha.1", features = ["serde"] }
+nalgebra = { version = "0.31", features = ["serde-serialize"] }
+bincode = { version = "2.0.0-rc.1", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
 egui = "0.15.0"
 egui-winit = "0.15.0"
 variant_count = "1.1"
@@ -31,9 +33,22 @@ nohash-hasher = "0.2.0"
 
 noise = "0.7.0"
 
+snap = "1.0.5"
+
+csv = "1.1.6"
+
+# slotmap = "1.0.6"
+
 [profile.dev.package."*"]
 opt-level = 3
 
 [profile.dev]
 opt-level = 3
 debug = true
+
+[profile.release] 
+debug = true
+
+
+[rust]
+debuginfo-level = 1

@@ -15,7 +15,6 @@ layout(location = 3) in vec2 inTexCoord;
 layout(location = 4) in uint inTextureType;
 layout(location = 5) in uvec4 bone_indices;
 layout(location = 6) in vec4 bone_weights;
-layout(location = 7) in float inElevation;
 
 
 
@@ -26,7 +25,6 @@ layout(location = 3) out vec2 fragTexCoord;
 
 layout(location = 4) out vec3 worldPosition;
 layout(location = 5) out uint textureType;
-layout(location = 6) out float fragElevation;
 
 mat4 mix(mat4 x, mat4 y, float a){
     return x * (1.0-a) + y * a;
@@ -106,7 +104,5 @@ void main() {
     fragTexCoord = inTexCoord;
     fragTangent = inTangent;
     textureType = inTextureType;
-
-    fragElevation = inElevation;
 
 }
