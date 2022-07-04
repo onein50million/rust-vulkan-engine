@@ -16,8 +16,8 @@ pub struct Organization {
     pub money: f64,
     pub ideology: Ideology,
     pub owned_goods: [f64; Good::VARIANT_COUNT],
-    pub province_control: HashMap<ProvinceKey, f64, BuildNoHashHasher<usize>>,
-    pub province_approval: HashMap<ProvinceKey, f64, BuildNoHashHasher<usize>>,
+    pub province_control: ProvinceMap<f64>,
+    pub province_approval: ProvinceMap<f64>,
     pub opinions_on_claims:
         HashMap<OrganizationKey, Vec<(usize, f64)>, BuildNoHashHasher<OrganizationKey>>,
     // pub relations
@@ -32,14 +32,8 @@ impl Organization {
             money: 0.0,
             ideology: Ideology {},
             owned_goods: [0.0; Good::VARIANT_COUNT],
-            province_control: HashMap::with_capacity_and_hasher(
-                num_provinces,
-                BuildNoHashHasher::default(),
-            ),
-            province_approval: HashMap::with_capacity_and_hasher(
-                num_provinces,
-                BuildNoHashHasher::default(),
-            ),
+            province_control: ProvinceMap(vec![0.0; num_provinces].into_boxed_slice()),
+            province_approval: ProvinceMap(vec![0.0; num_provinces].into_boxed_slice()),
             opinions_on_claims: HashMap::with_hasher(BuildNoHashHasher::default()),
             militaries: vec![],
         }
@@ -59,11 +53,11 @@ pub struct Military {
     pub deployed_forces: ProvinceMap<f64>,
 }
 impl Military {
-    pub fn new(military_type: MilitaryType, province_keys: &[&ProvinceKey]) -> Self {
+    pub fn new(military_type: MilitaryType, num_provinces: usize) -> Self {
         Self {
-            recruit_ratio: province_keys.iter().map(|&&key| (key, 0.0)).collect(),
+            recruit_ratio: ProvinceMap(vec![0.0; num_provinces].into_boxed_slice()),
             military_type,
-            deployed_forces: province_keys.iter().map(|&&key| (key, 0.0)).collect(),
+            deployed_forces: ProvinceMap(vec![0.0; num_provinces].into_boxed_slice()),
         }
     }
 }

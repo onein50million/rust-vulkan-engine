@@ -5,12 +5,12 @@ use serde::{Deserialize, Serialize};
 use crate::world::World;
 
 pub const NETWORK_TICK_RATE: f64 = 10.0;
-pub const FRAMERATE_TARGET: f64 = 280.0;
+pub const FRAMERATE_TARGET: f64 = 60.0;
 pub const NUM_RANDOM: usize = 100;
 pub const FRAME_SAMPLES: usize = 100;
 pub const NUM_MODELS: usize = 1000;
 pub const NUM_LIGHTS: usize = 2;
-pub const NUM_PLANET_TEXTURES: usize = 5;
+pub const NUM_PLANET_TEXTURES: usize = 6;
 
 pub const CUBEMAP_WIDTH: usize = 256;
 
@@ -26,20 +26,22 @@ pub struct Inputs {
     pub angle: f64,
     pub panning: bool,
     pub left_click: bool,
+    pub right_click: bool,
 }
 impl Inputs {
     pub fn new() -> Self {
         return Inputs {
-            left: 0.0,
-            right: 0.0,
             up: 0.0,
             down: 0.0,
+            left: 0.0,
+            right: 0.0,
             map_mode: 0,
             zoom: 1.0,
             exposure: 1.0,
             angle: 0.0,
             panning: false,
             left_click: false,
+            right_click: false,
         };
     }
 }
@@ -392,4 +394,15 @@ pub fn hash_usize_fast(seed: usize) -> usize {
     out = ((out >> 16) ^ out) * 0x45d9f3b;
     out = (out >> 16) ^ out;
     out
+}
+
+const BIG_NUMBER_FORMAT_POSTFIX: &[&str] = &["", "K", "M", "B", "T"];
+pub fn big_number_format(big_number: f64) -> String {
+    let magnitude = big_number.log10();
+    let nearest_postfix = (magnitude * (1.0 / 3.0)).floor();
+    return format!(
+        "{:.2}{:}",
+        big_number / 10f64.powf(nearest_postfix * 3.0),
+        BIG_NUMBER_FORMAT_POSTFIX[nearest_postfix as usize]
+    );
 }

@@ -1,10 +1,11 @@
 use std::{
+    cell::UnsafeCell,
     collections::{hash_map::Entry, HashMap, HashSet, VecDeque},
     fmt::Display,
     hash::Hash,
     mem::MaybeUninit,
-    ops::{Add, Mul},
-    time::Instant, cell::UnsafeCell,
+    ops::{Add, Index, IndexMut, Mul},
+    time::Instant,
 };
 
 pub mod organization;
@@ -194,7 +195,7 @@ impl Market {
     }
     fn update_price(&mut self, good: Good, delta_year: f64, error_divisor: f64) {
         //PID for price
-        const PRICE_PID_P: f64 = 3.0;
+        const PRICE_PID_P: f64 = 1.0;
         const PRICE_PID_I: f64 = 0.00;
         const PRICE_PID_D: f64 = 0.00;
 
@@ -428,57 +429,40 @@ fn get_intangible_outputs(
 
 #[derive(Serialize, Deserialize)]
 pub struct Histories {
-    pub population: HashMap<ProvinceKey, VecDeque<(f64, f64)>, BuildNoHashHasher<ProvinceKey>>,
-    pub prices: HashMap<ProvinceKey, Box<[VecDeque<(f64, f64)>]>, BuildNoHashHasher<ProvinceKey>>,
-    pub supply: HashMap<ProvinceKey, Box<[VecDeque<(f64, f64)>]>, BuildNoHashHasher<ProvinceKey>>,
-    pub demand: HashMap<ProvinceKey, Box<[VecDeque<(f64, f64)>]>, BuildNoHashHasher<ProvinceKey>>,
+    pub population: ProvinceMap<VecDeque<(f64, f64)>>,
+    pub prices: ProvinceMap<Box<[VecDeque<(f64, f64)>]>>,
+    pub supply: ProvinceMap<Box<[VecDeque<(f64, f64)>]>>,
+    pub demand: ProvinceMap<Box<[VecDeque<(f64, f64)>]>>,
     pub global_prices: Box<[VecDeque<(f64, f64)>]>,
     pub global_supply: Box<[VecDeque<(f64, f64)>]>,
     pub global_demand: Box<[VecDeque<(f64, f64)>]>,
 }
 impl Histories {
-    fn new<'a, I: Iterator<Item = &'a ProvinceKey> + Clone>(
-        pre_sim_steps_capacity: usize,
-        province_keys: I,
-    ) -> Self {
+    fn new(pre_sim_steps_capacity: usize, num_provinces: usize) -> Self {
         // let mut population = HashMap::with_capacity_and_hasher(num_provinces, NoHashHasher::default());
         // for key in province_keys{
         //     population.entry(key)
         // }
-        let population = province_keys
-            .clone()
-            .map(|&a| (a, VecDeque::with_capacity(pre_sim_steps_capacity)))
-            .collect();
-        let prices = province_keys
-            .clone()
-            .map(|&a| {
-                (
-                    a,
-                    vec![VecDeque::with_capacity(pre_sim_steps_capacity); Good::VARIANT_COUNT]
-                        .into_boxed_slice(),
-                )
-            })
-            .collect();
-        let supply = province_keys
-            .clone()
-            .map(|&a| {
-                (
-                    a,
-                    vec![VecDeque::with_capacity(pre_sim_steps_capacity); Good::VARIANT_COUNT]
-                        .into_boxed_slice(),
-                )
-            })
-            .collect();
-        let demand = province_keys
-            .clone()
-            .map(|&a| {
-                (
-                    a,
-                    vec![VecDeque::with_capacity(pre_sim_steps_capacity); Good::VARIANT_COUNT]
-                        .into_boxed_slice(),
-                )
-            })
-            .collect();
+        let population =
+            vec![VecDeque::with_capacity(pre_sim_steps_capacity); num_provinces].into_boxed_slice();
+        let prices = vec![
+            vec![VecDeque::with_capacity(pre_sim_steps_capacity); Good::VARIANT_COUNT]
+                .into_boxed_slice();
+            num_provinces
+        ]
+        .into_boxed_slice();
+        let supply = vec![
+            vec![VecDeque::with_capacity(pre_sim_steps_capacity); Good::VARIANT_COUNT]
+                .into_boxed_slice();
+            num_provinces
+        ]
+        .into_boxed_slice();
+        let demand = vec![
+            vec![VecDeque::with_capacity(pre_sim_steps_capacity); Good::VARIANT_COUNT]
+                .into_boxed_slice();
+            num_provinces
+        ]
+        .into_boxed_slice();
 
         // Self {
         //     population: [VecDeque::with_capacity(pre_sim_steps_capacity); num_provinces]
@@ -496,10 +480,10 @@ impl Histories {
         //     .into_boxed_slice(),
         // }
         Self {
-            population,
-            prices,
-            supply,
-            demand,
+            population: ProvinceMap(population),
+            prices: ProvinceMap(prices),
+            supply: ProvinceMap(supply),
+            demand: ProvinceMap(demand),
             global_prices: vec![
                 VecDeque::with_capacity(pre_sim_steps_capacity);
                 Good::VARIANT_COUNT
@@ -536,7 +520,7 @@ impl Pops {
                     .offset(i as isize)
                     .write(PopSlice {
                         population: slice_population,
-                        money: 100.0 * slice_population,
+                        money: 1.0 * slice_population,
                         // owned_goods: [1_000_000_000_000.0 / SLICE_COUNT as f64; Good::VARIANT_COUNT],
                         owned_goods: [0.0 * slice_population as f64; Good::VARIANT_COUNT],
                         // met_inputs: [0.0; Good::VARIANT_COUNT],
@@ -576,7 +560,7 @@ impl Pops {
 pub struct Province {
     pub point_indices: Vec<usize>,
     pub neighbouring_provinces: Box<[ProvinceKey]>,
-    pub province_id: ProvinceKey,
+    pub province_key: ProvinceKey,
     pub province_area: f64,
     pub pops: Pops,
     pub market: Market,
@@ -642,6 +626,7 @@ impl Province {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct ProvinceData {
     num_samples: usize,
     elevation: f64,
@@ -734,8 +719,23 @@ impl IsEnabled for ProvinceKey {}
 pub type OrganizationMap<T> = HashMap<OrganizationKey, T, BuildNoHashHasher<OrganizationKey>>;
 pub type OrganizationMap2D<T> =
     HashMap<(OrganizationKey, OrganizationKey), T, BuildNoHashHasher<OrganizationKey>>;
-pub type ProvinceMap<T> = HashMap<ProvinceKey, T, BuildNoHashHasher<ProvinceKey>>;
-pub type ProvinceMap2D<T> = HashMap<(ProvinceKey, ProvinceKey), T, BuildNoHashHasher<ProvinceKey>>;
+
+#[derive(Serialize, Deserialize)]
+pub struct ProvinceMap<T>(pub Box<[T]>);
+
+impl<T> Index<ProvinceKey> for ProvinceMap<T> {
+    type Output = T;
+
+    fn index(&self, index: ProvinceKey) -> &Self::Output {
+        &self.0[index.0]
+    }
+}
+
+impl<T> IndexMut<ProvinceKey> for ProvinceMap<T> {
+    fn index_mut(&mut self, index: ProvinceKey) -> &mut Self::Output {
+        &mut self.0[index.0]
+    }
+}
 
 // #[derive(Serialize, Deserialize, Debug)]
 // pub struct TravelCost{
@@ -864,12 +864,33 @@ pub struct World {
     pub organizations: OrganizationMap<Organization>,
     pub relations: RelationMap,
     pub selected_province: Option<ProvinceKey>,
+    pub targeted_province: Option<ProvinceKey>,
     pub selected_organization: Option<OrganizationKey>,
+    pub player_organization: OrganizationKey,
 }
 impl World {
     pub const RADIUS: f64 = 6_378_137.0; //in meters
     pub const STEP_LENGTH: f64 = 1.0 / 365.0 / 24.0;
     pub const PRE_SIM_STEP_LENGTH: f64 = 0.5;
+
+    pub fn transfer_troops(
+        &mut self,
+        organization: OrganizationKey,
+        source_province: ProvinceKey,
+        destination_province: ProvinceKey,
+        ratio: f64,
+    ) {
+        for military in &mut self
+            .organizations
+            .get_mut(&organization)
+            .unwrap()
+            .militaries
+        {
+            let transfer_amount = military.deployed_forces[source_province] * ratio;
+            military.deployed_forces[destination_province] += transfer_amount;
+            military.deployed_forces[source_province] -= transfer_amount;
+        }
+    }
 
     pub fn process_command(&mut self, command: &str) -> String {
         let mut words = command.split_whitespace();
@@ -885,9 +906,7 @@ impl World {
                     Some(province) => match words.next() {
                         Some(argument) => match argument.parse::<f64>() {
                             Ok(pops_to_add) => {
-                                for pop in
-                                    &mut self.provinces.get_mut(&province).unwrap().pops.pop_slices
-                                {
+                                for pop in &mut self.provinces[province].pops.pop_slices {
                                     pop.population += pops_to_add / (NUM_SLICES as f64)
                                 }
                                 return "Success\n".to_string();
@@ -902,9 +921,7 @@ impl World {
                     Some(province) => match words.next() {
                         Some(argument) => match argument.parse::<f64>() {
                             Ok(money_to_add) => {
-                                for pop in
-                                    &mut self.provinces.get_mut(&province).unwrap().pops.pop_slices
-                                {
+                                for pop in &mut self.provinces[province].pops.pop_slices {
                                     pop.money += money_to_add / (NUM_SLICES as f64)
                                 }
                                 return "Success\n".to_string();
@@ -919,10 +936,7 @@ impl World {
                     Some(province) => match words.next() {
                         Some(argument) => match argument.parse() {
                             Ok(new_trader_cost) => {
-                                self.provinces
-                                    .get_mut(&province)
-                                    .unwrap()
-                                    .trader_cost_multiplier = new_trader_cost;
+                                self.provinces[province].trader_cost_multiplier = new_trader_cost;
                                 return "Success\n".to_string();
                             }
                             Err(_) => return "Invalid argument type\n".to_string(),
@@ -934,7 +948,7 @@ impl World {
                 "set_travel_all" => match words.next() {
                     Some(argument) => match argument.parse() {
                         Ok(new_trader_cost) => {
-                            for province in self.provinces.values_mut() {
+                            for province in self.provinces.0.iter_mut() {
                                 province.trader_cost_multiplier = new_trader_cost;
                             }
                             return "Success\n".to_string();
@@ -968,10 +982,7 @@ impl World {
                                     .unwrap_or_else(|| return "No amount provided\n")
                                     .parse::<f64>()
                                 {
-                                    *military
-                                        .deployed_forces
-                                        .get_mut(&selected_province_key)
-                                        .unwrap() += amount;
+                                    military.deployed_forces[selected_province_key] += amount;
                                     return format!("Added {amount} troops in province {:} for organization {:}\n", selected_province_key.0, selected_org_key.0);
                                 } else {
                                     return "Invalid amount provided\n".to_string();
@@ -995,10 +1006,7 @@ impl World {
                                 .get_mut(&org_key)
                                 .unwrap()
                                 .militaries
-                                .push(Military::new(
-                                    military_type,
-                                    &self.provinces.keys().collect::<Vec<_>>(),
-                                ));
+                                .push(Military::new(military_type, self.provinces.0.len()));
                             return "Succesfully created a military\n".to_string();
                         }
                         None => return "You must enter a type\n".to_string(),
@@ -1031,14 +1039,16 @@ impl World {
 
     pub fn get_total_population(&self) -> f64 {
         self.provinces
-            .values()
+            .0
+            .iter()
             .map(|a| a.pops.population())
             .sum::<f64>()
             .max(1.0)
     }
     pub fn get_total_money(&self) -> f64 {
         self.provinces
-            .values()
+            .0
+            .iter()
             .map(|a| a.pops.pop_slices.iter().map(|a| a.money).sum::<f64>())
             .sum::<f64>()
             .max(1.0)
@@ -1073,55 +1083,35 @@ impl World {
     }
 
     pub fn new(
-        vertices: &[Vector3<f32>],
-        province_index_map: &HashMap<ProvinceKey, Vec<usize>>,
-        province_data_map: &HashMap<ProvinceKey, ProvinceData>,
+        vertices: &[Vector3<f64>],
+        province_indices: &ProvinceMap<Vec<usize>>,
+        province_data: &ProvinceMap<ProvinceData>,
         nation_names: &[String],
     ) -> Self {
         println!("Creating world");
         let mut organizations = HashMap::with_hasher(BuildNoHashHasher::default());
-        let num_provinces = province_index_map.keys().count();
-        let mut provinces =
-            HashMap::with_capacity_and_hasher(num_provinces, BuildNoHashHasher::default());
-        let total_area = province_data_map
-            .values()
+        let num_provinces = province_indices.0.len();
+        let mut provinces = vec![];
+
+        let total_area = province_data
+            .0
+            .iter()
             .map(|d| d.num_samples as f64)
             .sum::<f64>();
         let mut country_id_to_org_key: HashMap<usize, OrganizationKey, BuildNoHashHasher<usize>> =
             HashMap::with_hasher(BuildNoHashHasher::default());
         let rng = fastrand::Rng::new();
-        for (&province_id, province_indices) in province_index_map.iter() {
+        for (province_key, province_indices) in province_indices.0.iter().enumerate() {
+            let province_key = ProvinceKey(province_key);
             if province_indices.len() < 3 {
                 println!("degenerate province given");
                 continue;
             }
-            let mut left_indices = province_indices.to_vec();
-            let mut out_indices = Vec::with_capacity(province_indices.len());
-            let mut current_index = left_indices.pop().unwrap();
-            while left_indices.len() > 0 {
-                let nearest_neighbour = left_indices.remove(
-                    left_indices
-                        .iter()
-                        .enumerate()
-                        .min_by_key(|(index, point_index)| {
-                            FloatOrd(
-                                (vertices[**point_index] - vertices[current_index]).magnitude(),
-                            )
-                        })
-                        .expect("Odd number of province indices?")
-                        .0,
-                );
-
-                out_indices.push(current_index);
-                out_indices.push(nearest_neighbour);
-                current_index = nearest_neighbour;
-            }
-            out_indices.push(*out_indices.last().unwrap());
-            out_indices.push(*out_indices.first().unwrap());
+            let out_indices = province_indices.to_vec();
 
             let province_origin = province_indices
                 .iter()
-                .map(|&index| vertices[index])
+                .map(|&index| vertices[index].cast::<f32>())
                 .sum::<Vector3<f32>>()
                 / province_indices.len() as f32;
             let province_origin = province_origin.normalize() * Self::RADIUS as f32;
@@ -1129,12 +1119,8 @@ impl World {
                 productivity: f64::NAN,
                 size: f64::NAN,
             }; Industry::VARIANT_COUNT];
-            let province_area = province_data_map.get(&province_id).unwrap().num_samples as f64;
-            let population = province_data_map
-                .get(&province_id)
-                .unwrap()
-                .population()
-                .max(10_000.0);
+            let province_area = province_data[province_key].num_samples as f64;
+            let population = province_data[province_key].population().max(10_000.0);
             for i in 0..Industry::VARIANT_COUNT {
                 let industry: Industry = i.try_into().unwrap();
                 // industry_data[i].productivity = match industry {
@@ -1154,20 +1140,22 @@ impl World {
                     / (Industry::VARIANT_COUNT as f64);
                 let pop_size = population / (Industry::VARIANT_COUNT as f64);
                 const MIX_FACTOR: f64 = 0.5;
-                industry_data[i].size = base_size * (1.0 - MIX_FACTOR) + pop_size * MIX_FACTOR
-                    * match industry {
-                        Industry::Forage => 1.0,
-                        Industry::Farm => {
-                            (province_data_map.get(&province_id).unwrap().aridity() as f64 - 0.3)
-                                .clamp(0.0, 1.1)
-                        }
-                        Industry::Mill => 1.0,
-                        Industry::Mine => province_data_map.get(&province_id).unwrap().ore() as f64,
-                        Industry::Smelter => 1.0,
-                        Industry::Labor => 1.0,
-                    };
+                industry_data[i].size = base_size * (1.0 - MIX_FACTOR)
+                    + pop_size
+                        * MIX_FACTOR
+                        * match industry {
+                            Industry::Forage => 1.0,
+                            Industry::Farm => {
+                                (province_data[province_key].aridity() as f64 - 0.3).clamp(0.0, 1.1)
+                            }
+                            Industry::Mill => 1.0,
+                            Industry::Mine => province_data[province_key].ore() as f64,
+                            Industry::Smelter => 1.0,
+                            Industry::Labor => 1.0,
+                        };
             }
-            provinces.entry(province_id).or_insert(Province {
+
+            provinces.push(Province {
                 point_indices: out_indices,
                 position: province_origin.cast(),
                 pops: Pops::new(population),
@@ -1179,72 +1167,72 @@ impl World {
                     supply_demand_error_integral: [0.0; Good::VARIANT_COUNT],
                 },
                 industry_data,
-                province_id,
+                province_key,
                 province_area,
                 intangible_goods: [0.0; IntangibleGoods::VARIANT_COUNT],
                 trader_cost_multiplier: 1.0,
-                feb_temp: province_data_map.get(&province_id).unwrap().feb_temps(),
-                july_temp: province_data_map.get(&province_id).unwrap().july_temps(),
+                feb_temp: province_data[province_key].feb_temps(),
+                july_temp: province_data[province_key].july_temps(),
                 neighbouring_provinces: vec![].into_boxed_slice(),
                 tax_bank: 0.0,
             });
 
-            if let Some(owner) = province_data_map.get(&province_id).unwrap().owner() {
+            if let Some(owner) = province_data[province_key].owner() {
                 let key = country_id_to_org_key.entry(owner).or_insert_with(|| {
                     let new_org = Organization::new(&nation_names[owner], num_provinces);
                     let new_org_key = new_org.key;
                     organizations.entry(new_org_key).or_insert(new_org);
                     new_org_key
                 });
-                organizations
-                    .get_mut(key)
-                    .unwrap()
-                    .province_control
-                    .entry(province_id)
-                    .or_insert(1.0);
+                organizations.get_mut(key).unwrap().province_control[province_key] = 1.0;
             }
         }
 
-        let keys = provinces.keys().copied().collect::<Box<[_]>>();
-        for province_key in keys.iter() {
+        let provinces = ProvinceMap(provinces.into_boxed_slice());
+
+        for i in 0..provinces.0.len() {
+            let mut index_set: HashSet<_> =
+                provinces[ProvinceKey(i)].point_indices.iter().collect();
             let mut neighbours = vec![];
-            'neighbour_loop: for (neighbour_key, neighbour) in &provinces {
-                let mut index_set: HashSet<_> =
-                    provinces[&province_key].point_indices.iter().collect();
-                for neighbour_index in &neighbour.point_indices {
+            'neighbour_loop: for j in 0..provinces.0.len() {
+                for neighbour_index in &provinces[ProvinceKey(j)].point_indices {
                     if index_set.insert(neighbour_index) {
-                        neighbours.push(*neighbour_key);
+                        neighbours.push(ProvinceKey(j));
                         continue 'neighbour_loop;
                     }
                 }
             }
-            provinces
-                .get_mut(&province_key)
-                .unwrap()
-                .neighbouring_provinces = neighbours.into_boxed_slice();
         }
+
         for (_, organization) in organizations.iter_mut() {
-            let mut new_military = Military::new(
-                MilitaryType::Army,
-                &province_data_map.keys().collect::<Vec<_>>(),
-            );
-            for (province_key, &control) in organization.province_control.iter() {
+            let mut new_military = Military::new(MilitaryType::Army, num_provinces);
+            for (province_key, &control) in organization.province_control.0.iter().enumerate() {
+                let province_key = ProvinceKey(province_key);
                 if control > 0.01 {
-                    *new_military.deployed_forces.get_mut(province_key).unwrap() +=
+                    new_military.deployed_forces[province_key] +=
                         rng.f64() * provinces[province_key].pops.population() * 0.01 + 1000.0;
                 }
             }
             organization.militaries.push(new_military);
         }
-        const PRE_SIM_STEPS: usize = 1000;
-        // const PRE_SIM_STEPS: usize = 0;
+        // const PRE_SIM_STEPS: usize = 1000;
+        const PRE_SIM_STEPS: usize = 100;
 
-        let histories = Histories::new(PRE_SIM_STEPS, province_data_map.keys());
+        let histories = Histories::new(PRE_SIM_STEPS, num_provinces);
 
         let relations = RelationMap::new(&organizations);
-        // let travel_costs = TravelCostMap::new(&provinces);
+        let num_organizations = organizations.len();
+
+        // for org in organizations.values(){
+        //     println!("{}", org.name)
+        // }
+        // let &player_organization = organizations
+        //     .keys()
+        //     .nth(rng.usize(0..num_organizations))
+        //     .unwrap();
+        let player_organization = OrganizationKey(0);
         let mut world = Self {
-            points: vertices.iter().map(|vertex| *vertex).collect(),
+            points: vertices.iter().map(|vertex| vertex.cast()).collect(),
             provinces,
             global_market: Market {
                 price: [1.0; Good::VARIANT_COUNT],
@@ -1259,7 +1247,9 @@ impl World {
             relations,
             // travel_costs,
             selected_province: None,
+            targeted_province: None,
             selected_organization: None,
+            player_organization,
         };
         // println!("Update travel times");
         // world.update_travel_times();
@@ -1289,7 +1279,7 @@ impl World {
     pub fn process(&mut self, delta_year: f64) {
         self.process_battles(delta_year);
         //Process market, selling yesterday's produced goods and buying needs for today
-        for province in self.provinces.values_mut() {
+        for province in self.provinces.0.iter_mut() {
             //update productivities
             province.industry_data[Industry::Farm as usize].productivity = kernel(
                 province.get_current_temp(self.current_year),
@@ -1318,7 +1308,7 @@ impl World {
         }
         self.global_market.demand = [0.0; Good::VARIANT_COUNT];
         self.global_market.supply = [0.0; Good::VARIANT_COUNT];
-        for (key, province) in self.provinces.iter_mut() {
+        for province in self.provinces.0.iter_mut() {
             self.global_market.process(
                 delta_year,
                 &mut province.pops.pop_slices,
@@ -1328,7 +1318,7 @@ impl World {
         }
         for good_index in 0..Good::VARIANT_COUNT {
             let good = Good::try_from(good_index).unwrap();
-            for (key, province) in self.provinces.iter_mut() {
+            for province in self.provinces.0.iter_mut() {
                 self.global_market
                     .buy_and_sell(good, delta_year, &mut province.pops.pop_slices);
             }
@@ -1339,7 +1329,7 @@ impl World {
         let mut global_tax_bank = 0.0;
         let mut global_migration_pool_pops = 0.0;
         let mut global_migration_pool_money = 0.0;
-        for (_province_index, province) in self.provinces.values_mut().enumerate() {
+        for province in self.provinces.0.iter_mut() {
             // let mut migration_pool = [0.0; Industry::VARIANT_COUNT];
             let mut migration_pool_pops = 0.0;
             let mut migration_pool_money = 0.0;
@@ -1531,8 +1521,8 @@ impl World {
 
             // dbg!(money_sum);
         }
-        let num_provinces = self.provinces.len();
-        for province in self.provinces.values_mut() {
+        let num_provinces = self.provinces.0.len();
+        for province in self.provinces.0.iter_mut() {
             let migration_pool_pops = global_migration_pool_pops / num_provinces as f64;
             let migration_pool_money = global_migration_pool_money / num_provinces as f64;
             let tax_bank = global_tax_bank / num_provinces as f64;
@@ -1546,24 +1536,27 @@ impl World {
                 assert!(!slice.money.is_nan());
             }
         }
-        for (&province_key, province) in &mut self.provinces{
+        for (province_key, province) in self.provinces.0.iter_mut().enumerate() {
             // let control_sum: f64 = self.organizations.values().flat_map(|o|o.province_control.iter().filter(|(&k, _)| k == province_key)).map(|p|p.1).sum();
-            for organization in self.organizations.values_mut(){
-                if let Some(&control) = organization.province_control.get(&province_key){
-                    let transfer_amount = province.tax_bank * control;
-                    organization.money += transfer_amount;
-                    province.tax_bank -= transfer_amount
-                }
+            for organization in self.organizations.values_mut() {
+                let transfer_amount =
+                    province.tax_bank * organization.province_control[ProvinceKey(province_key)];
+                organization.money += transfer_amount;
+                province.tax_bank -= transfer_amount
             }
-
         }
-        for organization in self.organizations.values_mut(){
-            let redistribution_amount = (organization.money * 0.5 * delta_year).min(organization.money);
+        for organization in self.organizations.values_mut() {
+            let redistribution_amount =
+                (organization.money * 0.5 * delta_year).min(organization.money);
             organization.money -= redistribution_amount;
-            let province_control_sum = organization.province_control.values().sum::<f64>();
-            for (province_key, province_control) in &organization.province_control{
-                for slice in &mut self.provinces.get_mut(province_key).unwrap().pops.pop_slices{
-                    let org_payment = redistribution_amount * (province_control / province_control_sum) / (NUM_SLICES as f64);
+            let province_control_sum = organization.province_control.0.iter().sum::<f64>();
+            for (province_key, province_control) in
+                organization.province_control.0.iter().enumerate()
+            {
+                for slice in &mut self.provinces[ProvinceKey(province_key)].pops.pop_slices {
+                    let org_payment = redistribution_amount
+                        * (province_control / province_control_sum)
+                        / (NUM_SLICES as f64);
                     slice.money += org_payment;
                 }
             }
@@ -1573,213 +1566,336 @@ impl World {
     }
 
     fn process_battles(&mut self, delta_year: f64) {
-        for province_key in self.provinces.keys() {
-            // let biggest_army_size = self.organizations.values().flat_map(|a|a.militaries.iter().filter_map(|m|{
-            //     match m.military_type{
-            //         MilitaryType::Enforcer => Some(FloatOrd(m.deployed_forces[province_key])),
-            //         MilitaryType::Army => None,
+        for province_key in 0..self.provinces.0.len() {
+            let province_key = ProvinceKey(province_key);
+            // self.friendly_combatants.clear();
+            // self.enemy_combatants.clear();
+
+            let combat_orgs: Box<[&Organization]> = self
+                .organizations
+                .values()
+                .filter(|o| {
+                    o.militaries
+                        .iter()
+                        .any(|m| m.deployed_forces[province_key] > 0.5)
+                })
+                .collect();
+            let mut combat_orgs_filtered = OrganizationMap::with_capacity_and_hasher(
+                combat_orgs.len(),
+                BuildNoHashHasher::default(),
+            );
+            for i in 0..combat_orgs.len() {
+                for j in 0..combat_orgs.len() {
+                    if self
+                        .relations
+                        .get_relations(combat_orgs[i].key, combat_orgs[j].key)
+                        .at_war
+                    {
+                        combat_orgs_filtered
+                            .entry(combat_orgs[i].key)
+                            .or_insert(Vec::with_capacity(combat_orgs.len()))
+                            .push(combat_orgs[j].key);
+                    }
+                }
+            }
+            let combat_orgs: HashMap<_, _, BuildNoHashHasher<OrganizationKey>> =
+                combat_orgs_filtered
+                    .iter()
+                    .filter(|&(_k, v)| v.len() > 0)
+                    .collect();
+            if combat_orgs.len() <= 0 {
+                continue;
+            }
+
+            let first_index = get_battle_seed(
+                self.current_year,
+                province_key.0 as usize,
+                combat_orgs.len(),
+            );
+            let &first_combatant_key = combat_orgs.keys().nth(first_index).unwrap();
+
+            let second_index = get_battle_seed(
+                self.current_year,
+                province_key.0 as usize,
+                combat_orgs[first_combatant_key].len(),
+            );
+            let second_combatant_key = combat_orgs[first_combatant_key][second_index];
+
+            // for (org_key, org) in self.organizations{
+            //     if org.militaries.iter().any(|m|match m.deployed_forces.get(province_key) {
+            //                             Some(&troop_count) => troop_count < 1.0,
+            //                             None => true,
+            //     }){
+            //         continue;
             //     }
-            // })).max().unwrap_or(FloatOrd(0.0)).0;
-            // let combat_orgs: Box<[&Organization]> = self
+
+            // }
+
+            // for (&friendly_key, friendly_org) in &self.organizations{
+            //     if friendly_org.militaries
+            //         .iter()
+            //         .any(|m| match m.deployed_forces.get(province_key) {
+            //             Some(&troop_count) => troop_count < 1.0,
+            //             None => true,
+            //         }){
+            //             continue;
+            //         }
+            //         self.friendly_combatants.push(friendly_key);
+            // }
+
+            // for friendly_key in self
             //     .organizations
-            //     .values()
-            //     .filter(|o| {
+            //     .iter()
+            //     .filter(|(k, o)| {
             //         o.militaries
             //             .iter()
-            //             .any(|m| m.deployed_forces[province_key] > 0.5)
+            //             .any(|m| match m.deployed_forces.get(province_key) {
+            //                 Some(&troop_count) => troop_count > 0.5,
+            //                 None => false,
+            //             })
             //     })
-            //     .collect();
-            // let mut combat_orgs_filtered = OrganizationMap::with_capacity_and_hasher(
-            //     combat_orgs.len(),
-            //     BuildNoHashHasher::default(),
-            // );
-            // for i in 0..combat_orgs.len() {
-            //     for j in 0..combat_orgs.len() {
-            //         if self
-            //             .relations
-            //             .get_relations(combat_orgs[i].key, combat_orgs[j].key)
-            //             .at_war
-            //         {
-            //             combat_orgs_filtered
-            //                 .entry(combat_orgs[i].key)
-            //                 .or_insert(Vec::with_capacity(combat_orgs.len()))
-            //                 .push(combat_orgs[j].key);
-            //         }
-            //     }
+            //     .filter(|(&org_key, _)| {
+            //         self.organizations
+            //             .iter()
+            //             .filter(|(&k, _)| k != org_key)
+            //             .any(|(&enemy_key, enemy)| {
+            //                 self.relations.get_relations(org_key, enemy_key).at_war
+            //                     && enemy.militaries.iter().any(|m| {
+            //                         match m.deployed_forces.get(province_key) {
+            //                             Some(&troop_count) => troop_count > 0.5,
+            //                             None => false,
+            //                         }
+            //                     })
+            //             })
+            //     })
+            //     .map(|(&k, _)| k)
+            // {
+            //     self.friendly_combatants.push(friendly_key);
             // }
-            // let combat_orgs: HashMap<_, _, BuildNoHashHasher<OrganizationKey>> =
-            //     combat_orgs_filtered
-            //         .iter()
-            //         .filter(|&(_k, v)| v.len() > 0)
-            //         .collect();
-            // if combat_orgs.len() <= 0 {
+
+            // if self.friendly_combatants.len() == 0 {
             //     continue;
             // }
-            
-            let (army_ratio, first_combatant_key, second_combatant_key, avg_size) = {
+            // let first_index = get_battle_seed(
+            //     self.current_year,
+            //     province_key.0 as usize,
+            //     self.friendly_combatants.len(),
+            // );
+            // let first_combatant_key = self.friendly_combatants[first_index];
 
-                let num_first_orgs = self.organizations.iter().filter(|(k, o)|o.militaries.iter().any(|m|{
-                    match m.deployed_forces.get(province_key){
-                        Some(&troop_count) => troop_count > 0.5,
-                        None => false,
-                    }
-                })).filter(|(&org_key, _)|{
-                    self.organizations.iter().filter(|(&k,_)| k!= org_key).any(|(&enemy_key, enemy)| {
-    
-                        self.relations.get_relations(org_key, enemy_key).at_war && enemy.militaries.iter().any(|m|{
-                            match m.deployed_forces.get(province_key){
-                                Some(&troop_count) => troop_count > 0.5,
-                                None => false,
-                            } 
-                        })
-                    })
-                }).count();
-    
-                let first_index = get_battle_seed(
-                    self.current_year,
-                    province_key.0 as usize,
-                    num_first_orgs,
-                );
-                let (first_combatant_key, first_combatant) = self.organizations.iter().filter(|(k, o)|o.militaries.iter().any(|m|{
-                    match m.deployed_forces.get(province_key){
-                        Some(&troop_count) => troop_count > 0.5,
-                        None => false,
-                    }
-                })).filter(|(&org_key, organization)|{
-                    self.organizations.iter().any(|(&enemy_key, enemy)| {
-                        self.relations.get_relations(org_key, enemy_key).at_war && enemy.militaries.iter().any(|m|{
-                            match m.deployed_forces.get(province_key){
-                                Some(&troop_count) => troop_count > 0.5,
-                                None => false,
-                            } 
-                        })
-                    })
-                }).nth(first_index).unwrap();
-    
-                let second_index = get_battle_seed(
-                    self.current_year,
-                    province_key.0 as usize,
-                    self.organizations.iter().filter(|(&enemy_key, enemy_org)|{
-                        self.relations.get_relations(*first_combatant_key, enemy_key).at_war && enemy_org.militaries.iter().any(|m|{
-                            match m.deployed_forces.get(province_key){
-                                Some(&troop_count) => troop_count > 0.5,
-                                None => false,
-                            } 
-                        })
-                    }).count(),
-                );
-                let (second_combatant_key, second_combatant) = self.organizations.iter().filter(|(&enemy_key, enemy_org)|{
-                    self.relations.get_relations(*first_combatant_key, enemy_key).at_war && enemy_org.militaries.iter().any(|m|{
-                        match m.deployed_forces.get(province_key){
-                            Some(&troop_count) => troop_count > 0.5,
-                            None => false,
-                        } 
-                    })
-                }).nth(second_index).unwrap();
-    
-                // println!("Fight between {:} and {:}", first_index, second_index);
-    
-                let first_army_size: f64 = self.organizations[first_combatant_key]
-                    .militaries
-                    .iter()
-                    .map(|m| m.deployed_forces[province_key])
-                    .sum();
-                let second_army_size: f64 = self.organizations[&second_combatant_key]
-                    .militaries
-                    .iter()
-                    .map(|m| m.deployed_forces[province_key])
-                    .sum();
-                let avg_size = (first_army_size + second_army_size) / 2.0;
-    
+            // for (&enemy_key, enemy_org) in &self.organizations {
+            //     if self
+            //         .relations
+            //         .get_relations(first_combatant_key, enemy_key)
+            //         .at_war
+            //         && enemy_org.militaries.iter().any(|m| {
+            //             match m.deployed_forces.get(province_key) {
+            //                 Some(&troop_count) => troop_count > 0.5,
+            //                 None => false,
+            //             }
+            //         })
+            //     {
+            //         continue;
+            //     }
+            //     self.enemy_combatants.push(enemy_key)
+            // }
 
+            // for enemy_key in self.enemy_combatants = self.organizations
+            //         .iter()
+            //         .filter(|(&enemy_key, enemy_org)| {
+            //             self.relations
+            //                 .get_relations(first_combatant_key, enemy_key)
+            //                 .at_war
+            //                 && enemy_org.militaries.iter().any(|m| {
+            //                     match m.deployed_forces.get(province_key) {
+            //                         Some(&troop_count) => troop_count > 0.5,
+            //                         None => false,
+            //                     }
+            //                 })
+            //         }).map(|(&k,_)|k){
+            //             self.enemy_combatants.push(enemy_key);
+            //         }
 
-                (
-                    if first_army_size > second_army_size {
-                        first_army_size / second_army_size
-                    } else {
-                        second_army_size / first_army_size
-                    },
-                    *first_combatant_key,
-                    *second_combatant_key,
-                    avg_size
-                )
+            // if self.enemy_combatants.len() == 0 {
+            //     continue;
+            // }
+            // let second_index = get_battle_seed(
+            //     self.current_year,
+            //     province_key.0 as usize,
+            //     self.enemy_combatants.len(),
+            // );
+            // let second_combatant_key = self.enemy_combatants[second_index];
 
+            // let (army_ratio, first_combatant_key, second_combatant_key, avg_size) = {
+            //     let num_first_orgs = self
+            //         .organizations
+            //         .iter()
+            //         .filter(|(k, o)| {
+            //             o.militaries
+            //                 .iter()
+            //                 .any(|m| match m.deployed_forces.get(province_key) {
+            //                     Some(&troop_count) => troop_count > 0.5,
+            //                     None => false,
+            //                 })
+            //         })
+            //         .filter(|(&org_key, _)| {
+            //             self.organizations
+            //                 .iter()
+            //                 .filter(|(&k, _)| k != org_key)
+            //                 .any(|(&enemy_key, enemy)| {
+            //                     self.relations.get_relations(org_key, enemy_key).at_war
+            //                         && enemy.militaries.iter().any(|m| {
+            //                             match m.deployed_forces.get(province_key) {
+            //                                 Some(&troop_count) => troop_count > 0.5,
+            //                                 None => false,
+            //                             }
+            //                         })
+            //                 })
+            //         })
+            //         .count();
+
+            //     if num_first_orgs == 0{
+            //         continue;
+            //     }
+            //     let first_index =
+            //         get_battle_seed(self.current_year, province_key.0 as usize, num_first_orgs);
+            //     let (first_combatant_key, first_combatant) = self
+            //         .organizations
+            //         .iter()
+            //         .filter(|(k, o)| {
+            //             o.militaries
+            //                 .iter()
+            //                 .any(|m| match m.deployed_forces.get(province_key) {
+            //                     Some(&troop_count) => troop_count > 0.5,
+            //                     None => false,
+            //                 })
+            //         })
+            //         .filter(|(&org_key, organization)| {
+            //             self.organizations.iter().any(|(&enemy_key, enemy)| {
+            //                 self.relations.get_relations(org_key, enemy_key).at_war
+            //                     && enemy.militaries.iter().any(|m| {
+            //                         match m.deployed_forces.get(province_key) {
+            //                             Some(&troop_count) => troop_count > 0.5,
+            //                             None => false,
+            //                         }
+            //                     })
+            //             })
+            //         })
+            //         .nth(first_index)
+            //         .unwrap();
+
+            //         let num_second_orgs = self.organizations
+            //         .iter()
+            //         .filter(|(&enemy_key, enemy_org)| {
+            //             self.relations
+            //                 .get_relations(*first_combatant_key, enemy_key)
+            //                 .at_war
+            //                 && enemy_org.militaries.iter().any(|m| {
+            //                     match m.deployed_forces.get(province_key) {
+            //                         Some(&troop_count) => troop_count > 0.5,
+            //                         None => false,
+            //                     }
+            //                 })
+            //         })
+            //         .count();
+
+            //     if num_second_orgs == 0{
+            //         continue;
+            //     }
+            //     let second_index = get_battle_seed(
+            //         self.current_year,
+            //         province_key.0 as usize,
+            //         num_second_orgs,
+            //     );
+            //     let (second_combatant_key, second_combatant) = self
+            //         .organizations
+            //         .iter()
+            //         .filter(|(&enemy_key, enemy_org)| {
+            //             self.relations
+            //                 .get_relations(*first_combatant_key, enemy_key)
+            //                 .at_war
+            //                 && enemy_org.militaries.iter().any(|m| {
+            //                     match m.deployed_forces.get(province_key) {
+            //                         Some(&troop_count) => troop_count > 0.5,
+            //                         None => false,
+            //                     }
+            //                 })
+            //         })
+            //         .nth(second_index)
+            //         .unwrap();
+
+            //     // println!("Fight between {:} and {:}", first_index, second_index);
+            // };
+
+            let first_army_size: f64 = self.organizations[&first_combatant_key]
+                .militaries
+                .iter()
+                .map(|m| m.deployed_forces[province_key])
+                .sum();
+            let second_army_size: f64 = self.organizations[&second_combatant_key]
+                .militaries
+                .iter()
+                .map(|m| m.deployed_forces[province_key])
+                .sum();
+            let avg_size = (first_army_size + second_army_size) / 2.0;
+
+            let army_ratio = if first_army_size > second_army_size {
+                first_army_size / second_army_size
+            } else {
+                second_army_size / first_army_size
             };
-            
-        
-            // let mut first_army_defeated = false;
-            // let mut first_army_deaths = 0.0;
-            for first_army in &mut self.organizations.get_mut(&first_combatant_key).unwrap()
+
+            for first_army in &mut self
+                .organizations
+                .get_mut(&first_combatant_key)
+                .unwrap()
                 .militaries
             {
                 let losses = avg_size * (1.0 / army_ratio) * delta_year;
-                if let Some(deployed_forces) = first_army.deployed_forces.get_mut(province_key) {
-                    *deployed_forces -= losses.min(*deployed_forces);
-                    // if *deployed_forces < 1.0{
-                    //     first_army_defeated = true;
-                    // }
-                }
-
-                // first_army_deaths += losses
+                first_army.deployed_forces[province_key] -=
+                    losses.min(first_army.deployed_forces[province_key]);
             }
-            // let mut second_army_deaths = 0.0;
-            // let mut second_army_defeated = false;
-            for second_army in &mut self.organizations.get_mut(&second_combatant_key).unwrap()
+
+            for second_army in &mut self
+                .organizations
+                .get_mut(&second_combatant_key)
+                .unwrap()
                 .militaries
             {
                 let losses = avg_size * army_ratio * delta_year;
-                if let Some(deployed_forces) = second_army.deployed_forces.get_mut(province_key) {
-                    *deployed_forces -= losses.min(*deployed_forces);
-                    // if *deployed_forces < 1.0{
-                    //     second_army_defeated = true;
-                    // }
-                }
-                // second_army_deaths += losses
+                second_army.deployed_forces[province_key] -=
+                    losses.min(second_army.deployed_forces[province_key]);
             }
-
-            // if first_army_defeated && !second_army_defeated{
-            //     *self.organizations.get_mut(&first_combatant_key).unwrap().province_control.get_mut(&province_key).unwrap() = 0.0;
-            //     *self.organizations.get_mut(&second_combatant_key).unwrap().province_control.get_mut(&province_key).unwrap() = 1.0;
-            // }else if !first_army_defeated && second_army_defeated{
-            //     *self.organizations.get_mut(&first_combatant_key).unwrap().province_control.get_mut(&province_key).unwrap() = 1.0;
-            //     *self.organizations.get_mut(&second_combatant_key).unwrap().province_control.get_mut(&province_key).unwrap() = 0.0;
-            // }
-
-            // dbg!(first_army_deaths);
-            // dbg!(second_army_deaths);
         }
     }
 
     fn add_new_tick(&mut self, time: f64) {
         //TODO refactor so that adding new graphs is easier
         const HISTORY_TICKS: usize = 1000;
-        for (key, province) in self.provinces.iter() {
-            if self.histories.population.get(key).unwrap().len() > HISTORY_TICKS {
-                self.histories.population.get_mut(key).unwrap().pop_back();
+        for (key, province) in self.provinces.0.iter().enumerate() {
+            let key = ProvinceKey(key);
+            if self.histories.population[key].len() > HISTORY_TICKS {
+                self.histories.population[key].pop_back();
             }
-            self.histories
-                .population
-                .get_mut(key)
-                .unwrap()
-                .push_front((time, province.pops.population()));
+            self.histories.population[key].push_front((time, province.pops.population()));
 
             for good_index in 0..Good::VARIANT_COUNT {
-                if self.histories.prices.get(key).unwrap()[good_index].len() > HISTORY_TICKS {
-                    self.histories.prices.get_mut(key).unwrap()[good_index].pop_back();
+                if self.histories.prices[key][good_index].len() > HISTORY_TICKS {
+                    self.histories.prices[key][good_index].pop_back();
                 }
-                self.histories.prices.get_mut(key).unwrap()[good_index]
+                self.histories.prices[key][good_index]
                     .push_front((time, province.market.price[good_index]));
                 //supply
-                if self.histories.supply.get(key).unwrap()[good_index].len() > HISTORY_TICKS {
-                    self.histories.supply.get_mut(key).unwrap()[good_index].pop_back();
+                if self.histories.supply[key][good_index].len() > HISTORY_TICKS {
+                    self.histories.supply[key][good_index].pop_back();
                 }
-                self.histories.supply.get_mut(key).unwrap()[good_index]
+                self.histories.supply[key][good_index]
                     .push_front((time, province.market.supply[good_index]));
                 //demand
-                if self.histories.demand.get(key).unwrap()[good_index].len() > HISTORY_TICKS {
-                    self.histories.demand.get_mut(key).unwrap()[good_index].pop_back();
+                if self.histories.demand[key][good_index].len() > HISTORY_TICKS {
+                    self.histories.demand[key][good_index].pop_back();
                 }
-                self.histories.demand.get_mut(key).unwrap()[good_index]
+                self.histories.demand[key][good_index]
                     .push_front((time, province.market.demand[good_index]));
             }
         }

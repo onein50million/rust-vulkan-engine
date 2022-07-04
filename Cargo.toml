@@ -48,7 +48,7 @@ debug = true
 
 [profile.release] 
 debug = true
-
+# lto = true
 
 [rust]
 debuginfo-level = 1

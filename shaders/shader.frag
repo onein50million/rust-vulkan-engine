@@ -13,12 +13,13 @@ struct SampleSet{ //set of samples
 
 const float RADIUS = 6378137.0;
 
-const int NUM_PLANET_TEXTURES = 5;
+const int NUM_PLANET_TEXTURES = 6;
 const int NORMAL_TEXTURE_INDEX = 0;
 const int ELEVATION_TEXTURE_INDEX = 1;
 const int ARIDITY_TEXTURE_INDEX = 2;
 const int COLD_TEXTURE_INDEX = 3;
 const int WARM_TEXTURE_INDEX = 4;
+const int WATER_TEXTURE_INDEX = 5;
 
 
 
@@ -269,7 +270,8 @@ void main() {
         float aridity = texture(planet_textures[ARIDITY_TEXTURE_INDEX], normalize(fragPosition)).r;
         float cold_temp = texture(planet_textures[COLD_TEXTURE_INDEX], normalize(fragPosition)).r;
         float warm_temp = texture(planet_textures[WARM_TEXTURE_INDEX], normalize(fragPosition)).r;
-
+        float water_ratio = texture(planet_textures[WATER_TEXTURE_INDEX], normalize(fragPosition)).r;
+        float land_ratio = 1.0 - water_ratio;
         // outColor = vec4(normal, 1.0);
         // return;
 
@@ -300,23 +302,19 @@ void main() {
 
             float steepness = 1.0 - clamp(dot(normal, normalize(worldPosition)),0.0, 1.0);
             steepness = map_range_linear(steepness, 0.0, 0.001, 0.0, 1.0);
-            if (elevation < 0.0){
-                if (current_temperature > -5.0){
-                    deep_water_weight = map_range_linear(elevation, 0.0, -100.0, 0.0,1.0);
-                    shallow_water_weight = 1.0 - deep_water_weight;
-                }else{
-                    snow_weight = 1.0;
-                }
-
-            }else{
-            float grass_ratio = map_range_linear(elevation,0.0, 1500.0,1.0 , 0.2);
-                mountain_weight = map_range_linear(elevation,1500.0, 3000.0,0.0, 1.0);
-                foliage_weight = clamp((1.0 - steepness*0.01) *  map_range_linear(aridity, 0.0, 0.5, 0.1, 1.0) * grass_ratio - mountain_weight,0.0,1.0);
-                desert_weight = clamp(1.0 - foliage_weight - mountain_weight,0.0,1.0);
-
-                float coldness = map_range_linear(current_temperature, -10.0, 3.0, 1.0, 0.0); //How far below zero
-                snow_weight = (1.0 - steepness)*aridity * coldness * 1.0;
+            
+            if (water_ratio > 0.1){
+                deep_water_weight = (map_range_linear(elevation, 0.0, -100.0, 0.0,1.0));
+                shallow_water_weight = (1.0 - deep_water_weight);
             }
+
+            float grass_ratio = map_range_linear(elevation,0.0, 1500.0,1.0 , 0.2);
+            mountain_weight = map_range_linear(elevation,1500.0, 3000.0,0.0, 1.0);
+            foliage_weight = clamp((1.0 - steepness*0.01) *  map_range_linear(aridity, 0.0, 0.5, 0.1, 1.0) * grass_ratio - mountain_weight,0.0,1.0);
+            desert_weight = clamp(1.0 - foliage_weight - mountain_weight,0.0,1.0);
+
+            float coldness = map_range_linear(current_temperature, -10.0, 3.0, 1.0, 0.0); //How far below zero
+            snow_weight = (1.0 - steepness)*aridity * coldness * 1.0;
 
             SampleSet sample_sets[] = {
             deep_water_set,
@@ -328,12 +326,12 @@ void main() {
             };
 
             float weights[] = {
-            deep_water_weight,
-            shallow_water_weight,
-            foliage_weight,
-            desert_weight,
-            mountain_weight,
-            snow_weight
+            deep_water_weight * water_ratio,
+            shallow_water_weight * water_ratio,
+            foliage_weight * land_ratio,
+            desert_weight * land_ratio,
+            mountain_weight * land_ratio,
+            snow_weight * 0.0
             };
 
             float weight_sum = 0.0;
@@ -348,7 +346,7 @@ void main() {
                 desert_weight = 0.0;
                 snow_weight = 0.0;
                 mountain_weight = 1.0;
-                weight_sum = 1.0;
+                weight_sum = 1.0;   
             }
 
 
@@ -360,7 +358,6 @@ void main() {
             clamp(mountain_weight/weight_sum,0.0,1.0),
             clamp(snow_weight/weight_sum,0.0,1.0)
             };
-
 
             albedo = vec4(0.0);
             roughness = 0.0;
@@ -376,86 +373,90 @@ void main() {
                 normal += sample_sets[i].normal * blends[i];
             }
         }
-        else if(ubos.map_mode == 1){ //Paper/globe map
-            // albedo = vec4(1.0);
-            SampleSet data_set = load_sample_set(DATA_OFFSET,vec3(0.0),1.0);
-            // float aridity = clamp(pow((abs(asin(normalize(fragPosition).y)) / PI) + 0.01, 32.0),0.0, 1.0);
-            // float latitude_factor = clamp(pow((abs(asin(normalize(fragPosition).y)) / PI) + 0.6, 64.0), 0.0, 1.0);
-            // float temperature_factor = (data_set.albedo.r - latitude_factor)*2.0 - 1.0 + 0.5;
-
-            roughness = 0.95;
-            ambient_occlusion = 1.0;
-            metalness = 0.0;
-            vec3 mountain_color = vec3(0.187820772300678, 0.223227957316809, 0.371237680474149);
-            vec3 dark_stain_color = vec3(0.701101891932973, 0.479320183100827, 0.258182852921596);
-            vec3 light_stain_color = vec3(0.896269353374266, 0.814846572216101, 0.723055128921969);
-            vec3 ground_color = vec3(0.982250550333117, 0.921581856277295, 0.83879901174074);
-            vec3 grass_color = vec3(0.287440837726917,0.491020849847836,0.287440837726917);
-            vec3 tree_color = vec3(0.114435373826974, 0.165132194501668, 0.119538427988346);
-            // vec3 water_color = vec3(0.47353149614801, 0.590618840919337, 0.708375779891687);
-            vec3 water_color = vec3(0.00749903204322618, 0.168269400189691, 0.356400144145944);
-            vec3 river_color = vec3(0.00749903204322618, 0.168269400189691, 0.456400144145944);
-            float scale = 100.0/RADIUS;
-
-            vec3 waves_color = mix(water_color, vec3(1.0), smoothstep(0.9,0.95,sin(elevation*-0.03 + ubos.time * 50.0)));
-            water_color = mix(waves_color, water_color, smoothstep(-500.0, -600.0, elevation));
-            float latitude = asin(normalize(fragPosition).y);
-            float longitude = atan(normalize(fragPosition).z, normalize(fragPosition).x);
-
-            float normal_ratio = atan(normal.z, normal.x) / (2.0 * PI) + 0.5;
-            float sun_ratio = atan(sun_direction.z, sun_direction.x) / (2.0 * PI) + 0.5;
-            float light_ratio = sun_ratio - normal_ratio;
-
-            vec4 mountain_image = texture(image_3ds[0], vec3(longitude*60.0, latitude*-60.0, light_ratio));
-            mountain_color = mix(mountain_color, mountain_image.rgb, mountain_image.a);
-
-            // vec4 grass_image = texture(image_3ds[1], vec3(longitude*100.0, latitude*-100.0, (smoothstep(0.499, 0.501, fbm(normal*50.0))+0.5) / 2.0 ));
-            vec4 grass_image = sample_3d_nearest(image_3ds[1], vec2(longitude*100.0, latitude*-100.0), smoothstep(0.499, 0.501, fbm(normalize(fragPosition)*50.0)));
-            // vec4 grass_image = texture(image_3ds[1], vec3(longitude*100.0, latitude*-100.0, 0.25));
-            grass_color = mix(grass_color, grass_image.rgb, grass_image.a);
-
-            float steepness = clamp(acos(dot(normal, normalize(worldPosition)))*10.0, 0.0, 1.0);
-            float tree_elevaton_factor = smoothstep(2600.0, 2500.0, elevation);
-            tree_elevaton_factor = mix(tree_elevaton_factor, 0.0, smoothstep(500.0,490.0, elevation));
-            float tree_factor = mix(0.0, 1.0 - steepness,tree_elevaton_factor);
-
-            // vec4 tree_image = texture(image_3ds[2], vec3(longitude*100.0, latitude*-100.0, 0.5));
-            vec4 tree_image = sample_3d(image_3ds[2], vec2(longitude*100.0, latitude*-100.0), smoothstep(0.0, 1.0, smoothstep(0.5,1.0,tree_factor)));
-            tree_color = mix(tree_color, tree_image.rgb, tree_image.a);
-            
-            vec4 ground_image = sample_3d(image_3ds[3], vec2(longitude*100.0, latitude*-100.0), (0.9*sin(ubos.time*100.0 + fbm(ubos.time*2.0)*500.0*(fbm(normalize(fragPosition)* 1.0) * 2.0 - 1.0)) + 1.0)/2.0);
-            ground_color = mix(ground_color, ground_image.rgb, ground_image.a);
-
-
-            vec3 stain_color = mix(dark_stain_color, light_stain_color, fbm(normalize(fragPosition)*10.0));
-
-            vec3 map_color = mix(mountain_color, ground_color, smoothstep(3000.0, 2990.0, elevation));
-            map_color = mix(map_color, grass_color, smoothstep(1000.0, 990.0, elevation));
-            map_color = mix(map_color, tree_color, smoothstep(0.499, 0.501, tree_factor));
-            
-            float river_distort_modifier = 10.0;
-            float river_width = (0.0001 + 0.01 * fbm(vec2(latitude,longitude) * 100.0)) * (smoothstep(3000.0, 1000.0, elevation)) + smoothstep(2600.0, 3000.0, elevation) * 0.1 * smoothstep(3000.0, 2600.0, elevation);
-            vec3 distorted_river_coords = vec3(sfbm(normalize(fragPosition) * river_distort_modifier + 128.0), sfbm(normalize(fragPosition) * river_distort_modifier+ 841.0), sfbm(normalize(fragPosition) * river_distort_modifier + 699.0));
-            vec3 distorted_river_wavy_coords = vec3(sfbm(normalize(fragPosition)*river_distort_modifier + 128.0*0.99999), sfbm(normalize(fragPosition)*river_distort_modifier + 841.0*0.99999), sfbm(normalize(fragPosition)*river_distort_modifier + 699.0*0.99999));
-            vec3 river_offset = mix(
-                normalize(fragPosition) * 10.00,
-                normalize(fragPosition) * 10.00 + mix(
-                    1.0 * normalize(distorted_river_coords),
-                    1.0 * normalize(distorted_river_wavy_coords),
-                    0.5 + sin(ubos.time*100.0)*0.01),
-                0.05
-            );
-            float river_factor = smoothstep(river_width, river_width - 0.001, voronoi3d(river_offset)).r;
-
-            map_color = mix(map_color, river_color, river_factor);
-            map_color = mix(map_color, water_color, smoothstep(0.0, -10.0, elevation));
-
-            
-            vec3 final_color = mix(stain_color, map_color, clamp(fbm(normalize(fragPosition)*10.0 + 100.0) + 0.8, 0.0, 1.0));
-            albedo = vec4(final_color,1.0);
-
-
+        else if (ubos.map_mode == 1){
+            outColor = vec4(vec3(water_ratio),1.0);
+            return;
         }
+        // else if(ubos.map_mode == 1){ //Paper/globe map
+        //     // albedo = vec4(1.0);
+        //     SampleSet data_set = load_sample_set(DATA_OFFSET,vec3(0.0),1.0);
+        //     // float aridity = clamp(pow((abs(asin(normalize(fragPosition).y)) / PI) + 0.01, 32.0),0.0, 1.0);
+        //     // float latitude_factor = clamp(pow((abs(asin(normalize(fragPosition).y)) / PI) + 0.6, 64.0), 0.0, 1.0);
+        //     // float temperature_factor = (data_set.albedo.r - latitude_factor)*2.0 - 1.0 + 0.5;
+
+        //     roughness = 0.95;
+        //     ambient_occlusion = 1.0;
+        //     metalness = 0.0;
+        //     vec3 mountain_color = vec3(0.187820772300678, 0.223227957316809, 0.371237680474149);
+        //     vec3 dark_stain_color = vec3(0.701101891932973, 0.479320183100827, 0.258182852921596);
+        //     vec3 light_stain_color = vec3(0.896269353374266, 0.814846572216101, 0.723055128921969);
+        //     vec3 ground_color = vec3(0.982250550333117, 0.921581856277295, 0.83879901174074);
+        //     vec3 grass_color = vec3(0.287440837726917,0.491020849847836,0.287440837726917);
+        //     vec3 tree_color = vec3(0.114435373826974, 0.165132194501668, 0.119538427988346);
+        //     // vec3 water_color = vec3(0.47353149614801, 0.590618840919337, 0.708375779891687);
+        //     vec3 water_color = vec3(0.00749903204322618, 0.168269400189691, 0.356400144145944);
+        //     vec3 river_color = vec3(0.00749903204322618, 0.168269400189691, 0.456400144145944);
+        //     float scale = 100.0/RADIUS;
+
+        //     vec3 waves_color = mix(water_color, vec3(1.0), smoothstep(0.9,0.95,sin(elevation*-0.03 + ubos.time * 50.0)));
+        //     water_color = mix(waves_color, water_color, smoothstep(-500.0, -600.0, elevation));
+        //     float latitude = asin(normalize(fragPosition).y);
+        //     float longitude = atan(normalize(fragPosition).z, normalize(fragPosition).x);
+
+        //     float normal_ratio = atan(normal.z, normal.x) / (2.0 * PI) + 0.5;
+        //     float sun_ratio = atan(sun_direction.z, sun_direction.x) / (2.0 * PI) + 0.5;
+        //     float light_ratio = sun_ratio - normal_ratio;
+
+        //     vec4 mountain_image = texture(image_3ds[0], vec3(longitude*60.0, latitude*-60.0, light_ratio));
+        //     mountain_color = mix(mountain_color, mountain_image.rgb, mountain_image.a);
+
+        //     // vec4 grass_image = texture(image_3ds[1], vec3(longitude*100.0, latitude*-100.0, (smoothstep(0.499, 0.501, fbm(normal*50.0))+0.5) / 2.0 ));
+        //     vec4 grass_image = sample_3d_nearest(image_3ds[1], vec2(longitude*100.0, latitude*-100.0), smoothstep(0.499, 0.501, fbm(normalize(fragPosition)*50.0)));
+        //     // vec4 grass_image = texture(image_3ds[1], vec3(longitude*100.0, latitude*-100.0, 0.25));
+        //     grass_color = mix(grass_color, grass_image.rgb, grass_image.a);
+
+        //     float steepness = clamp(acos(dot(normal, normalize(worldPosition)))*10.0, 0.0, 1.0);
+        //     float tree_elevaton_factor = smoothstep(2600.0, 2500.0, elevation);
+        //     tree_elevaton_factor = mix(tree_elevaton_factor, 0.0, smoothstep(500.0,490.0, elevation));
+        //     float tree_factor = mix(0.0, 1.0 - steepness,tree_elevaton_factor);
+
+        //     // vec4 tree_image = texture(image_3ds[2], vec3(longitude*100.0, latitude*-100.0, 0.5));
+        //     vec4 tree_image = sample_3d(image_3ds[2], vec2(longitude*100.0, latitude*-100.0), smoothstep(0.0, 1.0, smoothstep(0.5,1.0,tree_factor)));
+        //     tree_color = mix(tree_color, tree_image.rgb, tree_image.a);
+            
+        //     vec4 ground_image = sample_3d(image_3ds[3], vec2(longitude*100.0, latitude*-100.0), (0.9*sin(ubos.time*100.0 + fbm(ubos.time*2.0)*500.0*(fbm(normalize(fragPosition)* 1.0) * 2.0 - 1.0)) + 1.0)/2.0);
+        //     ground_color = mix(ground_color, ground_image.rgb, ground_image.a);
+
+
+        //     vec3 stain_color = mix(dark_stain_color, light_stain_color, fbm(normalize(fragPosition)*10.0));
+
+        //     vec3 map_color = mix(mountain_color, ground_color, smoothstep(3000.0, 2990.0, elevation));
+        //     map_color = mix(map_color, grass_color, smoothstep(1000.0, 990.0, elevation));
+        //     map_color = mix(map_color, tree_color, smoothstep(0.499, 0.501, tree_factor));
+            
+        //     float river_distort_modifier = 10.0;
+        //     float river_width = (0.0001 + 0.01 * fbm(vec2(latitude,longitude) * 100.0)) * (smoothstep(3000.0, 1000.0, elevation)) + smoothstep(2600.0, 3000.0, elevation) * 0.1 * smoothstep(3000.0, 2600.0, elevation);
+        //     vec3 distorted_river_coords = vec3(sfbm(normalize(fragPosition) * river_distort_modifier + 128.0), sfbm(normalize(fragPosition) * river_distort_modifier+ 841.0), sfbm(normalize(fragPosition) * river_distort_modifier + 699.0));
+        //     vec3 distorted_river_wavy_coords = vec3(sfbm(normalize(fragPosition)*river_distort_modifier + 128.0*0.99999), sfbm(normalize(fragPosition)*river_distort_modifier + 841.0*0.99999), sfbm(normalize(fragPosition)*river_distort_modifier + 699.0*0.99999));
+        //     vec3 river_offset = mix(
+        //         normalize(fragPosition) * 10.00,
+        //         normalize(fragPosition) * 10.00 + mix(
+        //             1.0 * normalize(distorted_river_coords),
+        //             1.0 * normalize(distorted_river_wavy_coords),
+        //             0.5 + sin(ubos.time*100.0)*0.01),
+        //         0.05
+        //     );
+        //     float river_factor = smoothstep(river_width, river_width - 0.001, voronoi3d(river_offset)).r;
+
+        //     map_color = mix(map_color, river_color, river_factor);
+        //     map_color = mix(map_color, water_color, smoothstep(0.0, -10.0, elevation));
+
+            
+        //     vec3 final_color = mix(stain_color, map_color, clamp(fbm(normalize(fragPosition)*10.0 + 100.0) + 0.8, 0.0, 1.0));
+        //     albedo = vec4(final_color,1.0);
+
+
+        // }
     }
     else {
 

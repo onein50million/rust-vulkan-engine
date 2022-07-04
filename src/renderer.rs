@@ -1500,19 +1500,33 @@ impl LineDrawData {
         self.vertex_buffer.count - 1
     }
 
-    pub fn update_selection<'a, I: Iterator<Item = &'a usize>, J: Iterator<Item = &'a usize>>(
+    pub fn update_selection<
+        'a,
+        I: Iterator<Item = &'a usize>,
+        J: Iterator<Item = &'a usize>,
+        K: Iterator<Item = &'a usize>,
+        L: Iterator<Item = &'a usize>,
+    >(
         &mut self,
         selected_point_indices: I,
         highlighted_point_indices: J,
+        targeted_point_indices: K,
+        player_country_point_indices: L,
     ) {
         for point in &mut self.vertex_buffer {
             point.color = Vector4::new(0.0, 0.0, 0.0, 0.0);
+        }
+        for &index in player_country_point_indices {
+            self.vertex_buffer[index].color = Vector4::new(0.1, 0.9, 0.1, 1.0);
         }
         for &index in highlighted_point_indices {
             self.vertex_buffer[index].color = Vector4::new(1.0, 1.0, 1.0, 0.1);
         }
         for &index in selected_point_indices {
             self.vertex_buffer[index].color = Vector4::new(1.0, 1.0, 1.0, 1.0);
+        }
+        for &index in targeted_point_indices {
+            self.vertex_buffer[index].color = Vector4::new(0.8, 0.1, 0.1, 1.0);
         }
     }
 

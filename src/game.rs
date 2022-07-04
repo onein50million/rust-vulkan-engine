@@ -219,52 +219,58 @@ pub mod client {
                     );
 
             if self.inputs.left_click {
-                self.world.selected_province = {
-                    //TODO: Figure out why I have to make these negative. Probably something to do with the inconsistent coordinate system
-                    let view_matrix_inverse = self
-                        .camera
-                        .get_view_matrix(self.planet.get_transform())
-                        .try_inverse()
-                        .unwrap();
-                    let direction = view_matrix_inverse
-                        .transform_vector(
-                            &projection
-                                .unproject_point(&Point3::new(
-                                    -self.mouse_position.x,
-                                    -self.mouse_position.y,
-                                    1.0,
-                                ))
-                                .coords,
-                        )
-                        .normalize();
-
-                    let origin = view_matrix_inverse
-                        .transform_point(&Point3::from(Vector3::zeros()))
-                        .coords;
-                    match World::intersect_planet(origin, -direction.xyz()) {
-                        Some(point) => Some(
-                            *self
-                                .world
-                                .provinces
-                                .iter()
-                                .min_by_key(|(_, province)| {
-                                    FloatOrd(
-                                        (point
-                                            - self
-                                                .planet
-                                                .get_transform()
-                                                .transform_point(&Point3::from(province.position))
-                                                .coords)
-                                            .magnitude(),
-                                    )
-                                })
-                                .expect("Failed to find closest provice to click")
-                                .0,
-                        ),
-                        None => None,
-                    }
-                };
+                self.world.selected_province = { self.get_closest_province(projection) };
                 self.inputs.left_click = false;
+            }
+            if self.inputs.right_click {
+                self.world.targeted_province = { self.get_closest_province(projection) };
+                self.inputs.right_click = false;
+            }
+        }
+
+        fn get_closest_province(&mut self, projection: &Perspective3<f64>) -> Option<ProvinceKey> {
+            //TODO: Figure out why I have to make these negative. Probably something to do with the inconsistent coordinate system
+            let view_matrix_inverse = self
+                .camera
+                .get_view_matrix(self.planet.get_transform())
+                .try_inverse()
+                .unwrap();
+            let direction = view_matrix_inverse
+                .transform_vector(
+                    &projection
+                        .unproject_point(&Point3::new(
+                            -self.mouse_position.x,
+                            -self.mouse_position.y,
+                            1.0,
+                        ))
+                        .coords,
+                )
+                .normalize();
+            let origin = view_matrix_inverse
+                .transform_point(&Point3::from(Vector3::zeros()))
+                .coords;
+            match World::intersect_planet(origin, -direction.xyz()) {
+                Some(point) => Some(ProvinceKey(
+                    self.world
+                        .provinces
+                        .0
+                        .iter()
+                        .enumerate()
+                        .min_by_key(|(_, province)| {
+                            FloatOrd(
+                                (point
+                                    - self
+                                        .planet
+                                        .get_transform()
+                                        .transform_point(&Point3::from(province.position))
+                                        .coords)
+                                    .magnitude(),
+                            )
+                        })
+                        .expect("Failed to find closest provice to click")
+                        .0,
+                )),
+                None => None,
             }
         }
     }
