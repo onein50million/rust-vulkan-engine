@@ -558,6 +558,7 @@ impl Pops {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Province {
+    pub name: String,
     pub point_indices: Vec<usize>,
     pub neighbouring_provinces: Box<[ProvinceKey]>,
     pub province_key: ProvinceKey,
@@ -628,6 +629,7 @@ impl Province {
 
 #[derive(Clone, Debug)]
 pub struct ProvinceData {
+    name: String,
     num_samples: usize,
     elevation: f64,
     population: f64,
@@ -648,10 +650,12 @@ impl ProvinceData {
             ore: 0.0,
             population: 0.0,
             organization_owner: vec![],
+            name: String::new(),
         }
     }
     pub fn add_sample(
         &mut self,
+        name: &str,
         elevation: f64,
         aridity: f64,
         feb_temps: f64,
@@ -668,6 +672,7 @@ impl ProvinceData {
         self.ore += ore;
         self.population += population;
         self.organization_owner.push(owner);
+        self.name = name.to_string();
     }
     pub fn elevation(&self) -> f64 {
         if self.num_samples > 0 {
@@ -708,7 +713,13 @@ impl ProvinceData {
         self.population
     }
     pub fn owner(&self) -> Option<usize> {
-        self.organization_owner.iter().filter_map(|&o| o).next()
+        let mut occurences = HashMap::with_capacity(self.organization_owner.len());
+        for owner in &self.organization_owner{
+            if let Some(owner) = owner{
+                *occurences.entry(owner).or_insert(0usize) += 1;
+            } 
+        }
+        occurences.iter().max_by_key(|o|o.1).map(|(&&id, _)| id)
     }
 }
 
@@ -1123,26 +1134,8 @@ impl World {
             let population = province_data[province_key].population().max(10_000.0);
             for i in 0..Industry::VARIANT_COUNT {
                 let industry: Industry = i.try_into().unwrap();
-                // industry_data[i].productivity = match industry {
-                //     Industry::Forage => 1.0,
-                //     Industry::Farm => {
-                //         (province_data_map.get(&province_id).unwrap().aridity() as f64 - 0.3)
-                //             .clamp(0.0, 1.1)
-                //     }
-                //     Industry::Mill => 1.0,
-                //     Industry::Mine => province_data_map.get(&province_id).unwrap().ore() as f64,
-                //     Industry::Smelter => 1.0,
-                //     Industry::Labor => 1.0,
-                // };
-                industry_data[i].productivity = 1.0;
-                let total_population = 5_000_000_000.0; //TODO: Don't hard code thise
-                let base_size = (province_area / total_area) * total_population
-                    / (Industry::VARIANT_COUNT as f64);
-                let pop_size = population / (Industry::VARIANT_COUNT as f64);
-                const MIX_FACTOR: f64 = 0.5;
-                industry_data[i].size = base_size * (1.0 - MIX_FACTOR)
-                    + pop_size
-                        * MIX_FACTOR
+                    let pop_size = population / (Industry::VARIANT_COUNT as f64);
+                industry_data[i].size = pop_size
                         * match industry {
                             Industry::Forage => 1.0,
                             Industry::Farm => {
@@ -1156,6 +1149,7 @@ impl World {
             }
 
             provinces.push(Province {
+                name: province_data[province_key].name.clone(),
                 point_indices: out_indices,
                 position: province_origin.cast(),
                 pops: Pops::new(population),
@@ -1215,8 +1209,8 @@ impl World {
             }
             organization.militaries.push(new_military);
         }
-        // const PRE_SIM_STEPS: usize = 1000;
-        const PRE_SIM_STEPS: usize = 100;
+        const PRE_SIM_STEPS: usize = 1000;
+        // const PRE_SIM_STEPS: usize = 100;
 
         let histories = Histories::new(PRE_SIM_STEPS, num_provinces);
 
@@ -1226,11 +1220,11 @@ impl World {
         // for org in organizations.values(){
         //     println!("{}", org.name)
         // }
-        // let &player_organization = organizations
-        //     .keys()
-        //     .nth(rng.usize(0..num_organizations))
-        //     .unwrap();
-        let player_organization = OrganizationKey(0);
+        let &player_organization = organizations
+            .keys()
+            .nth(rng.usize(0..num_organizations))
+            .unwrap();
+        // let player_organization = OrganizationKey(0);
         let mut world = Self {
             points: vertices.iter().map(|vertex| vertex.cast()).collect(),
             provinces,

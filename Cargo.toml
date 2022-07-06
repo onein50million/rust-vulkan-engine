@@ -36,7 +36,6 @@ noise = "0.7.0"
 snap = "1.0.5"
 
 csv = "1.1.6"
-
 # slotmap = "1.0.6"
 
 [profile.dev.package."*"]

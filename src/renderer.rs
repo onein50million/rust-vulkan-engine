@@ -1236,7 +1236,7 @@ impl LineDrawData {
         };
         let index_buffer = {
             let buffer_info = vk::BufferCreateInfoBuilder::new()
-                .size((LINE_DATA_BUFFER_MAX_LENGTH) as u64)
+                .size((LINE_DATA_BUFFER_MAX_LENGTH * size_of::<u32>()) as u64)
                 .usage(vk::BufferUsageFlags::INDEX_BUFFER);
             let allocation_info = vk_mem_erupt::AllocationCreateInfo {
                 usage: vk_mem_erupt::MemoryUsage::CpuToGpu,

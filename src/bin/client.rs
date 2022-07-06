@@ -362,7 +362,7 @@ fn main() {
     //         dbg!(nation);
     //     }
     // }
-    let (provinces_map, province_vertices, province_indices) = get_provinces();
+    let (provinces_map, province_vertices, province_indices, province_names) = get_provinces();
     let water_map = get_water();
 
     let pops_underwater = population
@@ -460,6 +460,7 @@ fn main() {
                     let population = categorized_elevation.population;
                     if let ProvinceKeyOptions::Some(key) = categorized_elevation.province_key {
                         province_data[key].add_sample(
+                            &province_names[key],
                             categorized_elevation.elevation as f64,
                             aridity,
                             feb_temp,
@@ -610,62 +611,62 @@ fn main() {
             });
         });
 
-        // TopBottomPanel::bottom("bottom_panel").show(&ctx, |ui| {
-        //     ui.horizontal(|ui| {
-        //         ui.label(&game.world.organizations[&game.world.player_organization].name);
-        //         ui.label(format!(
-        //             "Money: {:}",
-        //             big_number_format(
-        //                 game.world.organizations[&game.world.player_organization].money
-        //             )
-        //         ));
-        //         for good_index in 0..Good::VARIANT_COUNT {
-        //             let good = Good::try_from(good_index).unwrap();
-        //             ui.label(format!(
-        //                 "{:?}: {:.1}",
-        //                 good,
-        //                 &game.world.organizations[&game.world.player_organization].owned_goods
-        //                     [good_index]
-        //             ));
-        //         }
-        //     });
-        //     ui.horizontal(|ui| {
-        //         match (&game.world.selected_province, &game.world.targeted_province) {
-        //             (Some(source), Some(dest)) => {
-        //                 ui.add(Slider::new(&mut slider_value, (0.0)..=(1.0)));
-        //                 if ui.button("Transfer troops").clicked() {
-        //                     game.world.transfer_troops(
-        //                         game.world.player_organization,
-        //                         *source,
-        //                         *dest,
-        //                         slider_value,
-        //                     );
-        //                 }
-        //             }
-        //             (_, _) => {}
-        //         }
-        //         if let Some(selected_org) = &game.world.selected_organization {
-        //             let relations = game
-        //                 .world
-        //                 .relations
-        //                 .get_relations_mut(game.world.player_organization, *selected_org);
-        //             let button_string = if relations.at_war {
-        //                 "Make peace with"
-        //             } else {
-        //                 "Declare war on"
-        //             };
-        //             if ui
-        //                 .button(format!(
-        //                     "{:} {:}",
-        //                     button_string, &game.world.organizations[selected_org].name
-        //                 ))
-        //                 .clicked()
-        //             {
-        //                 relations.at_war = !relations.at_war;
-        //             }
-        //         }
-        //     })
-        // });
+        TopBottomPanel::bottom("bottom_panel").show(&ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(&game.world.organizations[&game.world.player_organization].name);
+                ui.label(format!(
+                    "Money: {:}",
+                    big_number_format(
+                        game.world.organizations[&game.world.player_organization].money
+                    )
+                ));
+                for good_index in 0..Good::VARIANT_COUNT {
+                    let good = Good::try_from(good_index).unwrap();
+                    ui.label(format!(
+                        "{:?}: {:.1}",
+                        good,
+                        &game.world.organizations[&game.world.player_organization].owned_goods
+                            [good_index]
+                    ));
+                }
+            });
+            ui.horizontal(|ui| {
+                match (&game.world.selected_province, &game.world.targeted_province) {
+                    (Some(source), Some(dest)) => {
+                        ui.add(Slider::new(&mut slider_value, (0.0)..=(1.0)));
+                        if ui.button("Transfer troops").clicked() {
+                            game.world.transfer_troops(
+                                game.world.player_organization,
+                                *source,
+                                *dest,
+                                slider_value,
+                            );
+                        }
+                    }
+                    (_, _) => {}
+                }
+                if let Some(selected_org) = &game.world.selected_organization {
+                    let relations = game
+                        .world
+                        .relations
+                        .get_relations_mut(game.world.player_organization, *selected_org);
+                    let button_string = if relations.at_war {
+                        "Make peace with"
+                    } else {
+                        "Declare war on"
+                    };
+                    if ui
+                        .button(format!(
+                            "{:} {:}",
+                            button_string, &game.world.organizations[selected_org].name
+                        ))
+                        .clicked()
+                    {
+                        relations.at_war = !relations.at_war;
+                    }
+                }
+            })
+        });
 
         if population_graph_window_open {
             Window::new("Population Plot").show(&ctx, |ui| match game.world.selected_province {
@@ -778,6 +779,7 @@ fn main() {
                 Grid::new("province_info_grid")
                     .striped(true)
                     .show(ui, |ui| {
+                        ui.label("Name");
                         ui.label("Id");
                         ui.label("Position");
                         ui.label("Population");
@@ -803,6 +805,7 @@ fn main() {
                                     .sum();
                                 let province_money: f64 =
                                     province.pops.pop_slices.iter().map(|a| (a.money)).sum();
+                                ui.label(format!("{:}", province.name));
                                 ui.label(format!("{:?}", province.province_key));
                                 ui.label(format!("{:?}", province.position));
                                 ui.label(format!("{:}", big_number_format(province_population)));
@@ -1198,12 +1201,12 @@ fn main() {
                         HashSet::with_capacity(game.world.provinces.0.len());
                     for (province_key, province) in game.world.provinces.0.iter().enumerate() {
                         let province_key = ProvinceKey(province_key);
-                        // if game.world.organizations[&game.world.player_organization]
-                        //     .province_control[province_key]
-                        //     > 0.0
-                        // {
-                        //     player_country_points.extend(province.point_indices.iter())
-                        // }
+                        if game.world.organizations[&game.world.player_organization]
+                            .province_control[province_key]
+                            > 0.0
+                        {
+                            player_country_points.extend(province.point_indices.iter())
+                        }
                     }
                     if let Some(line_data) = &mut vulkan_data.line_data {
                         line_data.update_selection(

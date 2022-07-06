@@ -303,15 +303,14 @@ void main() {
             float steepness = 1.0 - clamp(dot(normal, normalize(worldPosition)),0.0, 1.0);
             steepness = map_range_linear(steepness, 0.0, 0.001, 0.0, 1.0);
             
-            if (water_ratio > 0.1){
-                deep_water_weight = (map_range_linear(elevation, 0.0, -100.0, 0.0,1.0));
-                shallow_water_weight = (1.0 - deep_water_weight);
-            }
+            deep_water_weight = (map_range_linear(elevation, 76.0, -100.0, 0.0,1.0)) * water_ratio;
+            deep_water_weight = water_ratio;
+            // shallow_water_weight = (1.0 - deep_water_weight) * water_ratio;
 
             float grass_ratio = map_range_linear(elevation,0.0, 1500.0,1.0 , 0.2);
-            mountain_weight = map_range_linear(elevation,1500.0, 3000.0,0.0, 1.0);
-            foliage_weight = clamp((1.0 - steepness*0.01) *  map_range_linear(aridity, 0.0, 0.5, 0.1, 1.0) * grass_ratio - mountain_weight,0.0,1.0);
-            desert_weight = clamp(1.0 - foliage_weight - mountain_weight,0.0,1.0);
+            mountain_weight = map_range_linear(elevation,1500.0, 3000.0,0.0, 1.0) * land_ratio;
+            foliage_weight = clamp((1.0 - steepness*0.01) *  map_range_linear(aridity, 0.0, 0.5, 0.1, 1.0) * grass_ratio - mountain_weight,0.0,1.0) * land_ratio;
+            desert_weight = clamp(1.0 - foliage_weight - mountain_weight,0.0,1.0) * land_ratio;
 
             float coldness = map_range_linear(current_temperature, -10.0, 3.0, 1.0, 0.0); //How far below zero
             snow_weight = (1.0 - steepness)*aridity * coldness * 1.0;
@@ -326,12 +325,12 @@ void main() {
             };
 
             float weights[] = {
-            deep_water_weight * water_ratio,
-            shallow_water_weight * water_ratio,
-            foliage_weight * land_ratio,
-            desert_weight * land_ratio,
-            mountain_weight * land_ratio,
-            snow_weight * 0.0
+            deep_water_weight,
+            shallow_water_weight,
+            foliage_weight,
+            desert_weight,
+            mountain_weight,
+            snow_weight
             };
 
             float weight_sum = 0.0;
@@ -372,6 +371,8 @@ void main() {
                 ambient_occlusion += sample_sets[i].ambient_occlusion * blends[i];
                 normal += sample_sets[i].normal * blends[i];
             }
+            // outColor = vec4(albedo.rgb, 1.0);
+            // return;
         }
         else if (ubos.map_mode == 1){
             outColor = vec4(vec3(water_ratio),1.0);
