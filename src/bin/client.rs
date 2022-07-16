@@ -1,5 +1,6 @@
 use egui::plot::Value;
 use egui::plot::Values;
+use egui::Id;
 use egui::Slider;
 
 use egui::Grid;
@@ -368,7 +369,7 @@ fn main() {
     let pops_underwater = population
         .iter()
         .enumerate()
-        .filter(|&(i, _)| water_map[i] > 0.9)
+        .filter(|&(i, _)| water_map[i] < -1000.0)
         .map(|(_, &pop)| pop)
         .sum::<f32>();
 
@@ -559,7 +560,7 @@ fn main() {
     let mut global_market_open = false;
     let mut global_supply_demand_open = false;
     let mut organizations_list_open = false;
-    let mut organization_list_province_filter = false;
+    let mut organization_filter = String::new();
     let mut organization_info_open = false;
     let mut console_open = false;
     let mut console_input = String::new();
@@ -635,12 +636,11 @@ fn main() {
                     (Some(source), Some(dest)) => {
                         ui.add(Slider::new(&mut slider_value, (0.0)..=(1.0)));
                         if ui.button("Transfer troops").clicked() {
-                            game.world.transfer_troops(
-                                game.world.player_organization,
-                                *source,
-                                *dest,
-                                slider_value,
-                            );
+                            game.world
+                                .organizations
+                                .get_mut(&game.world.player_organization)
+                                .unwrap()
+                                .transfer_troops(*source, *dest, slider_value);
                         }
                     }
                     (_, _) => {}
@@ -785,6 +785,8 @@ fn main() {
                         ui.label("Population");
                         ui.label("Money");
                         ui.label("Travel Cost");
+                        ui.label("Tax Rate");
+                        // ui.label("Recruit Ratio");
                         for industry_index in 0..Industry::VARIANT_COUNT {
                             ui.label(format!(
                                 "{:?} Industry Size",
@@ -811,6 +813,8 @@ fn main() {
                                 ui.label(format!("{:}", big_number_format(province_population)));
                                 ui.label(format!("{:}", big_number_format(province_money)));
                                 ui.label(format!("{:.2}", province.trader_cost_multiplier));
+                                ui.label(format!("{:.2}", province.tax_rate));
+                                // ui.label(format!("{:.2}", province.recruit_limiter));
                                 for industry_index in 0..Industry::VARIANT_COUNT {
                                     ui.label(format!(
                                         "{:.1}",
@@ -829,28 +833,55 @@ fn main() {
                 if let Some(selected_province_key) = game.world.selected_province {
                     Grid::new("Military Table").striped(true).show(ui, |ui| {
                         ui.label("Org name");
-                        ui.label("Military type");
+                        // ui.label("Military type");
                         ui.label("Deployed troops");
                         ui.end_row();
-                        for org in game.world.organizations.values().filter(|o| {
-                            o.militaries
-                                .iter()
-                                .any(|m| m.deployed_forces[selected_province_key] > 0.5)
-                        }) {
+                        for org in game
+                            .world
+                            .organizations
+                            .values()
+                            .filter(|o| o.military.deployed_forces[selected_province_key] > 0.5)
+                        {
                             ui.label(&org.name);
-                            if org.militaries.len() > 0 {
-                                for military in &org.militaries {
-                                    ui.label(format!("{:?}", military.military_type));
-                                    ui.label(format!(
-                                        "{:.0}",
-                                        military.deployed_forces[selected_province_key]
-                                    ));
-                                    ui.end_row();
-                                }
-                            } else {
-                                ui.end_row();
-                            }
+
+                            ui.label(format!(
+                                "{:}",
+                                big_number_format(
+                                    org.military.deployed_forces[selected_province_key]
+                                )
+                            ));
+                            ui.end_row();
                         }
+                    });
+                }
+                if let Some(selected_province_key) = game.world.selected_province {
+                    Grid::new("Control Table").striped(true).show(ui, |ui| {
+                        ui.label("Org name");
+                        ui.label("Control");
+                        ui.end_row();
+                        for org in game
+                            .world
+                            .organizations
+                            .values()
+                            .filter(|o| o.province_control[selected_province_key] > 0.01)
+                        {
+                            ui.label(&org.name);
+
+                            ui.label(format!(
+                                "{:.2}",
+                                org.province_control[selected_province_key]
+                            ));
+                            ui.end_row();
+                        }
+                        ui.label("Sum");
+                        ui.label(format!(
+                            "{:.2}",
+                            game.world
+                                .organizations
+                                .values()
+                                .map(|o| o.province_control[selected_province_key])
+                                .sum::<f64>()
+                        ))
                     });
                 }
             });
@@ -897,18 +928,11 @@ fn main() {
 
         if organizations_list_open {
             Window::new("Organizations").show(&ctx, |ui| {
+                ui.text_edit_singleline(&mut organization_filter);
                 ScrollArea::vertical().show(ui, |ui| {
                     let mut sorted_orgs: Box<[_]> = game.world.organizations.iter().collect();
                     sorted_orgs.sort_by_key(|(k, v)| v.name.as_str());
-                    let iter = sorted_orgs.iter().filter(|(&key, org)| {
-                        if let Some(selected_province) = game.world.selected_province {
-                            !organization_list_province_filter
-                                || org.province_control[selected_province] > 0.0
-                        } else {
-                            true
-                        }
-                    });
-                    for (id, organization) in iter {
+                    for (id, organization) in sorted_orgs.iter().filter(|(_, o)|organization_filter.is_empty() || o.name.to_lowercase().contains(&organization_filter.to_lowercase())) {
                         ui.radio_value(
                             &mut game.world.selected_organization,
                             Some(OrganizationKey(id.0)),
@@ -922,21 +946,22 @@ fn main() {
             match game.world.selected_organization {
                 Some(org_key) => {
                     let org = &game.world.organizations[&org_key];
-                    Window::new(format!("Organization: {:}", org.name)).show(&ctx, |ui| {
-                        Grid::new(0).striped(true).show(ui, |ui| {
-                            ui.label("money");
-                            ui.label("army size");
-                            ui.end_row();
-                            ui.label(format!("{:}", big_number_format(org.money)));
-                            ui.label(format!(
-                                "{:.0}",
-                                org.militaries
-                                    .iter()
-                                    .flat_map(|m| m.deployed_forces.0.iter())
-                                    .sum::<f64>()
-                            ));
+                    Window::new(format!("Organization: {:}", org.name))
+                        .id(Id::new("OrganizationInfo"))
+                        .show(&ctx, |ui| {
+                            Grid::new(0).striped(true).show(ui, |ui| {
+                                ui.label("money");
+                                ui.label("army size");
+                                ui.end_row();
+                                ui.label(format!("{:}", big_number_format(org.money)));
+                                ui.label(format!(
+                                    "{:}",
+                                    big_number_format(
+                                        org.military.deployed_forces.0.iter().sum::<f64>()
+                                    )
+                                ));
+                            });
                         });
-                    });
                 }
                 None => {
                     Window::new("No Organization Selected").show(&ctx, |_| {});
@@ -1203,7 +1228,7 @@ fn main() {
                         let province_key = ProvinceKey(province_key);
                         if game.world.organizations[&game.world.player_organization]
                             .province_control[province_key]
-                            > 0.0
+                            > 0.01
                         {
                             player_country_points.extend(province.point_indices.iter())
                         }

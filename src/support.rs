@@ -266,116 +266,116 @@ pub fn map_range_linear_f64(
     return result;
 }
 
-    pub fn coordinate_to_index(coordinate: Vector3<f64>) -> usize {
-        let v_abs = coordinate.abs();
+pub fn coordinate_to_index(coordinate: Vector3<f64>) -> usize {
+    let v_abs = coordinate.abs();
 
-        let ma;
-        let uv;
-        let face_index;
-        if v_abs.z >= v_abs.x && v_abs.z >= v_abs.y {
-            face_index = if coordinate.z < 0.0 { 5.0 } else { 4.0 };
-            ma = 0.5 / v_abs.z;
-            uv = Vector2::new(
-                if coordinate.z < 0.0 {
-                    -coordinate.x
-                } else {
-                    coordinate.x
-                },
-                -coordinate.y,
-            );
-        } else if v_abs.y >= v_abs.x {
-            face_index = if coordinate.y < 0.0 { 3.0 } else { 2.0 };
-            ma = 0.5 / v_abs.y;
-            uv = Vector2::new(
-                coordinate.x,
-                if coordinate.y < 0.0 {
-                    -coordinate.z
-                } else {
-                    coordinate.z
-                },
-            );
-        } else {
-            face_index = if coordinate.x < 0.0 { 1.0 } else { 0.0 };
-            ma = 0.5 / v_abs.x;
-            uv = Vector2::new(
-                if coordinate.x < 0.0 {
-                    coordinate.z
-                } else {
-                    -coordinate.z
-                },
-                -coordinate.y,
-            );
-        }
-
-        let uv = (uv * ma).add_scalar(0.5);
-        pixel_to_index(
-            (uv.x * CUBEMAP_WIDTH as f64) as usize,
-            (uv.y * CUBEMAP_WIDTH as f64) as usize,
-            face_index as usize,
-        )
-    }
-
-    pub fn index_to_coordinate(index: usize) -> Vector3<f32> {
-        const CORRECTION_MATRIX: Matrix3<f64> = Matrix3::new(
-            1.0000000, 0.0000000, 0.0000000, 0.0000000, 0.0000000, -1.0000000, 0.0000000, 1.0000000,
-            0.0000000,
+    let ma;
+    let uv;
+    let face_index;
+    if v_abs.z >= v_abs.x && v_abs.z >= v_abs.y {
+        face_index = if coordinate.z < 0.0 { 5.0 } else { 4.0 };
+        ma = 0.5 / v_abs.z;
+        uv = Vector2::new(
+            if coordinate.z < 0.0 {
+                -coordinate.x
+            } else {
+                coordinate.x
+            },
+            -coordinate.y,
         );
+    } else if v_abs.y >= v_abs.x {
+        face_index = if coordinate.y < 0.0 { 3.0 } else { 2.0 };
+        ma = 0.5 / v_abs.y;
+        uv = Vector2::new(
+            coordinate.x,
+            if coordinate.y < 0.0 {
+                -coordinate.z
+            } else {
+                coordinate.z
+            },
+        );
+    } else {
+        face_index = if coordinate.x < 0.0 { 1.0 } else { 0.0 };
+        ma = 0.5 / v_abs.x;
+        uv = Vector2::new(
+            if coordinate.x < 0.0 {
+                coordinate.z
+            } else {
+                -coordinate.z
+            },
+            -coordinate.y,
+        );
+    }
 
-        let (x, y) = index_to_pixel(index);
-        let face = index / (CUBEMAP_WIDTH * CUBEMAP_WIDTH);
+    let uv = (uv * ma).add_scalar(0.5);
+    pixel_to_index(
+        (uv.x * CUBEMAP_WIDTH as f64) as usize,
+        (uv.y * CUBEMAP_WIDTH as f64) as usize,
+        face_index as usize,
+    )
+}
 
-        let x = ((x as f64) / CUBEMAP_WIDTH as f64) * 2.0 - 1.0;
-        let y = ((y as f64) / CUBEMAP_WIDTH as f64) * 2.0 - 1.0;
+pub fn index_to_coordinate(index: usize) -> Vector3<f32> {
+    const CORRECTION_MATRIX: Matrix3<f64> = Matrix3::new(
+        1.0000000, 0.0000000, 0.0000000, 0.0000000, 0.0000000, -1.0000000, 0.0000000, 1.0000000,
+        0.0000000,
+    );
 
-        let normal;
-        match face {
-            0 => {
-                normal = Vector3::new(1.0, -y, -x);
-            }
-            1 => {
-                normal = Vector3::new(-1.0, -y, x);
-            }
-            2 => {
-                normal = Vector3::new(x, 1.0, y);
-            }
-            3 => {
-                normal = Vector3::new(x, -1.0, -y);
-            }
-            4 => {
-                normal = Vector3::new(x, -y, 1.0);
-            }
-            5 => {
-                normal = Vector3::new(-x, -y, -1.0);
-            }
-            _ => {
-                panic!("Too many faces in cubemap");
-            }
+    let (x, y) = index_to_pixel(index);
+    let face = index / (CUBEMAP_WIDTH * CUBEMAP_WIDTH);
+
+    let x = ((x as f64) / CUBEMAP_WIDTH as f64) * 2.0 - 1.0;
+    let y = ((y as f64) / CUBEMAP_WIDTH as f64) * 2.0 - 1.0;
+
+    let normal;
+    match face {
+        0 => {
+            normal = Vector3::new(1.0, -y, -x);
         }
-
-        let secondary_correction_matrix: Matrix4<f64> =
-            Matrix4::from(Rotation3::from_euler_angles(-90f64.to_radians(), 0.0, 0.0));
-        let normal = CORRECTION_MATRIX * normal.normalize();
-        let normal = secondary_correction_matrix
-            .transform_point(&Point3::from(normal))
-            .coords;
-        let normal = normal.component_mul(&Vector3::new(1.0, 1.0, 1.0));
-        let point = normal * World::RADIUS;
-
-        point.cast()
+        1 => {
+            normal = Vector3::new(-1.0, -y, x);
+        }
+        2 => {
+            normal = Vector3::new(x, 1.0, y);
+        }
+        3 => {
+            normal = Vector3::new(x, -1.0, -y);
+        }
+        4 => {
+            normal = Vector3::new(x, -y, 1.0);
+        }
+        5 => {
+            normal = Vector3::new(-x, -y, -1.0);
+        }
+        _ => {
+            panic!("Too many faces in cubemap");
+        }
     }
 
-    pub fn index_to_pixel(index: usize) -> (usize, usize) {
-        (
-            (index % (CUBEMAP_WIDTH * CUBEMAP_WIDTH)) % CUBEMAP_WIDTH,
-            (index % (CUBEMAP_WIDTH * CUBEMAP_WIDTH)) / CUBEMAP_WIDTH,
-        )
-    }
+    let secondary_correction_matrix: Matrix4<f64> =
+        Matrix4::from(Rotation3::from_euler_angles(-90f64.to_radians(), 0.0, 0.0));
+    let normal = CORRECTION_MATRIX * normal.normalize();
+    let normal = secondary_correction_matrix
+        .transform_point(&Point3::from(normal))
+        .coords;
+    let normal = normal.component_mul(&Vector3::new(1.0, 1.0, 1.0));
+    let point = normal * World::RADIUS;
 
-    pub fn pixel_to_index(x: usize, y: usize, face: usize) -> usize {
-        let face_offset = face * CUBEMAP_WIDTH * CUBEMAP_WIDTH;
-        let y_offset = y * CUBEMAP_WIDTH;
-        x + y_offset + face_offset
-    }
+    point.cast()
+}
+
+pub fn index_to_pixel(index: usize) -> (usize, usize) {
+    (
+        (index % (CUBEMAP_WIDTH * CUBEMAP_WIDTH)) % CUBEMAP_WIDTH,
+        (index % (CUBEMAP_WIDTH * CUBEMAP_WIDTH)) / CUBEMAP_WIDTH,
+    )
+}
+
+pub fn pixel_to_index(x: usize, y: usize, face: usize) -> usize {
+    let face_offset = face * CUBEMAP_WIDTH * CUBEMAP_WIDTH;
+    let y_offset = y * CUBEMAP_WIDTH;
+    x + y_offset + face_offset
+}
 
 //https://stackoverflow.com/a/12996028
 pub fn hash_usize_fast(seed: usize) -> usize {

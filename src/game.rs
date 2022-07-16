@@ -11,7 +11,7 @@ Server object: calculated purely on server, client just copies data from server
 Client predicted: Uses client side prediction to reduce latency
 Client only (Animations, particles)
  */
-const GAME_SPEEDS: [f64; 5] = [0.0, 1.0, 24.0, 120.0, 240.0];
+const GAME_SPEEDS: [f64; 5] = [0.0, 1.0, 24.0, 24.0*7.0, 24.0*30.0];
 
 pub mod directions {
     use nalgebra::Vector3;
@@ -214,16 +214,16 @@ pub mod client {
                 UnitQuaternion::from_euler_angles(23.43644f64.to_radians(), 0.0, 0.0)
                     * UnitQuaternion::from_euler_angles(
                         0.0,
-                        -std::f64::consts::PI * 2.0 * 365.25 * self.world.current_year,
+                        -std::f64::consts::PI * 2.0 * 365.0 * self.world.current_year,
                         0.0,
                     );
 
             if self.inputs.left_click {
-                self.world.selected_province = { self.get_closest_province(projection) };
+                self.world.selected_province = self.get_closest_province(projection);
                 self.inputs.left_click = false;
             }
             if self.inputs.right_click {
-                self.world.targeted_province = { self.get_closest_province(projection) };
+                self.world.targeted_province = self.get_closest_province(projection);
                 self.inputs.right_click = false;
             }
         }

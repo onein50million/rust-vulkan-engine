@@ -1,0 +1,17 @@
+def President ppl 1
+def Congress ppl 535
+def SupremeCourt ppl 9
+
+ctrl President appoints SupremeCourt
+ctrl Congress approves SupremeCourt
+
+ctrl President controls $Military
+ctrl Congress controls $Legislation
+ctrl SupremeCourt vetoes $Legislation
+ctrl President vetoes $Legislation
+
+ctrl $People elects President
+ctrl $People elects Congress
+
+
+

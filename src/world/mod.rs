@@ -1,11 +1,11 @@
 use std::{
     cell::UnsafeCell,
-    collections::{hash_map::Entry, HashMap, HashSet, VecDeque},
+    collections::{hash_map::Entry, BinaryHeap, HashMap, HashSet, VecDeque},
     fmt::Display,
     hash::Hash,
     mem::MaybeUninit,
     ops::{Add, Index, IndexMut, Mul},
-    time::Instant,
+    time::Instant, f64::consts::PI,
 };
 
 pub mod organization;
@@ -24,7 +24,7 @@ use crate::{
     world::organization::Ideology,
 };
 
-use self::organization::{Military, MilitaryType, Organization, OrganizationKey, Relation};
+use self::organization::{Action, Law, Military, Organization, OrganizationKey, Relation};
 
 const BASE_INDUSTRY_SIZE: f64 = 1000.0;
 const TRICKLEBACK_RATIO: f64 = 0.25;
@@ -33,8 +33,22 @@ const TRICKLEBACK_RATIO: f64 = 0.25;
 #[derive(Clone, Copy, VariantCount, Debug, IntoPrimitive, TryFromPrimitive)]
 pub enum Culture {
     CultureA,
-    CultureB,
-    CultureC,
+    // CultureB,
+    // CultureC,
+    // D,
+    // E,
+    // F,
+    // G,
+    // H,
+    // J,
+    // K,
+    // L,
+    // M,
+    // N,
+    // O,
+    // P,
+    // Q,
+    // R,
 }
 #[repr(usize)]
 #[derive(Clone, Copy, VariantCount, Debug, IntoPrimitive, TryFromPrimitive)]
@@ -505,36 +519,59 @@ impl Histories {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Pops {
-    pub pop_slices: [PopSlice; NUM_SLICES],
+    pub pop_slices: Box<[PopSlice]>,
+    // pub pop_slices: [PopSlice; NUM_SLICES],
+
 }
 
 impl Pops {
     pub fn new(total_population: f64) -> Self {
-        const SLICE_COUNT: usize = NUM_SLICES;
-        unsafe {
-            let mut pop_slices: MaybeUninit<[PopSlice; SLICE_COUNT]> = MaybeUninit::uninit();
-            let rng = fastrand::Rng::new();
-            for i in 0..SLICE_COUNT {
-                let slice_population = (total_population / SLICE_COUNT as f64) * (rng.f64() + 0.5);
-                (pop_slices.as_mut_ptr() as *mut PopSlice)
-                    .offset(i as isize)
-                    .write(PopSlice {
-                        population: slice_population,
-                        money: 1.0 * slice_population,
-                        // owned_goods: [1_000_000_000_000.0 / SLICE_COUNT as f64; Good::VARIANT_COUNT],
-                        owned_goods: [0.0 * slice_population as f64; Good::VARIANT_COUNT],
-                        // met_inputs: [0.0; Good::VARIANT_COUNT],
-                        individual_demand: [0.0; Good::VARIANT_COUNT],
-                        individual_supply: [0.0; Good::VARIANT_COUNT],
-                        previous_met_needs: VecDeque::with_capacity(PopSlice::NUM_MET_NEEDS_STORED),
-                        minimum_met_needs: f64::NAN,
-                        trickleback: 0.0,
-                    })
-            }
-            let pop_slices = pop_slices.assume_init();
-            Self { pop_slices }
+        // const SLICE_COUNT: usize = NUM_SLICES;
+        // unsafe {
+        //     let mut pop_slices: MaybeUninit<[PopSlice; SLICE_COUNT]> = MaybeUninit::uninit();
+        //     let rng = fastrand::Rng::new();
+        //     for i in 0..SLICE_COUNT {
+        //         let slice_population = (total_population / SLICE_COUNT as f64) * (rng.f64() + 0.5);
+        //         (pop_slices.as_mut_ptr() as *mut PopSlice)
+        //             .offset(i as isize)
+        //             .write(PopSlice {
+        //                 population: slice_population,
+        //                 money: 10.0 * slice_population,
+        //                 // owned_goods: [1_000_000_000_000.0 / SLICE_COUNT as f64; Good::VARIANT_COUNT],
+        //                 owned_goods: [0.0 * slice_population as f64; Good::VARIANT_COUNT],
+        //                 // met_inputs: [0.0; Good::VARIANT_COUNT],
+        //                 individual_demand: [0.0; Good::VARIANT_COUNT],
+        //                 individual_supply: [0.0; Good::VARIANT_COUNT],
+        //                 previous_met_needs: VecDeque::with_capacity(PopSlice::NUM_MET_NEEDS_STORED),
+        //                 minimum_met_needs: f64::NAN,
+        //                 trickleback: 0.0,
+        //             })
+        //     }
+        //     let pop_slices = pop_slices.assume_init();
+        //     Self { pop_slices }
+        // }
+
+        let mut out = Vec::with_capacity(NUM_SLICES);
+        let rng = fastrand::Rng::new(); 
+        for _ in 0..NUM_SLICES{
+            let slice_population = (total_population / NUM_SLICES as f64) * (rng.f64() + 0.5);
+            out.push(PopSlice {
+                population: slice_population,
+                money: 10.0 * slice_population,
+                // owned_goods: [1_000_000_000_000.0 / SLICE_COUNT as f64; Good::VARIANT_COUNT],
+                owned_goods: [0.0 * slice_population as f64; Good::VARIANT_COUNT],
+                // met_inputs: [0.0; Good::VARIANT_COUNT],
+                individual_demand: [0.0; Good::VARIANT_COUNT],
+                individual_supply: [0.0; Good::VARIANT_COUNT],
+                previous_met_needs: VecDeque::with_capacity(PopSlice::NUM_MET_NEEDS_STORED),
+                minimum_met_needs: f64::NAN,
+                trickleback: 0.0,
+            })
         }
 
+        Self{
+            pop_slices: out.into_boxed_slice()
+        }
         // let pop_slices: Vec<_> = std::iter::repeat_with(||{
         //     let slice_population = total_population / SLICE_COUNT as f64;
         //     PopSlice {
@@ -564,6 +601,7 @@ pub struct Province {
     pub province_key: ProvinceKey,
     pub province_area: f64,
     pub pops: Pops,
+    pub tax_rate: f64,
     pub market: Market,
     pub position: Vector3<f64>,
     pub industry_data: [IndustryData; Industry::VARIANT_COUNT],
@@ -572,6 +610,8 @@ pub struct Province {
     pub july_temp: f64,
     pub trader_cost_multiplier: f64, //Excess goes to traders in global market. Abstraction for difficulties in exporting from remote or blockaded provinces, WIP and not really functional
     pub tax_bank: f64,
+    pub troop_bank: f64,
+    // pub recruit_limiter: f64, //ratio of troops that are currently recruited from the province
 }
 impl Display for Province {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -622,7 +662,7 @@ impl Display for Province {
 
 impl Province {
     pub fn get_current_temp(&self, current_year: f64) -> f64 {
-        let mix_factor = (current_year.sin() + 1.0) / 2.0;
+        let mix_factor = ((current_year * PI * 2.0).sin() + 1.0) / 2.0;
         self.feb_temp * (1.0 - mix_factor) + self.july_temp * mix_factor
     }
 }
@@ -714,12 +754,12 @@ impl ProvinceData {
     }
     pub fn owner(&self) -> Option<usize> {
         let mut occurences = HashMap::with_capacity(self.organization_owner.len());
-        for owner in &self.organization_owner{
-            if let Some(owner) = owner{
+        for owner in &self.organization_owner {
+            if let Some(owner) = owner {
                 *occurences.entry(owner).or_insert(0usize) += 1;
-            } 
+            }
         }
-        occurences.iter().max_by_key(|o|o.1).map(|(&&id, _)| id)
+        occurences.iter().max_by_key(|o| o.1).map(|(&&id, _)| id)
     }
 }
 
@@ -884,29 +924,23 @@ impl World {
     pub const STEP_LENGTH: f64 = 1.0 / 365.0 / 24.0;
     pub const PRE_SIM_STEP_LENGTH: f64 = 0.5;
 
-    pub fn transfer_troops(
-        &mut self,
-        organization: OrganizationKey,
-        source_province: ProvinceKey,
-        destination_province: ProvinceKey,
-        ratio: f64,
-    ) {
-        for military in &mut self
-            .organizations
-            .get_mut(&organization)
-            .unwrap()
-            .militaries
-        {
-            let transfer_amount = military.deployed_forces[source_province] * ratio;
-            military.deployed_forces[destination_province] += transfer_amount;
-            military.deployed_forces[source_province] -= transfer_amount;
-        }
-    }
+    // fn get_other_orgs(&self, org_key: OrganizationKey) -> impl Iterator<Item = &Organization> {
+    //     self.organizations.values().filter(move |o| o.key != org_key)
+    // }
+    // fn get_other_orgs_mut(&mut self, org_key: OrganizationKey) -> impl Iterator<Item = &mut Organization> {
+    //     self.organizations.values_mut().filter(move |o| o.key != org_key)
+    // }
 
     pub fn process_command(&mut self, command: &str) -> String {
         let mut words = command.split_whitespace();
         match words.next() {
             Some(word) => match word {
+                "get_neighbours" => match self.selected_province {
+                    Some(province) => {
+                        return format!("{:?}", self.provinces[province].neighbouring_provinces)
+                    }
+                    None => return "Must select a province\n".to_string(),
+                },
                 "get_total_pops" => {
                     return format!("{:.0}\n", self.get_total_population());
                 }
@@ -917,7 +951,7 @@ impl World {
                     Some(province) => match words.next() {
                         Some(argument) => match argument.parse::<f64>() {
                             Ok(pops_to_add) => {
-                                for pop in &mut self.provinces[province].pops.pop_slices {
+                                for pop in self.provinces[province].pops.pop_slices.iter_mut() {
                                     pop.population += pops_to_add / (NUM_SLICES as f64)
                                 }
                                 return "Success\n".to_string();
@@ -932,7 +966,7 @@ impl World {
                     Some(province) => match words.next() {
                         Some(argument) => match argument.parse::<f64>() {
                             Ok(money_to_add) => {
-                                for pop in &mut self.provinces[province].pops.pop_slices {
+                                for pop in self.provinces[province].pops.pop_slices.iter_mut() {
                                     pop.money += money_to_add / (NUM_SLICES as f64)
                                 }
                                 return "Success\n".to_string();
@@ -979,51 +1013,46 @@ impl World {
                     if let (Some(selected_province_key), Some(selected_org_key)) =
                         (self.selected_province, self.selected_organization)
                     {
-                        match self
-                            .organizations
-                            .get_mut(&selected_org_key)
-                            .unwrap()
-                            .militaries
-                            .iter_mut()
-                            .find(|m| matches!(m.military_type, MilitaryType::Army))
+                        if let Ok(amount) = words
+                            .next()
+                            .unwrap_or_else(|| return "No amount provided\n")
+                            .parse::<f64>()
                         {
-                            Some(military) => {
-                                if let Ok(amount) = words
-                                    .next()
-                                    .unwrap_or_else(|| return "No amount provided\n")
-                                    .parse::<f64>()
-                                {
-                                    military.deployed_forces[selected_province_key] += amount;
-                                    return format!("Added {amount} troops in province {:} for organization {:}\n", selected_province_key.0, selected_org_key.0);
-                                } else {
-                                    return "Invalid amount provided\n".to_string();
-                                }
-                            }
-                            None => return "Organization has no army\n".to_string(),
+                            self.organizations
+                                .get_mut(&selected_org_key)
+                                .unwrap()
+                                .military
+                                .deployed_forces[selected_province_key] += amount;
+                            return format!(
+                                "Added {amount} troops in province {:} for organization {:}\n",
+                                selected_province_key.0, selected_org_key.0
+                            );
+                        } else {
+                            return "Invalid amount provided\n".to_string();
                         }
                     } else {
                         return "You must have a province and organization selected\n".to_string();
                     }
                 }
-                "add_mil" => match self.selected_organization {
-                    Some(org_key) => match words.next() {
-                        Some(military_type) => {
-                            let military_type = match military_type.to_lowercase().as_str() {
-                                "army" => MilitaryType::Army,
-                                "enforcer" => MilitaryType::Enforcer,
-                                _ => return "Invalid military type\n".to_string(),
-                            };
-                            self.organizations
-                                .get_mut(&org_key)
-                                .unwrap()
-                                .militaries
-                                .push(Military::new(military_type, self.provinces.0.len()));
-                            return "Succesfully created a military\n".to_string();
-                        }
-                        None => return "You must enter a type\n".to_string(),
-                    },
-                    None => return "Must select an organization\n".to_string(),
-                },
+                // "add_mil" => match self.selected_organization {
+                //     Some(org_key) => match words.next() {
+                //         Some(military_type) => {
+                //             let military_type = match military_type.to_lowercase().as_str() {
+                //                 "army" => MilitaryType::Army,
+                //                 "enforcer" => MilitaryType::Enforcer,
+                //                 _ => return "Invalid military type\n".to_string(),
+                //             };
+                //             self.organizations
+                //                 .get_mut(&org_key)
+                //                 .unwrap()
+                //                 .military
+                //                 .push(Military::new(military_type, self.provinces.0.len()));
+                //             return "Succesfully created a military\n".to_string();
+                //         }
+                //         None => return "You must enter a type\n".to_string(),
+                //     },
+                //     None => return "Must select an organization\n".to_string(),
+                // },
                 "declare_war_all" => match self.selected_organization {
                     Some(org_key) => {
                         for &enemy_key in self.organizations.keys() {
@@ -1127,25 +1156,25 @@ impl World {
                 / province_indices.len() as f32;
             let province_origin = province_origin.normalize() * Self::RADIUS as f32;
             let mut industry_data = [IndustryData {
-                productivity: f64::NAN,
+                productivity: 1.0,
                 size: f64::NAN,
             }; Industry::VARIANT_COUNT];
             let province_area = province_data[province_key].num_samples as f64;
             let population = province_data[province_key].population().max(10_000.0);
             for i in 0..Industry::VARIANT_COUNT {
                 let industry: Industry = i.try_into().unwrap();
-                    let pop_size = population / (Industry::VARIANT_COUNT as f64);
+                let pop_size = population / (Industry::VARIANT_COUNT as f64);
                 industry_data[i].size = pop_size
-                        * match industry {
-                            Industry::Forage => 1.0,
-                            Industry::Farm => {
-                                (province_data[province_key].aridity() as f64 - 0.3).clamp(0.0, 1.1)
-                            }
-                            Industry::Mill => 1.0,
-                            Industry::Mine => province_data[province_key].ore() as f64,
-                            Industry::Smelter => 1.0,
-                            Industry::Labor => 1.0,
-                        };
+                    * match industry {
+                        Industry::Forage => 1.0,
+                        Industry::Farm => {
+                            (province_data[province_key].aridity() as f64 - 0.3).clamp(0.0, 1.1)
+                        }
+                        Industry::Mill => 1.0,
+                        Industry::Mine => province_data[province_key].ore() as f64,
+                        Industry::Smelter => 1.0,
+                        Industry::Labor => 1.0,
+                    };
             }
 
             provinces.push(Province {
@@ -1169,6 +1198,9 @@ impl World {
                 july_temp: province_data[province_key].july_temps(),
                 neighbouring_provinces: vec![].into_boxed_slice(),
                 tax_bank: 0.0,
+                tax_rate: 0.1,
+                troop_bank: 0.0,
+                // recruit_limiter: 0.0,
             });
 
             if let Some(owner) = province_data[province_key].owner() {
@@ -1182,35 +1214,57 @@ impl World {
             }
         }
 
-        let provinces = ProvinceMap(provinces.into_boxed_slice());
+        let mut provinces = ProvinceMap(provinces.into_boxed_slice());
 
+        // for i in 0..provinces.0.len() {
+        //     let mut index_set: HashSet<_> =
+        //         provinces[ProvinceKey(i)].point_indices.iter().collect();
+        //     let mut neighbours = vec![];
+        //     'neighbour_loop: for j in 0..provinces.0.len() {
+        //         for neighbour_index in &provinces[ProvinceKey(j)].point_indices {
+        //             if index_set.insert(neighbour_index) {
+        //                 neighbours.push(ProvinceKey(j));
+        //                 continue 'neighbour_loop;
+        //             }
+        //         }
+        //     }
+        // }
+        const NUM_NEIGHBOURS: usize = 5;
         for i in 0..provinces.0.len() {
-            let mut index_set: HashSet<_> =
-                provinces[ProvinceKey(i)].point_indices.iter().collect();
-            let mut neighbours = vec![];
-            'neighbour_loop: for j in 0..provinces.0.len() {
-                for neighbour_index in &provinces[ProvinceKey(j)].point_indices {
-                    if index_set.insert(neighbour_index) {
-                        neighbours.push(ProvinceKey(j));
-                        continue 'neighbour_loop;
-                    }
-                }
-            }
+            let province_key = ProvinceKey(i);
+            let mut closest_provinces: Box<[_]> = provinces
+                .0
+                .iter()
+                .enumerate()
+                .map(|(k, p)| {
+                    (
+                        ProvinceKey(k),
+                        p.position
+                            .normalize()
+                            .dot(&provinces[province_key].position.normalize())
+                            .acos(),
+                    )
+                })
+                .collect();
+            closest_provinces.sort_by_key(|p| FloatOrd(p.1));
+            provinces[province_key].neighbouring_provinces = closest_provinces[1..NUM_NEIGHBOURS]
+                .iter()
+                .map(|p| p.0)
+                .collect();
         }
-
-        for (_, organization) in organizations.iter_mut() {
-            let mut new_military = Military::new(MilitaryType::Army, num_provinces);
-            for (province_key, &control) in organization.province_control.0.iter().enumerate() {
-                let province_key = ProvinceKey(province_key);
-                if control > 0.01 {
-                    new_military.deployed_forces[province_key] +=
-                        rng.f64() * provinces[province_key].pops.population() * 0.01 + 1000.0;
-                }
-            }
-            organization.militaries.push(new_military);
-        }
-        const PRE_SIM_STEPS: usize = 1000;
-        // const PRE_SIM_STEPS: usize = 100;
+        // for (_, organization) in organizations.iter_mut() {
+        //     let mut new_military = Military::new(MilitaryType::Army, num_provinces);
+        //     for (province_key, &control) in organization.province_control.0.iter().enumerate() {
+        //         let province_key = ProvinceKey(province_key);
+        //         if control > 0.01 {
+        //             new_military.deployed_forces[province_key] +=
+        //                 rng.f64() * provinces[province_key].pops.population() * 0.01 + 1000.0;
+        //         }
+        //     }
+        //     organization.military.push(new_military);
+        // }
+        // const PRE_SIM_STEPS: usize = 1000;
+        const PRE_SIM_STEPS: usize = 100;
 
         let histories = Histories::new(PRE_SIM_STEPS, num_provinces);
 
@@ -1225,6 +1279,21 @@ impl World {
             .nth(rng.usize(0..num_organizations))
             .unwrap();
         // let player_organization = OrganizationKey(0);
+        
+        let mut num_uncontrolled_provinces = 0;
+        for province in provinces.0.iter_mut(){
+            if (1.0 - organizations.values().map(|o|o.province_control[province.province_key]).sum::<f64>()).abs() > 0.1{
+                // dbg!(&province.name);                
+                let num_orgs = organizations.len();
+                num_uncontrolled_provinces += 1;
+                for org in organizations.values_mut(){
+                    org.province_control[province.province_key] = 1.0 / num_orgs as f64;
+                }
+
+            }
+        }
+        dbg!(num_uncontrolled_provinces);
+        
         let mut world = Self {
             points: vertices.iter().map(|vertex| vertex.cast()).collect(),
             provinces,
@@ -1489,31 +1558,40 @@ impl World {
                     slice.owned_goods[good as usize] -= inputs[good as usize] * minimum_met_input;
                     slice.owned_goods[good as usize] += output * minimum_met_input;
                     slice.owned_goods[good as usize] = slice.owned_goods[good as usize]
-                        .min(slice.population * GOOD_STORAGE_RATIO * delta_year)
+                        // .min(slice.population * GOOD_STORAGE_RATIO * delta_year)
+                        .min(slice.population * GOOD_STORAGE_RATIO)
                 }
             }
-            // let mut tax_bank = 0.0;
-            let mut _population_sum = 0.0;
+            //collect taxes and troops
+            // let max_recruit_ratio = 0.01;
+            let recruit_speed = 0.01;
+            let recruit_limiter_gain_speed = 1.0;
+            let recruit_limiter_decay_speed = recruit_limiter_gain_speed * 0.1;
+
             for (_index, slice) in province.pops.pop_slices.iter_mut().enumerate() {
-                let tax_amount = (slice.money * 0.1 * delta_year).min(slice.money);
+                let tax_amount = (slice.money * province.tax_rate * delta_year).min(slice.money);
                 let local_tax_proportion = 1.0;
                 province.tax_bank += tax_amount * local_tax_proportion;
                 global_tax_bank += tax_amount * (1.0 - local_tax_proportion);
                 slice.money -= tax_amount;
+
+                // let recruit_ratio = (1.0 - province.recruit_limiter).max(0.0) * recruit_speed * delta_year;
+                // let recruit_amount = (slice.population * recruit_ratio).min(slice.population);
+                // slice.population -= recruit_amount;
+                // province.troop_bank += recruit_amount;
+                let recruit_ratio = recruit_speed * delta_year;
+                let recruit_amount = (slice.population * recruit_ratio).min(slice.population);
+                slice.population -= recruit_amount;
+                province.troop_bank += recruit_amount;
+
                 if slice.money.is_nan() {
                     dbg!(tax_amount);
                 }
                 assert!(!slice.money.is_nan());
-
-                _population_sum += slice.population;
             }
-            // for (_index, slice) in province.pops.pop_slices.iter_mut().enumerate() {
-            //     let tax_payment = tax_bank * (1.0 / NUM_SLICES as f64);
-            //     slice.money += tax_payment;
-            //     assert!(!slice.money.is_nan());
-            // }
-
-            // dbg!(money_sum);
+            // province.recruit_limiter -= recruit_limiter_decay_speed * delta_year;
+            // province.recruit_limiter += (recruit_limiter_gain_speed * delta_year);
+            // province.recruit_limiter = province.recruit_limiter.clamp(0.0, 1.0);
         }
         let num_provinces = self.provinces.0.len();
         for province in self.provinces.0.iter_mut() {
@@ -1530,333 +1608,255 @@ impl World {
                 assert!(!slice.money.is_nan());
             }
         }
+        //distribute taxes and troops to controlling organizations
         for (province_key, province) in self.provinces.0.iter_mut().enumerate() {
-            // let control_sum: f64 = self.organizations.values().flat_map(|o|o.province_control.iter().filter(|(&k, _)| k == province_key)).map(|p|p.1).sum();
+            let province_key = ProvinceKey(province_key);
             for organization in self.organizations.values_mut() {
                 let transfer_amount =
-                    province.tax_bank * organization.province_control[ProvinceKey(province_key)];
+                    province.tax_bank * organization.province_control[province_key];
                 organization.money += transfer_amount;
-                province.tax_bank -= transfer_amount
+                // province.tax_bank -= transfer_amount;
+
+                let troop_transfer_amount =
+                    province.troop_bank * organization.province_control[province_key];
+                organization.military.deployed_forces[province_key] += troop_transfer_amount;
             }
+            province.troop_bank = 0.0;
+            province.tax_bank = 0.0;
         }
-        for organization in self.organizations.values_mut() {
-            let redistribution_amount =
-                (organization.money * 0.5 * delta_year).min(organization.money);
-            organization.money -= redistribution_amount;
-            let province_control_sum = organization.province_control.0.iter().sum::<f64>();
-            for (province_key, province_control) in
-                organization.province_control.0.iter().enumerate()
-            {
-                for slice in &mut self.provinces[ProvinceKey(province_key)].pops.pop_slices {
-                    let org_payment = redistribution_amount
-                        * (province_control / province_control_sum)
-                        / (NUM_SLICES as f64);
-                    slice.money += org_payment;
-                }
-            }
-        }
+        self.process_organizations(delta_year);
         self.add_new_tick(self.current_year);
         self.current_year += delta_year;
     }
 
+    fn process_organizations(&mut self, delta_year: f64) {
+        let rng = fastrand::Rng::new();
+        let org_keys: Box<_> = self.organizations.keys().copied().collect();
+        for (organization_key, organization) in self.organizations.iter_mut() {
+            //choose action
+            let org_keys = org_keys.iter().filter(|&&k| k != *organization_key);
+            let action_decider = rng.f64();
+            let mut action = None;
+            if action_decider > 0.5 {
+                let mut source_iter = organization
+                    .province_control
+                    .0
+                    .iter()
+                    .enumerate()
+                    .filter(|&(i, &c)| c > 0.9);
+                let source_count = source_iter.clone().count();
+                if source_count > 0 {
+                    if let Some(source) = source_iter.nth(rng.usize(..(source_count))) {
+                        let dest_iter = organization
+                            .province_control
+                            .0
+                            .iter()
+                            .enumerate()
+                            .filter(|&(i, &c)| c > 0.1)
+                            .flat_map(|(key, _)| {
+                                self.provinces[ProvinceKey(key)]
+                                    .neighbouring_provinces
+                                    .iter()
+                            });
+                        let dest_count = dest_iter.clone().count();
+                        if dest_count > 0 {
+                            if let Some(&dest) = dest_iter.clone().nth(rng.usize(..dest_count)) {
+                                action = Some(Action::MoveTroops {
+                                    source: ProvinceKey(source.0),
+                                    dest,
+                                    ratio: rng.f64(),
+                                });
+                            }
+                        }
+                    }
+                }
+            } else {
+                let action_decider = rng.f64();
+                let law = if action_decider > 0.5 {
+                    Law::DeclareWar(*org_keys.clone().nth(rng.usize(..org_keys.count())).unwrap())
+                } else {
+                    Law::SetTaxRate(rng.f64() * 0.2)
+                };
+                action = Some(Action::EnactLaw(law));
+            }
+
+            //Handle action
+            if let Some(action) = action {
+                match action {
+                    Action::EnactLaw(law) => {
+                        match law {
+                            Law::SetTaxRate(new_rate) => {
+                                for province_key in organization
+                                    .province_control
+                                    .0
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|&(p_key, &c)| c > 0.1)
+                                    .map(|a| ProvinceKey(a.0))
+                                {
+                                    self.provinces[province_key].tax_rate = new_rate;
+                                }
+                            }
+                            Law::DeclareWar(target) => {
+                                self.relations
+                                    .get_relations_mut(*organization_key, target)
+                                    .at_war = true
+                            } // Law::DeclareWar(target) => {}
+                        }
+                    }
+                    Action::MoveTroops {
+                        source,
+                        dest,
+                        ratio,
+                    } => organization.transfer_troops(source, dest, ratio),
+                }
+            }
+
+            let redistribution_amount =
+                (organization.money * 0.5 * delta_year).min(organization.money);
+            organization.money -= redistribution_amount;
+            let province_control_sum = organization.province_control.0.iter().sum::<f64>();
+            if province_control_sum > 0.8 {
+                for (province_key, province_control) in
+                    organization.province_control.0.iter().enumerate()
+                {
+                    for slice in self.provinces[ProvinceKey(province_key)].pops.pop_slices.iter_mut() {
+                        let org_payment = redistribution_amount
+                            * (province_control / province_control_sum)
+                            / (NUM_SLICES as f64);
+                        slice.money += org_payment;
+                    }
+                }
+            }
+        }
+        for province in self.provinces.0.iter() {
+            let province_key = province.province_key;
+            if let Some((&biggest_org_key, biggest_organization)) = self
+                .organizations
+                .iter_mut()
+                .filter(|(k, o)| o.military.deployed_forces[province_key] > 1.0)
+                .max_by_key(|(_org_key, org)| FloatOrd(org.military.deployed_forces[province_key]))
+            {
+
+                let control_increase = (1.0 * delta_year)
+                    .min(1.0 - biggest_organization.province_control[province_key]);
+                // biggest_organization.province_control[province_key] += control_increase;
+
+                // let num_losing_orgs = self.organizations.iter().filter(|(k,o)|o.military.deployed_forces[province_key] > 1.0 && o.key != biggest_org_key).count();
+                let losing_control_sum = self
+                    .organizations
+                    .iter()
+                    .filter(|(k, o)| {
+                        o.military.deployed_forces[province_key] > 1.0 && o.key != biggest_org_key
+                    })
+                    .map(|(_, o)| o.province_control[province_key])
+                    .sum::<f64>();
+                let control_increase = control_increase.min(losing_control_sum);
+
+                for (&org_key, org) in self.organizations.iter_mut().filter(|(k, o)| {
+                    o.military.deployed_forces[province_key] > 1.0
+                }) {
+                    if org_key != biggest_org_key && losing_control_sum > 0.0 {
+                        let control_ratio = org.province_control[province_key] / losing_control_sum;
+                        org.province_control[province_key] -= control_ratio * control_increase;
+                    }else if org_key == biggest_org_key{
+                        org.province_control[province_key] += control_increase;
+                    }
+                }
+            }
+        }
+    }
     fn process_battles(&mut self, delta_year: f64) {
         for province_key in 0..self.provinces.0.len() {
             let province_key = ProvinceKey(province_key);
             // self.friendly_combatants.clear();
             // self.enemy_combatants.clear();
 
-            let combat_orgs: Box<[&Organization]> = self
+            let combat_orgs: Box<[OrganizationKey]> = self
                 .organizations
-                .values()
-                .filter(|o| {
-                    o.militaries
-                        .iter()
-                        .any(|m| m.deployed_forces[province_key] > 0.5)
-                })
+                .iter()
+                .filter(|o| o.1.military.deployed_forces[province_key] > 0.5)
+                .map(|a| *a.0)
                 .collect();
+
             let mut combat_orgs_filtered = OrganizationMap::with_capacity_and_hasher(
                 combat_orgs.len(),
                 BuildNoHashHasher::default(),
             );
+            // let mut combat_orgs_filtered = Vec::with_capacity(combat_orgs.len());
             for i in 0..combat_orgs.len() {
                 for j in 0..combat_orgs.len() {
                     if self
                         .relations
-                        .get_relations(combat_orgs[i].key, combat_orgs[j].key)
+                        .get_relations(combat_orgs[i], combat_orgs[j])
                         .at_war
                     {
                         combat_orgs_filtered
-                            .entry(combat_orgs[i].key)
+                            .entry(combat_orgs[i])
                             .or_insert(Vec::with_capacity(combat_orgs.len()))
-                            .push(combat_orgs[j].key);
+                            .push(combat_orgs[j]);
                     }
                 }
             }
-            let combat_orgs: HashMap<_, _, BuildNoHashHasher<OrganizationKey>> =
-                combat_orgs_filtered
-                    .iter()
-                    .filter(|&(_k, v)| v.len() > 0)
-                    .collect();
-            if combat_orgs.len() <= 0 {
+            // let combat_orgs: HashMap<_, _, BuildNoHashHasher<OrganizationKey>> =
+            //     combat_orgs_filtered
+            //         .iter()
+            //         .filter(|&(_k, v)| v.len() > 0)
+            //         .collect();
+            if combat_orgs_filtered.len() <= 0 {
                 continue;
             }
-
             let first_index = get_battle_seed(
                 self.current_year,
-                province_key.0 as usize,
-                combat_orgs.len(),
+                province_key.0,
+                combat_orgs_filtered.len(),
             );
-            let &first_combatant_key = combat_orgs.keys().nth(first_index).unwrap();
+            // dbg!(first_index);
+            let &first_combatant_key = combat_orgs_filtered.keys().nth(first_index).unwrap();
 
             let second_index = get_battle_seed(
                 self.current_year,
-                province_key.0 as usize,
-                combat_orgs[first_combatant_key].len(),
+                province_key.0,
+                combat_orgs_filtered[&first_combatant_key].len(),
             );
-            let second_combatant_key = combat_orgs[first_combatant_key][second_index];
-
-            // for (org_key, org) in self.organizations{
-            //     if org.militaries.iter().any(|m|match m.deployed_forces.get(province_key) {
-            //                             Some(&troop_count) => troop_count < 1.0,
-            //                             None => true,
-            //     }){
-            //         continue;
-            //     }
-
-            // }
-
-            // for (&friendly_key, friendly_org) in &self.organizations{
-            //     if friendly_org.militaries
-            //         .iter()
-            //         .any(|m| match m.deployed_forces.get(province_key) {
-            //             Some(&troop_count) => troop_count < 1.0,
-            //             None => true,
-            //         }){
-            //             continue;
-            //         }
-            //         self.friendly_combatants.push(friendly_key);
-            // }
-
-            // for friendly_key in self
-            //     .organizations
-            //     .iter()
-            //     .filter(|(k, o)| {
-            //         o.militaries
-            //             .iter()
-            //             .any(|m| match m.deployed_forces.get(province_key) {
-            //                 Some(&troop_count) => troop_count > 0.5,
-            //                 None => false,
-            //             })
-            //     })
-            //     .filter(|(&org_key, _)| {
-            //         self.organizations
-            //             .iter()
-            //             .filter(|(&k, _)| k != org_key)
-            //             .any(|(&enemy_key, enemy)| {
-            //                 self.relations.get_relations(org_key, enemy_key).at_war
-            //                     && enemy.militaries.iter().any(|m| {
-            //                         match m.deployed_forces.get(province_key) {
-            //                             Some(&troop_count) => troop_count > 0.5,
-            //                             None => false,
-            //                         }
-            //                     })
-            //             })
-            //     })
-            //     .map(|(&k, _)| k)
-            // {
-            //     self.friendly_combatants.push(friendly_key);
-            // }
-
-            // if self.friendly_combatants.len() == 0 {
-            //     continue;
-            // }
-            // let first_index = get_battle_seed(
-            //     self.current_year,
-            //     province_key.0 as usize,
-            //     self.friendly_combatants.len(),
-            // );
-            // let first_combatant_key = self.friendly_combatants[first_index];
-
-            // for (&enemy_key, enemy_org) in &self.organizations {
-            //     if self
-            //         .relations
-            //         .get_relations(first_combatant_key, enemy_key)
-            //         .at_war
-            //         && enemy_org.militaries.iter().any(|m| {
-            //             match m.deployed_forces.get(province_key) {
-            //                 Some(&troop_count) => troop_count > 0.5,
-            //                 None => false,
-            //             }
-            //         })
-            //     {
-            //         continue;
-            //     }
-            //     self.enemy_combatants.push(enemy_key)
-            // }
-
-            // for enemy_key in self.enemy_combatants = self.organizations
-            //         .iter()
-            //         .filter(|(&enemy_key, enemy_org)| {
-            //             self.relations
-            //                 .get_relations(first_combatant_key, enemy_key)
-            //                 .at_war
-            //                 && enemy_org.militaries.iter().any(|m| {
-            //                     match m.deployed_forces.get(province_key) {
-            //                         Some(&troop_count) => troop_count > 0.5,
-            //                         None => false,
-            //                     }
-            //                 })
-            //         }).map(|(&k,_)|k){
-            //             self.enemy_combatants.push(enemy_key);
-            //         }
-
-            // if self.enemy_combatants.len() == 0 {
-            //     continue;
-            // }
-            // let second_index = get_battle_seed(
-            //     self.current_year,
-            //     province_key.0 as usize,
-            //     self.enemy_combatants.len(),
-            // );
-            // let second_combatant_key = self.enemy_combatants[second_index];
-
-            // let (army_ratio, first_combatant_key, second_combatant_key, avg_size) = {
-            //     let num_first_orgs = self
-            //         .organizations
-            //         .iter()
-            //         .filter(|(k, o)| {
-            //             o.militaries
-            //                 .iter()
-            //                 .any(|m| match m.deployed_forces.get(province_key) {
-            //                     Some(&troop_count) => troop_count > 0.5,
-            //                     None => false,
-            //                 })
-            //         })
-            //         .filter(|(&org_key, _)| {
-            //             self.organizations
-            //                 .iter()
-            //                 .filter(|(&k, _)| k != org_key)
-            //                 .any(|(&enemy_key, enemy)| {
-            //                     self.relations.get_relations(org_key, enemy_key).at_war
-            //                         && enemy.militaries.iter().any(|m| {
-            //                             match m.deployed_forces.get(province_key) {
-            //                                 Some(&troop_count) => troop_count > 0.5,
-            //                                 None => false,
-            //                             }
-            //                         })
-            //                 })
-            //         })
-            //         .count();
-
-            //     if num_first_orgs == 0{
-            //         continue;
-            //     }
-            //     let first_index =
-            //         get_battle_seed(self.current_year, province_key.0 as usize, num_first_orgs);
-            //     let (first_combatant_key, first_combatant) = self
-            //         .organizations
-            //         .iter()
-            //         .filter(|(k, o)| {
-            //             o.militaries
-            //                 .iter()
-            //                 .any(|m| match m.deployed_forces.get(province_key) {
-            //                     Some(&troop_count) => troop_count > 0.5,
-            //                     None => false,
-            //                 })
-            //         })
-            //         .filter(|(&org_key, organization)| {
-            //             self.organizations.iter().any(|(&enemy_key, enemy)| {
-            //                 self.relations.get_relations(org_key, enemy_key).at_war
-            //                     && enemy.militaries.iter().any(|m| {
-            //                         match m.deployed_forces.get(province_key) {
-            //                             Some(&troop_count) => troop_count > 0.5,
-            //                             None => false,
-            //                         }
-            //                     })
-            //             })
-            //         })
-            //         .nth(first_index)
-            //         .unwrap();
-
-            //         let num_second_orgs = self.organizations
-            //         .iter()
-            //         .filter(|(&enemy_key, enemy_org)| {
-            //             self.relations
-            //                 .get_relations(*first_combatant_key, enemy_key)
-            //                 .at_war
-            //                 && enemy_org.militaries.iter().any(|m| {
-            //                     match m.deployed_forces.get(province_key) {
-            //                         Some(&troop_count) => troop_count > 0.5,
-            //                         None => false,
-            //                     }
-            //                 })
-            //         })
-            //         .count();
-
-            //     if num_second_orgs == 0{
-            //         continue;
-            //     }
-            //     let second_index = get_battle_seed(
-            //         self.current_year,
-            //         province_key.0 as usize,
-            //         num_second_orgs,
-            //     );
-            //     let (second_combatant_key, second_combatant) = self
-            //         .organizations
-            //         .iter()
-            //         .filter(|(&enemy_key, enemy_org)| {
-            //             self.relations
-            //                 .get_relations(*first_combatant_key, enemy_key)
-            //                 .at_war
-            //                 && enemy_org.militaries.iter().any(|m| {
-            //                     match m.deployed_forces.get(province_key) {
-            //                         Some(&troop_count) => troop_count > 0.5,
-            //                         None => false,
-            //                     }
-            //                 })
-            //         })
-            //         .nth(second_index)
-            //         .unwrap();
-
-            //     // println!("Fight between {:} and {:}", first_index, second_index);
-            // };
+            let second_combatant_key = combat_orgs_filtered[&first_combatant_key][second_index];
 
             let first_army_size: f64 = self.organizations[&first_combatant_key]
-                .militaries
-                .iter()
-                .map(|m| m.deployed_forces[province_key])
-                .sum();
+                .military
+                .deployed_forces[province_key];
             let second_army_size: f64 = self.organizations[&second_combatant_key]
-                .militaries
-                .iter()
-                .map(|m| m.deployed_forces[province_key])
-                .sum();
+                .military
+                .deployed_forces[province_key];
             let avg_size = (first_army_size + second_army_size) / 2.0;
 
-            let army_ratio = if first_army_size > second_army_size {
-                first_army_size / second_army_size
-            } else {
-                second_army_size / first_army_size
-            };
+            // let army_ratio = if first_army_size > second_army_size {
+            //     first_army_size / second_army_size
+            // } else {
+            //     second_army_size / first_army_size
+            // };
 
-            for first_army in &mut self
-                .organizations
-                .get_mut(&first_combatant_key)
-                .unwrap()
-                .militaries
             {
-                let losses = avg_size * (1.0 / army_ratio) * delta_year;
+                let first_army = &mut self
+                    .organizations
+                    .get_mut(&first_combatant_key)
+                    .unwrap()
+                    .military;
+
+                // let losses = avg_size * (1.0 / army_ratio) * delta_year;
+                let losses = avg_size * 10.0 * delta_year;
                 first_army.deployed_forces[province_key] -=
                     losses.min(first_army.deployed_forces[province_key]);
             }
 
-            for second_army in &mut self
-                .organizations
-                .get_mut(&second_combatant_key)
-                .unwrap()
-                .militaries
             {
-                let losses = avg_size * army_ratio * delta_year;
+                let second_army = &mut self
+                    .organizations
+                    .get_mut(&second_combatant_key)
+                    .unwrap()
+                    .military;
+
+                // let losses = avg_size * army_ratio * delta_year;
+                let losses = avg_size * 10.0 * delta_year;
                 second_army.deployed_forces[province_key] -=
                     losses.min(second_army.deployed_forces[province_key]);
             }

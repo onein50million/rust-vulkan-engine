@@ -249,7 +249,7 @@ void main() {
     ubos.player_position_z
     );
     float year_ratio = ubos.time.x;
-    vec3 sun_direction = normalize(vec3(sin(year_ratio), 0.0, cos(year_ratio)));
+    vec3 sun_direction = normalize(vec3(sin(year_ratio*PI*2.0), 0.0, cos(year_ratio*PI*2.0)));
 
     if ((pushConstant.bitfield&IS_CUBEMAP) > 0) {
         // vec3 view_direction = (inverse(ubos.view) * vec4(gl_FragCoord.xy,1.0,0.0)).xyz;
@@ -270,8 +270,20 @@ void main() {
         float aridity = texture(planet_textures[ARIDITY_TEXTURE_INDEX], normalize(fragPosition)).r;
         float cold_temp = texture(planet_textures[COLD_TEXTURE_INDEX], normalize(fragPosition)).r;
         float warm_temp = texture(planet_textures[WARM_TEXTURE_INDEX], normalize(fragPosition)).r;
-        float water_ratio = texture(planet_textures[WATER_TEXTURE_INDEX], normalize(fragPosition)).r;
-        float land_ratio = 1.0 - water_ratio;
+        // float water_ratio = map_range_linear(texture(planet_textures[WATER_TEXTURE_INDEX], normalize(fragPosition)).r, 10000.0, 20000.0, 1.0, 0.0);
+        float water_sdf = texture(planet_textures[WATER_TEXTURE_INDEX], normalize(fragPosition)).r;
+        // float water_sdf_normalzied = map_range_linear(water_sdf, -2747820.25, 1079892.5, -1.0, 1.0);
+        
+        vec3 offset = vec3(
+            hash(ubos.time),
+            hash(ubos.time + 69.0),
+            hash(ubos.time + 420.0)
+        );
+        float current_temperature = mix(cold_temp,warm_temp, (sin(year_ratio*PI* 2.0) + 1.0) / 2.0) + fbm((normalize(fragPosition) + offset * 100.0) * 2.0 - 1.0) * 10.0;
+        float coldness = map_range_linear(current_temperature, -10.0, 3.0, 1.0, 0.0); //How far below zero
+        float steepness = 1.0 - clamp(dot(normal, normalize(worldPosition)),0.0, 1.0);
+        steepness = map_range_linear(steepness, 0.0, 0.001, 0.0, 1.0);
+
         // outColor = vec4(normal, 1.0);
         // return;
 
@@ -292,28 +304,56 @@ void main() {
             float mountain_weight = 0.0;
             float snow_weight = 0.0;
 
-            vec3 offset = vec3(
-                hash(ubos.time),
-                hash(ubos.time + 69.0),
-                hash(ubos.time + 420.0)
-            );
-            float current_temperature = mix(cold_temp,warm_temp, (sin(year_ratio) + 1.0) / 2.0) + fbm((normalize(fragPosition) + offset * 100.0) * 2.0 - 1.0) * 10.0;
+
             // current_temperature -= 30.0 * map_range_linear(elevation, 500.0,2000.0,0.0,1.0);
 
-            float steepness = 1.0 - clamp(dot(normal, normalize(worldPosition)),0.0, 1.0);
-            steepness = map_range_linear(steepness, 0.0, 0.001, 0.0, 1.0);
+
+            if (water_sdf < 3000.0){
+                shallow_water_weight = map_range_linear(water_sdf, -15000.0, -20000, 1.0, 0.0);
+                deep_water_weight = 1.0 - shallow_water_weight;
+            }else if(water_sdf < 6000.0){
+                desert_weight = 1.0;
+            }
+            else{
+                float num_indices = 4.0;
+                float index = mod(water_sdf / 25000.0, num_indices + 1.0);
+
+                // if (index < 1.0){
+                //     foliage_weight = 1.0;
+                // }else if (index < 2.0){
+                //     desert_weight = 1.0;
+                // }else if (index < 3.0){
+                //     snow_weight = 1.0;
+                // }else if (index < 4.0){
+                //     mountain_weight = 1.0;
+                // }
+
+                // foliage_weight = smoothstep(0.0, 1.0 / num_indices, index);
+                // desert_weight = smoothstep(1.0 / num_indices, 2.0 / num_indices, index);
+                // mountain_weight = smoothstep(2.0 / num_indices, 3.0 / num_indices, index);
+                // snow_weight = smoothstep(3.0 / num_indices, 4.0 / num_indices, index);
+
+                float grass_ratio = map_range_linear(elevation,0.0, 1500.0,1.0 , 0.2);
+                mountain_weight = map_range_linear(elevation,1500.0, 3000.0,0.0, 1.0);
+                foliage_weight = clamp((1.0 - steepness*0.01) *  map_range_linear(aridity, 0.0, 0.5, 0.1, 1.0) * grass_ratio - mountain_weight,0.0,1.0);
+                desert_weight = clamp(1.0 - foliage_weight - mountain_weight,0.0,1.0);
+
+                snow_weight = (1.0 - steepness)*aridity * coldness * 1.0;
+
+
+                foliage_weight = 1.0;
+            }
             
-            deep_water_weight = (map_range_linear(elevation, 76.0, -100.0, 0.0,1.0)) * water_ratio;
-            deep_water_weight = water_ratio;
-            // shallow_water_weight = (1.0 - deep_water_weight) * water_ratio;
+            // deep_water_weight = (map_range_linear(elevation, 76.0, -100.0, 0.0,1.0)) * water_ratio;
+            // deep_water_weight = water_ratio;
+            // shallow_water_weight = (1.0 - deep_water_weight);
 
-            float grass_ratio = map_range_linear(elevation,0.0, 1500.0,1.0 , 0.2);
-            mountain_weight = map_range_linear(elevation,1500.0, 3000.0,0.0, 1.0) * land_ratio;
-            foliage_weight = clamp((1.0 - steepness*0.01) *  map_range_linear(aridity, 0.0, 0.5, 0.1, 1.0) * grass_ratio - mountain_weight,0.0,1.0) * land_ratio;
-            desert_weight = clamp(1.0 - foliage_weight - mountain_weight,0.0,1.0) * land_ratio;
+            // float grass_ratio = map_range_linear(elevation,0.0, 1500.0,1.0 , 0.2);
+            // mountain_weight = map_range_linear(elevation,1500.0, 3000.0,0.0, 1.0) * land_ratio;
+            // foliage_weight = clamp((1.0 - steepness*0.01) *  map_range_linear(aridity, 0.0, 0.5, 0.1, 1.0) * grass_ratio - mountain_weight,0.0,1.0) * land_ratio;
+            // desert_weight = clamp(1.0 - foliage_weight - mountain_weight,0.0,1.0) * land_ratio;
 
-            float coldness = map_range_linear(current_temperature, -10.0, 3.0, 1.0, 0.0); //How far below zero
-            snow_weight = (1.0 - steepness)*aridity * coldness * 1.0;
+            // snow_weight = (1.0 - steepness)*aridity * coldness * 1.0;
 
             SampleSet sample_sets[] = {
             deep_water_set,
@@ -375,8 +415,8 @@ void main() {
             // return;
         }
         else if (ubos.map_mode == 1){
-            outColor = vec4(vec3(water_ratio),1.0);
-            return;
+            // outColor = vec4(vec3(water_ratio),1.0);
+            // return;
         }
         // else if(ubos.map_mode == 1){ //Paper/globe map
         //     // albedo = vec4(1.0);
