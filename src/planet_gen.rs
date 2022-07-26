@@ -152,7 +152,8 @@ pub fn get_elevations() -> Vec<f32> {
     // }
 
     load_raster_file(
-        &PathBuf::from("../GSG/elevation_gebco_small/gebco_combined.tif"),
+        // &PathBuf::from("../GSG/elevation_gebco_small/gebco_combined.tif"),
+        &PathBuf::from("world_data/elevation/elevation.tif"),
         &mut samples,
         1, // "bilinear",
     );
@@ -166,7 +167,7 @@ pub fn get_aridity() -> Vec<f32> {
     let mut samples = vec![(0.0f32, 0); (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) as usize];
     // load_raster_file(&PathBuf::from("../GSG/aridity/ai_v3_yr.tif"), &mut samples, |a|{a / 10_000.0});
     load_raster_file(
-        &PathBuf::from("../GSG/aridity_small/aridity.tif"),
+        &PathBuf::from("world_data/aridity/aridity.tif"),
         &mut samples,
         1, // "bilinear",
     );
@@ -182,7 +183,7 @@ pub fn get_feb_temps() -> Vec<f32> {
 
     let mut samples = vec![(0.0, 0); (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) as usize];
     load_raster_file(
-        &PathBuf::from("../GSG/temperature6/FebruaryTemp.tif"),
+        &PathBuf::from("world_data/temperature/FebruaryTemp.tif"),
         &mut samples,
         1, // "bilinear",
     );
@@ -195,7 +196,7 @@ pub fn get_feb_temps() -> Vec<f32> {
 pub fn get_july_temps() -> Vec<f32> {
     let mut samples = vec![(0.0f32, 0); (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) as usize];
     load_raster_file(
-        &PathBuf::from("../GSG/temperature6/JulyTemp.tif"),
+        &PathBuf::from("world_data/temperature/JulyTemp.tif"),
         &mut samples,
         1, // "bilinear",
     );
@@ -213,7 +214,7 @@ pub fn get_populations() -> Vec<f32> {
     //     "sum",
     // );
     load_raster_file(
-        &PathBuf::from("../GSG/population/population.tif"),
+        &PathBuf::from("world_data/population/population.tif"),
         &mut samples,
         1,
     );
@@ -262,7 +263,7 @@ pub fn get_countries() -> (Box<[Option<u16>]>, Box<[(String, Option<String>)]>) 
     //     "near",
     // );
     load_raster_file(
-        &PathBuf::from("../GSG/nations/nations.tif"),
+        &PathBuf::from("world_data/nations/nations.tif"),
         &mut samples,
         0,
     );
@@ -277,7 +278,7 @@ pub fn get_countries() -> (Box<[Option<u16>]>, Box<[(String, Option<String>)]>) 
         country_id: u16,
     }
     let mut reader =
-        csv::Reader::from_path("../GSG/nations/nations.csv").expect("Failed to open nations csv");
+        csv::Reader::from_path("world_data/nations/nations.csv").expect("Failed to open nations csv");
     let country_names_and_definitions: Box<[(String, Option<String>)]> = reader
         .deserialize()
         .map(|a: Result<CsvRow, _>| {
@@ -336,7 +337,7 @@ pub fn get_provinces() -> (
     //     "near",
     // );
     load_raster_file(
-        &PathBuf::from("../GSG/provinces/provinces.tif"),
+        &PathBuf::from("world_data/provinces/provinces.tif"),
         &mut samples,
         0,
     );
@@ -346,9 +347,9 @@ pub fn get_provinces() -> (
         .collect();
 
     let (vertices, indices) =
-        load_vector_file(&PathBuf::from("../GSG/provinces/provinces.geojson"));
+        load_vector_file(&PathBuf::from("world_data/provinces/provinces.geojson"));
     let mut reader =
-        File::open("../GSG/provinces/provinces.geojson").expect("Failed to open provinces");
+        File::open("world_data/provinces/provinces.geojson").expect("Failed to open provinces");
     let province_root: ProvinceRoot =
         serde_json::from_reader(reader).expect("Failed to deserialize provinces");
     (
@@ -369,7 +370,7 @@ pub fn get_water() -> Vec<f32> {
     let mut samples = vec![(0f64, 0); (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) as usize];
 
     load_raster_file(
-        &PathBuf::from("../GSG/water/water_sdf.tif"),
+        &PathBuf::from("world_data/water/water_sdf.tif"),
         &mut samples,
         1,
     );
@@ -381,7 +382,7 @@ pub fn get_water() -> Vec<f32> {
 }
 
 pub fn get_languages() -> (Vec<u32>, HashMap<u32, String>) {
-    let id_to_name = csv::Reader::from_reader(File::open("../GSG/language/language.csv").unwrap())
+    let id_to_name = csv::Reader::from_reader(File::open("world_data/language/language.csv").unwrap())
         .deserialize::<(u32, String)>()
         .map(|a| a.unwrap())
         .collect();
@@ -389,7 +390,7 @@ pub fn get_languages() -> (Vec<u32>, HashMap<u32, String>) {
     let mut samples = vec![(0u32, 0); (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) as usize];
 
     load_raster_file(
-        &PathBuf::from("../GSG/language/language.tif"),
+        &PathBuf::from("world_data/language/language.tif"),
         &mut samples,
         0,
     );
