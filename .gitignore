@@ -7,4 +7,5 @@
 *.blend1
 *.elf
 *.bin
+*.vs
 /languages

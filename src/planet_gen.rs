@@ -1,54 +1,24 @@
 use crate::{
-    support::{coordinate_to_index, index_to_coordinate, Vertex, CUBEMAP_WIDTH},
+    support::{index_to_coordinate, Vertex, CUBEMAP_WIDTH},
     world::{ProvinceMap, World},
 };
-use float_ord::FloatOrd;
-use gdal::{
-    errors::GdalError,
-    raster::{GdalType, ResampleAlg},
-    spatial_ref::SpatialRef,
-    Dataset, Driver, GeoTransform,
-};
-use gdal_sys::{
-    CPLErr, GDALChunkAndWarpImage, GDALClose, GDALCreateGenImgProjTransformer,
-    GDALCreateReprojectionTransformer, GDALCreateWarpOperation, GDALCreateWarpOptions,
-    GDALDataType::{GDT_Float32, GDT_Unknown},
-    GDALDatasetH, GDALGenImgProjTransform, GDALReprojectionTransform, GDALResampleAlg,
-    GDALTermProgress, GDALWarpAppOptionsNew, GDALWarpOptions,
-};
+use gdal::{raster::GdalType, Dataset};
+
 use genmesh::generators::{IcoSphere, IndexedPolygon, SharedVertex};
-use nalgebra::{coordinates::X, ComplexField, Vector2, Vector3, Vector4};
+use nalgebra::{Vector2, Vector3, Vector4};
 use serde::Deserialize;
 use std::{
-    any::TypeId,
     collections::HashMap,
-    f64::consts::PI,
-    ffi::CString,
     fmt::Debug,
-    fs::{read_dir, File},
-    mem::MaybeUninit,
+    fs::File,
+    io::Write,
     ops::{Add, AddAssign, Mul},
     path::{Path, PathBuf},
-    ptr::{null, null_mut},
 };
 
 pub struct MeshOutput {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<usize>,
-}
-
-#[derive(Copy, Clone)]
-struct RawVertexData {
-    sum: f64,
-    sample_count: usize,
-    data_priority: usize,
-}
-
-#[derive(Clone, Debug)]
-struct VertexData {
-    elevation: f32,
-    quantized_elevation: i8,
-    neighbours: Vec<usize>,
 }
 
 const KELVIN_TO_CELSIUS: f32 = -273.15;
@@ -284,7 +254,7 @@ impl<T> Convert<Self> for T {
     }
 }
 
-pub fn get_countries() -> (Box<[Option<u16>]>, Box<[String]>) {
+pub fn get_countries() -> (Box<[Option<u16>]>, Box<[(String, Option<String>)]>) {
     let mut samples = vec![(0u16, 0); (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) as usize];
     // load_raster_file(
     //     &PathBuf::from("../GSG/nations/nations.tif"),
@@ -308,12 +278,26 @@ pub fn get_countries() -> (Box<[Option<u16>]>, Box<[String]>) {
     }
     let mut reader =
         csv::Reader::from_path("../GSG/nations/nations.csv").expect("Failed to open nations csv");
-    let country_names: Box<[String]> = reader
+    let country_names_and_definitions: Box<[(String, Option<String>)]> = reader
         .deserialize()
-        .map(|a: Result<CsvRow, _>| a.expect("failed to deserialize nations csv").name)
+        .map(|a: Result<CsvRow, _>| {
+            let row = a.expect("failed to deserialize nations csv");
+            let definition_path = format!("{:}.org", row.country_id);
+
+            let definition = match std::fs::read_to_string(
+                Path::new("world_data/org_definitions").join(definition_path),
+            ) {
+                Ok(definition) => Some(definition),
+                Err(_) => {
+                    std::fs::read_to_string(Path::new("world_data/org_definitions/fallback.org"))
+                        .ok()
+                }
+            };
+            (row.name, definition)
+        })
         .collect();
 
-    (ids, country_names)
+    (ids, country_names_and_definitions)
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
@@ -383,26 +367,33 @@ pub fn get_provinces() -> (
 
 pub fn get_water() -> Vec<f32> {
     let mut samples = vec![(0f64, 0); (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) as usize];
-    // load_raster_file(&PathBuf::from("../GSG/population2/gpw_v4_population_count_adjusted_to_2015_unwpp_country_totals_rev11_2020_30_sec.tif"), &mut samples, |a|{a});
-    // load_raster_file(
-    //     &PathBuf::from("../GSG/water/water.tif"),
-    //     &mut samples,
-    //     "near",
-    // );
+
     load_raster_file(
         &PathBuf::from("../GSG/water/water_sdf.tif"),
         &mut samples,
         1,
     );
-    // for sample in &samples {
-    //     if (sample - 1.0).abs() > 0.1 {
-    //         dbg!(sample);
-    //     }
-    // }
+
     samples
         .into_iter()
         .map(|(a, sample_count)| (a / sample_count as f64) as f32)
         .collect()
+}
+
+pub fn get_languages() -> (Vec<u32>, HashMap<u32, String>) {
+    let id_to_name = csv::Reader::from_reader(File::open("../GSG/language/language.csv").unwrap())
+        .deserialize::<(u32, String)>()
+        .map(|a| a.unwrap())
+        .collect();
+
+    let mut samples = vec![(0u32, 0); (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) as usize];
+
+    load_raster_file(
+        &PathBuf::from("../GSG/language/language.tif"),
+        &mut samples,
+        0,
+    );
+    (samples.into_iter().map(|a| a.0).collect(), id_to_name)
 }
 
 fn load_raster_file<T>(path: &Path, out_slice: &mut [(T, usize)], sample_distance: usize)

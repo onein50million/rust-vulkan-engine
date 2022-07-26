@@ -12,7 +12,7 @@ pub const NUM_MODELS: usize = 1000;
 pub const NUM_LIGHTS: usize = 2;
 pub const NUM_PLANET_TEXTURES: usize = 6;
 
-pub const CUBEMAP_WIDTH: usize = 2048;
+pub const CUBEMAP_WIDTH: usize = 512;
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub struct Inputs {
@@ -380,8 +380,8 @@ pub fn pixel_to_index(x: usize, y: usize, face: usize) -> usize {
 //https://stackoverflow.com/a/12996028
 pub fn hash_usize_fast(seed: usize) -> usize {
     let mut out = seed;
-    out = ((out >> 16) ^ out) * 0x45d9f3b;
-    out = ((out >> 16) ^ out) * 0x45d9f3b;
+    out = ((out >> 16) ^ out).wrapping_mul(0x45d9f3b);
+    out = ((out >> 16) ^ out).wrapping_mul(0x45d9f3b);
     out = (out >> 16) ^ out;
     out
 }

@@ -1,0 +1,20 @@
+def President ppl 1
+def Congress ppl 535
+def SupremeCourt ppl 9
+
+ctrl_branch President appoints SupremeCourt
+ctrl_branch Congress approves SupremeCourt
+
+ctrl_decision President enacts MoveTroops
+ctrl_decision Congress enacts War
+ctrl_decision Congress enacts Taxes
+ctrl_decision SupremeCourt approves War
+ctrl_decision SupremeCourt approves Taxes
+ctrl_decision President approves War
+ctrl_decision President approves Taxes
+
+ctrl_branch $People appoints President
+ctrl_branch $People appoints Congress
+
+
+# TEST COMMENT

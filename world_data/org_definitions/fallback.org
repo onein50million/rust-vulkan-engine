@@ -1,0 +1,7 @@
+def President ppl 1
+
+ctrl_decision President enacts MoveTroops
+ctrl_decision President enacts War
+ctrl_decision President enacts Taxes
+
+ctrl_branch $People appoints President

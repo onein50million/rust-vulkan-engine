@@ -1,30 +1,49 @@
 use std::{
     cell::UnsafeCell,
-    collections::{hash_map::Entry, BinaryHeap, HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
+    f64::consts::PI,
     fmt::Display,
     hash::Hash,
-    mem::MaybeUninit,
-    ops::{Add, Index, IndexMut, Mul},
-    time::Instant, f64::consts::PI,
+    ops::{Index, IndexMut},
+    path::PathBuf,
+    time::Instant,
 };
 
+pub mod ideology;
+pub mod language;
 pub mod organization;
+mod party_names;
+pub mod questions;
 
-use bincode::{Decode, Encode};
-use egui::plot::Value;
 use float_ord::FloatOrd;
-use nalgebra::{ComplexField, Vector3};
-use nohash_hasher::{BuildNoHashHasher, IsEnabled, NoHashHasher};
+use nalgebra::Vector3;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 use variant_count::VariantCount;
 
 use crate::{
     support::{hash_usize_fast, map_range_linear_f64},
-    world::organization::Ideology,
+    world::{
+        ideology::{
+            positions::{
+                Assimilation, ExportDifficulty, Immigration, ImportDifficulty, Irredentism,
+                LanguageSupport, Research, SeparationOfPowers, TaxMethod, TaxRate, WarSupport,
+                WelfareSupport,
+            },
+            Ideology,
+        },
+        language::{Language, LanguageManager, LanguageMap},
+        party_names::PARTY_NAMES,
+    },
 };
 
-use self::organization::{Action, Law, Military, Organization, OrganizationKey, Relation};
+use self::{
+    ideology::{Beliefs, PoliticalParty, PoliticalPartyMap},
+    organization::{
+        Branch, BranchControlDecision, BranchControlFlag, BranchMap, Decision, DecisionCategory,
+        DecisionControlFlag, Organization, OrganizationKey, Relation,
+    },
+};
 
 const BASE_INDUSTRY_SIZE: f64 = 1000.0;
 const TRICKLEBACK_RATIO: f64 = 0.25;
@@ -255,6 +274,7 @@ pub struct PopSlice {
     previous_met_needs: VecDeque<f64>,
     pub minimum_met_needs: f64,
     pub trickleback: f64,
+    pub beliefs: Beliefs,
 }
 impl PopSlice {
     const NUM_MET_NEEDS_STORED: usize = 30;
@@ -276,25 +296,6 @@ const FARM_MODIFIER: f64 = 1.1;
 const MILL_MODIFIER: f64 = 1.1;
 const MINE_MODIFIER: f64 = 10.1;
 const SMELT_MODIFIER: f64 = 1.1;
-
-// fn production_curve(
-//     population: f64,
-//     curviness: f64,
-//     base_slope: f64,
-//     slope_falloff: f64,
-//     current_supply: f64,
-// ) -> f64 {
-//     let b = 1.0 / slope_falloff;
-//     let output = base_slope
-//         * (population - (curviness * (b * b * population * population + 1.0).sqrt()) / b)
-//         + curviness * slope_falloff * base_slope;
-//     let target_amount = population * GOOD_STORAGE_RATIO;
-//     if current_supply > target_amount {
-//         output * (target_amount / current_supply)
-//     } else {
-//         output
-//     }
-// }
 
 fn production_curve(population: f64, curviness: f64, base_slope: f64, slope_falloff: f64) -> f64 {
     //https://www.desmos.com/calculator/majp9k0bcy
@@ -521,7 +522,6 @@ impl Histories {
 pub struct Pops {
     pub pop_slices: Box<[PopSlice]>,
     // pub pop_slices: [PopSlice; NUM_SLICES],
-
 }
 
 impl Pops {
@@ -552,8 +552,8 @@ impl Pops {
         // }
 
         let mut out = Vec::with_capacity(NUM_SLICES);
-        let rng = fastrand::Rng::new(); 
-        for _ in 0..NUM_SLICES{
+        let rng = fastrand::Rng::new();
+        for _ in 0..NUM_SLICES {
             let slice_population = (total_population / NUM_SLICES as f64) * (rng.f64() + 0.5);
             out.push(PopSlice {
                 population: slice_population,
@@ -566,11 +566,12 @@ impl Pops {
                 previous_met_needs: VecDeque::with_capacity(PopSlice::NUM_MET_NEEDS_STORED),
                 minimum_met_needs: f64::NAN,
                 trickleback: 0.0,
+                beliefs: Beliefs::new_random(),
             })
         }
 
-        Self{
-            pop_slices: out.into_boxed_slice()
+        Self {
+            pop_slices: out.into_boxed_slice(),
         }
         // let pop_slices: Vec<_> = std::iter::repeat_with(||{
         //     let slice_population = total_population / SLICE_COUNT as f64;
@@ -598,7 +599,6 @@ pub struct Province {
     pub name: String,
     pub point_indices: Vec<usize>,
     pub neighbouring_provinces: Box<[ProvinceKey]>,
-    pub province_key: ProvinceKey,
     pub province_area: f64,
     pub pops: Pops,
     pub tax_rate: f64,
@@ -678,6 +678,7 @@ pub struct ProvinceData {
     july_temps: f64,
     ore: f64,
     organization_owner: Vec<Option<usize>>,
+    languages: Vec<u32>,
 }
 impl ProvinceData {
     pub fn new() -> Self {
@@ -691,6 +692,7 @@ impl ProvinceData {
             population: 0.0,
             organization_owner: vec![],
             name: String::new(),
+            languages: vec![],
         }
     }
     pub fn add_sample(
@@ -703,6 +705,7 @@ impl ProvinceData {
         ore: f64,
         population: f64,
         owner: Option<usize>,
+        language: u32,
     ) {
         self.num_samples += 1;
         self.elevation += elevation;
@@ -713,6 +716,7 @@ impl ProvinceData {
         self.population += population;
         self.organization_owner.push(owner);
         self.name = name.to_string();
+        self.languages.push(language);
     }
     pub fn elevation(&self) -> f64 {
         if self.num_samples > 0 {
@@ -761,17 +765,63 @@ impl ProvinceData {
         }
         occurences.iter().max_by_key(|o| o.1).map(|(&&id, _)| id)
     }
+    pub fn language(&self) -> HashMap<u32, usize> {
+        let mut out = HashMap::new();
+        for &language in &self.languages {
+            *out.entry(language).or_insert(0) += 1;
+        }
+        out
+    }
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord, Clone, Copy, Debug)]
 pub struct ProvinceKey(pub usize);
-impl IsEnabled for ProvinceKey {}
 
-pub type OrganizationMap<T> = HashMap<OrganizationKey, T, BuildNoHashHasher<OrganizationKey>>;
-pub type OrganizationMap2D<T> =
-    HashMap<(OrganizationKey, OrganizationKey), T, BuildNoHashHasher<OrganizationKey>>;
+// pub type OrganizationMap<T> = HashMap<OrganizationKey, T, BuildNoHashHasher<OrganizationKey>>;
+pub type OrganizationMap2D<T> = HashMap<(OrganizationKey, OrganizationKey), T>;
 
 #[derive(Serialize, Deserialize)]
+pub struct OrganizationMap<T>(pub Vec<T>);
+
+impl<T> Index<OrganizationKey> for OrganizationMap<T> {
+    type Output = T;
+
+    fn index(&self, index: OrganizationKey) -> &Self::Output {
+        &self.0[index.0]
+    }
+}
+
+impl<T> IndexMut<OrganizationKey> for OrganizationMap<T> {
+    fn index_mut(&mut self, index: OrganizationKey) -> &mut Self::Output {
+        &mut self.0[index.0]
+    }
+}
+
+impl<T> OrganizationMap<T> {
+    pub fn into_iter(self) -> impl Iterator<Item = (OrganizationKey, T)> {
+        self.0
+            .into_iter()
+            .enumerate()
+            .map(|(key, org)| (OrganizationKey(key), org))
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (OrganizationKey, &T)> {
+        self.0
+            .iter()
+            .enumerate()
+            .map(|(key, org)| (OrganizationKey(key), org))
+    }
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (OrganizationKey, &mut T)> {
+        self.0
+            .iter_mut()
+            .enumerate()
+            .map(|(key, org)| (OrganizationKey(key), org))
+    }
+    pub fn values(&self) -> impl Iterator<Item = &T> {
+        self.0.iter()
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ProvinceMap<T>(pub Box<[T]>);
 
 impl<T> Index<ProvinceKey> for ProvinceMap<T> {
@@ -785,6 +835,24 @@ impl<T> Index<ProvinceKey> for ProvinceMap<T> {
 impl<T> IndexMut<ProvinceKey> for ProvinceMap<T> {
     fn index_mut(&mut self, index: ProvinceKey) -> &mut Self::Output {
         &mut self.0[index.0]
+    }
+}
+
+impl<T> ProvinceMap<T> {
+    // fn into_iter(self) -> impl Iterator<Item = (ProvinceKey, T)>{
+    //     self.0.into_iter().enumerate().map(|(key, org)| (ProvinceKey(key), org))
+    // }
+    pub fn iter(&self) -> impl Iterator<Item = (ProvinceKey, &T)> {
+        self.0
+            .iter()
+            .enumerate()
+            .map(|(key, org)| (ProvinceKey(key), org))
+    }
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (ProvinceKey, &mut T)> {
+        self.0
+            .iter_mut()
+            .enumerate()
+            .map(|(key, org)| (ProvinceKey(key), org))
     }
 }
 
@@ -851,16 +919,13 @@ pub struct RelationMap {
     map: OrganizationMap2D<Relation>,
 }
 impl RelationMap {
-    pub fn new(
-        organizations: &HashMap<OrganizationKey, Organization, BuildNoHashHasher<OrganizationKey>>,
-    ) -> Self {
-        let mut relations = OrganizationMap2D::with_capacity_and_hasher(
-            organizations.len(),
-            BuildNoHashHasher::default(),
-        );
-        for org_a_key in organizations.keys() {
-            for org_b_key in organizations.keys() {
-                let (&first_org_key, &second_org_key) = if org_a_key > org_b_key {
+    pub fn new(organizations: &[Organization]) -> Self {
+        let mut relations = OrganizationMap2D::with_capacity(organizations.len());
+        for org_a_key in 0..organizations.len() {
+            let org_a_key = OrganizationKey(org_a_key);
+            for org_b_key in 0..organizations.len() {
+                let org_b_key = OrganizationKey(org_b_key);
+                let (first_org_key, second_org_key) = if org_a_key.0 > org_b_key.0 {
                     (org_a_key, org_b_key)
                 } else {
                     (org_b_key, org_a_key)
@@ -918,6 +983,11 @@ pub struct World {
     pub targeted_province: Option<ProvinceKey>,
     pub selected_organization: Option<OrganizationKey>,
     pub player_organization: OrganizationKey,
+    pub language_manager: LanguageManager,
+    pub branches: BranchMap<Branch>,
+    pub political_parties: PoliticalPartyMap<PoliticalParty>,
+    available_party_names: Vec<String>,
+    branch_control_decisions: BranchMap<BranchControlDecision>,
 }
 impl World {
     pub const RADIUS: f64 = 6_378_137.0; //in meters
@@ -935,6 +1005,26 @@ impl World {
         let mut words = command.split_whitespace();
         match words.next() {
             Some(word) => match word {
+                "get_branch_ideology" => match self.selected_organization {
+                    Some(organization) => match words.next() {
+                        Some(branch_idx) => match branch_idx.parse::<usize>() {
+                            Ok(branch_idx) => {
+                                match self.organizations[organization].branches.get(branch_idx) {
+                                    Some(branch) => {
+                                        return format!(
+                                            "{:?}\n",
+                                            self.branches[*branch].controlling_party
+                                        )
+                                    }
+                                    None => return "Branch out of bounds\n".to_string(),
+                                }
+                            }
+                            Err(_) => return "could not parse branch_idx\n".to_string(),
+                        },
+                        None => return "Missing argument\n".to_string(),
+                    },
+                    None => return "Must select an organization\n".to_string(),
+                },
                 "get_neighbours" => match self.selected_province {
                     Some(province) => {
                         return format!("{:?}", self.provinces[province].neighbouring_provinces)
@@ -1004,7 +1094,8 @@ impl World {
                 },
                 "list_orgs" => {
                     let mut out_string = String::new();
-                    for (key, org) in &self.organizations {
+                    for (key, org) in self.organizations.0.iter().enumerate() {
+                        let key = OrganizationKey(key);
                         out_string.push_str(&format!("Key: {:}, org: {:}\n", key.0, org.name));
                     }
                     return out_string;
@@ -1018,9 +1109,7 @@ impl World {
                             .unwrap_or_else(|| return "No amount provided\n")
                             .parse::<f64>()
                         {
-                            self.organizations
-                                .get_mut(&selected_org_key)
-                                .unwrap()
+                            self.organizations[selected_org_key]
                                 .military
                                 .deployed_forces[selected_province_key] += amount;
                             return format!(
@@ -1055,7 +1144,8 @@ impl World {
                 // },
                 "declare_war_all" => match self.selected_organization {
                     Some(org_key) => {
-                        for &enemy_key in self.organizations.keys() {
+                        for enemy_key in self.organizations.0.iter().enumerate().map(|a| a.0) {
+                            let enemy_key = OrganizationKey(enemy_key);
                             if enemy_key != org_key {
                                 self.relations.get_relations_mut(org_key, enemy_key).at_war = true;
                             }
@@ -1126,20 +1216,43 @@ impl World {
         vertices: &[Vector3<f64>],
         province_indices: &ProvinceMap<Vec<usize>>,
         province_data: &ProvinceMap<ProvinceData>,
-        nation_names: &[String],
+        nation_names_and_definitions: Box<[(String, Option<String>)]>,
+        color_to_language_name: HashMap<u32, String>,
     ) -> Self {
         println!("Creating world");
-        let mut organizations = HashMap::with_hasher(BuildNoHashHasher::default());
+
         let num_provinces = province_indices.0.len();
+        let mut languages: HashMap<u32, Language> = color_to_language_name
+            .into_iter()
+            .map(|(color, name)| {
+                (
+                    color,
+                    Language {
+                        name,
+                        province_presence: ProvinceMap(vec![0.0; num_provinces].into_boxed_slice()),
+                    },
+                )
+            })
+            .collect();
+        let mut branches = BranchMap::new();
+        let mut organizations = OrganizationMap(
+            nation_names_and_definitions
+                .into_vec()
+                .into_iter()
+                .map(|(name, definition)| {
+                    Organization::new(name, num_provinces, &mut branches, definition)
+                })
+                .collect::<Vec<_>>(),
+        );
         let mut provinces = vec![];
 
-        let total_area = province_data
-            .0
-            .iter()
-            .map(|d| d.num_samples as f64)
-            .sum::<f64>();
-        let mut country_id_to_org_key: HashMap<usize, OrganizationKey, BuildNoHashHasher<usize>> =
-            HashMap::with_hasher(BuildNoHashHasher::default());
+        // let total_area = province_data
+        //     .0
+        //     .iter()
+        //     .map(|d| d.num_samples as f64)
+        //     .sum::<f64>();
+        // let mut country_id_to_org_key: HashMap<usize, OrganizationKey, BuildNoHashHasher<usize>> =
+        //     HashMap::with_hasher(BuildNoHashHasher::default());
         let rng = fastrand::Rng::new();
         for (province_key, province_indices) in province_indices.0.iter().enumerate() {
             let province_key = ProvinceKey(province_key);
@@ -1160,6 +1273,17 @@ impl World {
                 size: f64::NAN,
             }; Industry::VARIANT_COUNT];
             let province_area = province_data[province_key].num_samples as f64;
+            for (color, language_count) in province_data[province_key]
+                .language()
+                .into_iter()
+                .filter(|&(color, _)| color != 0)
+            {
+                let ratio = language_count as f64 / province_area;
+                match languages.get_mut(&color) {
+                    Some(language) => language.province_presence[province_key] = ratio,
+                    None => eprintln!("Invalid color in language map: {:}", color),
+                };
+            }
             let population = province_data[province_key].population().max(10_000.0);
             for i in 0..Industry::VARIANT_COUNT {
                 let industry: Industry = i.try_into().unwrap();
@@ -1190,7 +1314,6 @@ impl World {
                     supply_demand_error_integral: [0.0; Good::VARIANT_COUNT],
                 },
                 industry_data,
-                province_key,
                 province_area,
                 intangible_goods: [0.0; IntangibleGoods::VARIANT_COUNT],
                 trader_cost_multiplier: 1.0,
@@ -1204,13 +1327,13 @@ impl World {
             });
 
             if let Some(owner) = province_data[province_key].owner() {
-                let key = country_id_to_org_key.entry(owner).or_insert_with(|| {
-                    let new_org = Organization::new(&nation_names[owner], num_provinces);
-                    let new_org_key = new_org.key;
-                    organizations.entry(new_org_key).or_insert(new_org);
-                    new_org_key
-                });
-                organizations.get_mut(key).unwrap().province_control[province_key] = 1.0;
+                // let key = country_id_to_org_key.entry(owner).or_insert_with(|| {
+                //     let new_org = Organization::new(&nation_names[owner], num_provinces);
+                //     let new_org_key = new_org.key;
+                //     organizations.entry(new_org_key).or_insert(new_org);
+                //     new_org_key
+                // });
+                organizations[OrganizationKey(owner)].province_control[province_key] = 1.0;
             }
         }
 
@@ -1268,32 +1391,124 @@ impl World {
 
         let histories = Histories::new(PRE_SIM_STEPS, num_provinces);
 
-        let relations = RelationMap::new(&organizations);
-        let num_organizations = organizations.len();
+        let relations = RelationMap::new(&organizations.0);
+        let num_organizations = organizations.0.len();
 
         // for org in organizations.values(){
         //     println!("{}", org.name)
         // }
-        let &player_organization = organizations
-            .keys()
-            .nth(rng.usize(0..num_organizations))
-            .unwrap();
+        let player_organization = OrganizationKey(rng.usize(0..num_organizations));
         // let player_organization = OrganizationKey(0);
-        
-        let mut num_uncontrolled_provinces = 0;
-        for province in provinces.0.iter_mut(){
-            if (1.0 - organizations.values().map(|o|o.province_control[province.province_key]).sum::<f64>()).abs() > 0.1{
-                // dbg!(&province.name);                
-                let num_orgs = organizations.len();
-                num_uncontrolled_provinces += 1;
-                for org in organizations.values_mut(){
-                    org.province_control[province.province_key] = 1.0 / num_orgs as f64;
-                }
 
+        let mut num_uncontrolled_provinces = 0;
+        for (province_key, province) in provinces.iter_mut() {
+            if (1.0
+                - organizations
+                    .0
+                    .iter()
+                    .map(|o| o.province_control[province_key])
+                    .sum::<f64>())
+            .abs()
+                > 0.1
+            {
+                // dbg!(&province.name);
+                // let mut nearest_owner = None;
+                // let mut current_province = province_key
+                // let mut visited = HashSet::new();
+                // loop{
+                //     visited.insert(current_province);
+                //     for &neighbour in provinces[current_province].neighbouring_provinces.iter(){
+                //         if provinces[neighbour].
+                //     }
+                // }
+                let num_orgs = organizations.0.len();
+                num_uncontrolled_provinces += 1;
+
+                for org in organizations.0.iter_mut() {
+                    org.province_control[province_key] = 1.0 / num_orgs as f64;
+                }
             }
         }
         dbg!(num_uncontrolled_provinces);
-        
+
+        let languages = LanguageMap(languages.into_values().collect());
+        let mut political_parties = PoliticalPartyMap::new();
+        for (org_key, organization) in organizations.iter() {
+            // let majority_language = languages.iter().max_by_key(|(_, l)|FloatOrd(l.province_presence[province_key])).unwrap().0;
+            let mut language_count = LanguageMap(vec![0usize; languages.0.len()]);
+            for (province_key, &control) in organization.province_control.iter() {
+                if control > 0.1 {
+                    for (language_key, language) in languages.iter() {
+                        if language.province_presence[province_key] > 0.01 {
+                            language_count[language_key] += 1;
+                        }
+                    }
+                }
+            }
+            let majority_language = language_count.iter().max_by_key(|l| *l.1).unwrap().0;
+            political_parties.0.push(PoliticalParty {
+                name: format!("{:} Egalitarian Party", organization.name),
+                ideology: Ideology {
+                    tax_rate: TaxRate::High,
+                    tax_method: TaxMethod::Progressive,
+                    import_difficulty: ImportDifficulty::Trivial,
+                    export_difficulty: ExportDifficulty::Trivial,
+                    immigration: Immigration::Unlimited,
+                    assimilation: Assimilation::None,
+                    war_support: WarSupport::Weak,
+                    irredentism: Irredentism::None,
+                    language_support: LanguageSupport::Equality,
+                    welfare_support: WelfareSupport::FullNeeds,
+                    separation_of_powers: SeparationOfPowers::ManyBranches,
+                    research: Research::Priority,
+                    primary_language: majority_language,
+                },
+                home_org: org_key,
+            });
+            political_parties.0.push(PoliticalParty {
+                name: format!("{:} Fascist Party", organization.name),
+                ideology: Ideology {
+                    tax_rate: TaxRate::High,
+                    tax_method: TaxMethod::Flat,
+                    import_difficulty: ImportDifficulty::Inconvenient,
+                    export_difficulty: ExportDifficulty::Diffiicult,
+                    immigration: Immigration::None,
+                    assimilation: Assimilation::Genocide,
+                    war_support: WarSupport::Jingoistic,
+                    irredentism: Irredentism::Lebensraum,
+                    language_support: LanguageSupport::SingleSuperior,
+                    welfare_support: WelfareSupport::FullNeeds,
+                    separation_of_powers: SeparationOfPowers::OneBranch,
+                    research: Research::Technocratic,
+                    primary_language: majority_language,
+                },
+                home_org: org_key,
+            });
+            political_parties.0.push(PoliticalParty {
+                name: format!("{:} Conservative Party", organization.name),
+                ideology: Ideology {
+                    tax_rate: TaxRate::Low,
+                    tax_method: TaxMethod::Flat,
+                    import_difficulty: ImportDifficulty::Inconvenient,
+                    export_difficulty: ExportDifficulty::Inconvenient,
+                    immigration: Immigration::SkilledLabor,
+                    assimilation: Assimilation::Encouraged,
+                    war_support: WarSupport::Medium,
+                    irredentism: Irredentism::None,
+                    language_support: LanguageSupport::SingleSuperior,
+                    welfare_support: WelfareSupport::None,
+                    separation_of_powers: SeparationOfPowers::OneBranch,
+                    research: Research::Priority,
+                    primary_language: majority_language,
+                },
+                home_org: org_key,
+            });
+        }
+        // political_parties.0.push(PoliticalParty{
+        //     name: "Default party".to_string(),
+        //     ideology: Ideology::new(),
+        // });
+
         let mut world = Self {
             points: vertices.iter().map(|vertex| vertex.cast()).collect(),
             provinces,
@@ -1313,12 +1528,21 @@ impl World {
             targeted_province: None,
             selected_organization: None,
             player_organization,
+            language_manager: LanguageManager { languages },
+            branch_control_decisions: BranchMap(vec![
+                BranchControlDecision::None;
+                branches.0.len()
+            ]),
+            branches,
+            political_parties,
+            available_party_names: PARTY_NAMES.into_iter().map(|s| s.to_string()).collect(),
         };
         // println!("Update travel times");
         // world.update_travel_times();
         // println!("Done Updating travel times");
 
         //Do some simulation to help the state stabilize
+        println!("Starting pre sim");
         let mut last_time_check = Instant::now();
         for _ in 0..(PRE_SIM_STEPS / 2) {
             world.process(Self::PRE_SIM_STEP_LENGTH);
@@ -1340,6 +1564,7 @@ impl World {
     }
 
     pub fn process(&mut self, delta_year: f64) {
+        let rng = fastrand::Rng::new();
         self.process_battles(delta_year);
         //Process market, selling yesterday's produced goods and buying needs for today
         for province in self.provinces.0.iter_mut() {
@@ -1611,7 +1836,7 @@ impl World {
         //distribute taxes and troops to controlling organizations
         for (province_key, province) in self.provinces.0.iter_mut().enumerate() {
             let province_key = ProvinceKey(province_key);
-            for organization in self.organizations.values_mut() {
+            for organization in self.organizations.0.iter_mut() {
                 let transfer_amount =
                     province.tax_bank * organization.province_control[province_key];
                 organization.money += transfer_amount;
@@ -1624,6 +1849,22 @@ impl World {
             province.troop_bank = 0.0;
             province.tax_bank = 0.0;
         }
+
+        // let num_provinces = self.provinces.0.len();
+        // let province_key = ProvinceKey(rng.usize(..num_provinces));
+        // let province = &self.provinces[province_key];
+        // for slice in province.pops.pop_slices.iter(){
+        //     let majority_language = self.language_manager.languages.iter().max_by_key(|(_, l)|FloatOrd(l.province_presence[province_key])).unwrap().0;
+        //     if self.political_parties.iter().map(|a|FloatOrd(slice.beliefs.to_ideology(majority_language).distance(&a.1.ideology))).min().unwrap().0 > 2.0{
+        //         self.political_parties.0.push(
+        //             PoliticalParty{
+        //                 name: self.available_party_names.pop().unwrap_or(String::from("OUT OF NAMES")),
+        //                 ideology: slice.beliefs.to_ideology(majority_language),
+        //             }
+        //         )
+        //     }
+        // }
+
         self.process_organizations(delta_year);
         self.add_new_tick(self.current_year);
         self.current_year += delta_year;
@@ -1631,96 +1872,358 @@ impl World {
 
     fn process_organizations(&mut self, delta_year: f64) {
         let rng = fastrand::Rng::new();
-        let org_keys: Box<_> = self.organizations.keys().copied().collect();
-        for (organization_key, organization) in self.organizations.iter_mut() {
+        // let org_keys: Box<_> = self.organizations.0.iter().enumerate().map(|a|a.0).collect();
+        let num_orgs = self.organizations.0.len();
+        for organization_key in 0..self.organizations.0.len() {
+            let organization_key = OrganizationKey(organization_key);
+
+            //decision phase
+
+            let organization = &mut self.organizations[organization_key];
+            for &branch_key in &organization.branches {
+                {
+                    let branch = &mut self.branches[branch_key];
+
+                    //elections
+                    if branch.elected
+                        && (self.current_year - branch.last_election) > branch.term_length
+                    {
+                        branch.last_election = self.current_year;
+
+                        let mut party_votes =
+                            PoliticalPartyMap(vec![0.0; self.political_parties.len()]);
+
+                        for (controlled_province, _) in
+                            organization.province_control.iter().filter(|a| *a.1 > 0.1)
+                        {
+                            let province = &self.provinces[controlled_province];
+                            let majority_language = self
+                                .language_manager
+                                .languages
+                                .iter()
+                                .max_by_key(|(_, l)| {
+                                    FloatOrd(l.province_presence[controlled_province])
+                                })
+                                .unwrap()
+                                .0;
+                            for (party_key, party) in self.political_parties.iter() {
+                                for slice in province.pops.pop_slices.iter() {
+                                    let slice_ideology =
+                                        slice.beliefs.to_ideology(majority_language);
+
+                                    let ideology_difference =
+                                        slice_ideology.distance(&party.ideology) + if party.home_org != organization_key{
+                                            1.0
+                                        }else{
+                                            0.0
+                                        };
+
+                                    let variance =
+                                        map_range_linear_f64(rng.f64(), 0.0, 1.0, 0.9, 1.1);
+                                    party_votes[party_key] +=
+                                        (slice.population / (ideology_difference + 1.0)) * variance;
+                                    // party_votes[party_key] += rng.f64();
+                                }
+                            }
+                        }
+                        // branch.controlling_party = self.political_parties[party_votes.iter().max_by_key(|v|FloatOrd(*v.1)).unwrap().0].ideology.clone();
+                        // if organization_key == self.player_organization{
+                        //     println!("Election in your organization for branch {:}", branch.name);
+                        //     dbg!(branch.controlling_party);
+                        // }
+                        branch.controlling_party =
+                            party_votes.iter().max_by_key(|v| FloatOrd(*v.1)).unwrap().0;
+                        // if organization_key == self.player_organization{
+                        //     dbg!(branch.controlling_party);
+                        // }
+                    }
+                }
+                //branch appointmnets
+                let branches_ptr = { self.branches.0.as_mut_ptr().clone() };
+                for (&controlled_branch, branch_control_flag) in
+                    &self.branches[branch_key].branch_control
+                {
+                    if branch_control_flag.contains(BranchControlFlag::APPOINT)
+                        && (self.current_year - self.branches[controlled_branch].last_election)
+                            > self.branches[controlled_branch].term_length
+                    {
+                        //Borrowing from a vec twice is safe as long as the indices don't overlap
+                        unsafe {
+                            assert_ne!(controlled_branch, branch_key);
+                            assert!(controlled_branch.0 < self.branches.0.len());
+                            (*branches_ptr.offset(controlled_branch.0 as isize)).last_election =
+                                self.current_year;
+                        }
+                        if matches!(
+                            self.branch_control_decisions[controlled_branch],
+                            BranchControlDecision::None
+                        ) {
+                            self.branch_control_decisions[controlled_branch] =
+                                BranchControlDecision::Appoint(
+                                    self.branches[branch_key].controlling_party,
+                                );
+                        }
+                    }
+                }
+                //branch approvals
+                for (&controlled_branch, branch_control_flag) in
+                    &self.branches[branch_key].branch_control
+                {
+                    if branch_control_flag.contains(BranchControlFlag::APPROVE) {
+                        match self.branch_control_decisions[controlled_branch] {
+                            BranchControlDecision::None | BranchControlDecision::Vetoed => {}
+                            BranchControlDecision::Appoint(appointed_party) => {
+                                if self.political_parties[appointed_party].ideology.distance(
+                                    &self.political_parties
+                                        [self.branches[branch_key].controlling_party]
+                                        .ideology,
+                                ) < 2.0
+                                {
+                                    self.branch_control_decisions[controlled_branch] =
+                                        BranchControlDecision::Vetoed;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                for (decision, decision_control) in self.branches[branch_key]
+                    .decision_control
+                    .iter()
+                    .enumerate()
+                {
+                    let decision = DecisionCategory::try_from(decision).unwrap();
+                    if decision_control.contains(DecisionControlFlag::ENACT) {
+                        if matches!(organization.decisions[decision as usize], Decision::None) {
+                            let controlling_ideology = &self.political_parties
+                                [self.branches[branch_key].controlling_party]
+                                .ideology;
+
+                            organization.decisions[decision as usize] = match decision {
+                                DecisionCategory::SetTaxes => {
+                                    let num_controlled_provinces = organization
+                                        .province_control
+                                        .iter()
+                                        .filter(|&(_, &p)| p > 0.1)
+                                        .count();
+                                    let new_tax_rate = match controlling_ideology.tax_rate {
+                                        TaxRate::Low => 0.05,
+                                        TaxRate::Medium => 0.2,
+                                        TaxRate::High => 0.5,
+                                    };
+                                    if num_controlled_provinces > 0 {
+                                        Decision::SetTaxes(
+                                            organization
+                                                .province_control
+                                                .iter()
+                                                .filter(|&(_, &p)| p > 0.1)
+                                                .nth(rng.usize(..num_controlled_provinces))
+                                                .unwrap()
+                                                .0,
+                                            new_tax_rate,
+                                        )
+                                    } else {
+                                        Decision::None
+                                    }
+                                }
+                                DecisionCategory::DeclareWar => {
+                                    let war_chance = match controlling_ideology.war_support {
+                                        WarSupport::Pacifistic => 0.0,
+                                        WarSupport::Weak => 0.01,
+                                        WarSupport::Medium => 0.1,
+                                        WarSupport::Strong => 1.0,
+                                        WarSupport::Jingoistic => 10.0,
+                                    } * delta_year;
+                                    if rng.f64() < war_chance {
+                                        Decision::DeclareWar(OrganizationKey(rng.usize(..num_orgs)))
+                                    } else {
+                                        Decision::None
+                                    }
+                                }
+                                DecisionCategory::MoveTroops => {
+                                    let source_count = organization
+                                        .province_control
+                                        .iter()
+                                        .filter(|&(i, &c)| c > 0.9)
+                                        .count();
+
+                                    let dest_count = organization
+                                        .province_control
+                                        .iter()
+                                        .filter(|&(i, &c)| c > 0.1)
+                                        .flat_map(|(key, _)| {
+                                            self.provinces[key].neighbouring_provinces.iter()
+                                        })
+                                        .filter(|&&k| organization.province_control[k] < 0.9)
+                                        .count();
+                                    if source_count > 0
+                                        && dest_count > 0
+                                        && rng.f64() < 1.0 * delta_year
+                                    {
+                                        let source = organization
+                                            .province_control
+                                            .iter()
+                                            .filter(|&(i, &c)| c > 0.9)
+                                            .nth(rng.usize(..source_count))
+                                            .unwrap()
+                                            .0;
+                                        let &dest = organization
+                                            .province_control
+                                            .iter()
+                                            .filter(|&(i, &c)| c > 0.1)
+                                            .flat_map(|(key, _)| {
+                                                self.provinces[key].neighbouring_provinces.iter()
+                                            })
+                                            .filter(|&&k| organization.province_control[k] < 0.9)
+                                            .nth(rng.usize(..dest_count))
+                                            .unwrap();
+                                        Decision::MoveTroops(source, dest, 1.0)
+                                    } else {
+                                        Decision::None
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            //veto/approval phase
+            for decision in &mut organization.decisions {
+                if !matches!(decision, Decision::None) && rng.f64() < 0.1 * delta_year {
+                    *decision = Decision::Vetoed;
+                }
+            }
+            for decision in 0..organization.decisions.len() {
+                match organization.decisions[decision] {
+                    Decision::None => {}
+                    Decision::Vetoed => {}
+                    Decision::SetTaxes(target_province, tax_rate) => {
+                        self.provinces[target_province].tax_rate = tax_rate;
+                    }
+                    Decision::DeclareWar(target_org) => {
+                        self.relations
+                            .get_relations_mut(organization_key, target_org)
+                            .at_war = true;
+                    }
+                    Decision::MoveTroops(source, dest, ratio) => {
+                        organization.transfer_troops(source, dest, ratio)
+                    }
+                };
+                organization.decisions[decision] = Decision::None;
+            }
+            for (branch_key, branch_decision) in self.branch_control_decisions.iter_mut() {
+                match branch_decision {
+                    BranchControlDecision::None => {}
+                    BranchControlDecision::Vetoed => {}
+                    BranchControlDecision::Appoint(party) => {
+                        self.branches[branch_key].controlling_party = *party;
+                    }
+                }
+                *branch_decision = BranchControlDecision::None
+            }
+
             //choose action
-            let org_keys = org_keys.iter().filter(|&&k| k != *organization_key);
-            let action_decider = rng.f64();
-            let mut action = None;
-            if action_decider > 0.5 {
-                let mut source_iter = organization
+            // let org_keys = org_keys.iter().filter(|&&k| k != organization_key);
+            // let action_decider = rng.f64();
+            // let mut action = None;
+            // if action_decider > 0.5 {
+            //     let mut source_iter = self.organizations[organization_key]
+            //         .province_control
+            //         .0
+            //         .iter()
+            //         .enumerate()
+            //         .filter(|&(i, &c)| c > 0.9);
+            //     let source_count = source_iter.clone().count();
+            //     if source_count > 0 {
+            //         if let Some(source) = source_iter.nth(rng.usize(..(source_count))) {
+            //             let dest_iter = self.organizations[organization_key]
+            //                 .province_control
+            //                 .0
+            //                 .iter()
+            //                 .enumerate()
+            //                 .filter(|&(i, &c)| c > 0.1)
+            //                 .flat_map(|(key, _)| {
+            //                     self.provinces[ProvinceKey(key)]
+            //                         .neighbouring_provinces
+            //                         .iter()
+            //                 });
+            //             let dest_count = dest_iter.clone().count();
+            //             if dest_count > 0 {
+            //                 if let Some(&dest) = dest_iter.clone().nth(rng.usize(..dest_count)) {
+            //                     action = Some(Action::MoveTroops {
+            //                         source: ProvinceKey(source.0),
+            //                         dest,
+            //                         ratio: rng.f64(),
+            //                     });
+            //                 }
+            //             }
+            //         }
+            //     }
+            // } else {
+            //     let action_decider = rng.f64();
+            //     let law = if action_decider > 0.5 {
+            //         Legislation::DeclareWar(OrganizationKey(
+            //             rng.usize(..self.organizations.0.len()),
+            //         ))
+            //     } else {
+            //         Legislation::SetTaxRate(rng.f64() * 0.2)
+            //     };
+            //     action = Some(Action::EnactLaw(law));
+            // }
+
+            // //Handle action
+            // if let Some(action) = action {
+            //     match action {
+            //         Action::EnactLaw(law) => {
+            //             match law {
+            //                 Legislation::SetTaxRate(new_rate) => {
+            //                     for province_key in self.organizations[organization_key]
+            //                         .province_control
+            //                         .0
+            //                         .iter()
+            //                         .enumerate()
+            //                         .filter(|&(p_key, &c)| c > 0.1)
+            //                         .map(|a| ProvinceKey(a.0))
+            //                     {
+            //                         self.provinces[province_key].tax_rate = new_rate;
+            //                     }
+            //                 }
+            //                 Legislation::DeclareWar(target) => {
+            //                     self.relations
+            //                         .get_relations_mut(organization_key, target)
+            //                         .at_war = true
+            //                 } // Law::DeclareWar(target) => {}
+            //             }
+            //         }
+            //         Action::MoveTroops {
+            //             source,
+            //             dest,
+            //             ratio,
+            //         } => self.organizations[organization_key].transfer_troops(source, dest, ratio),
+            //     }
+            // }
+
+            let redistribution_amount =
+                (self.organizations[organization_key].money * 0.5 * delta_year)
+                    .min(self.organizations[organization_key].money);
+            self.organizations[organization_key].money -= redistribution_amount;
+            let province_control_sum = self.organizations[organization_key]
+                .province_control
+                .0
+                .iter()
+                .sum::<f64>();
+            if province_control_sum > 0.8 {
+                for (province_key, province_control) in self.organizations[organization_key]
                     .province_control
                     .0
                     .iter()
                     .enumerate()
-                    .filter(|&(i, &c)| c > 0.9);
-                let source_count = source_iter.clone().count();
-                if source_count > 0 {
-                    if let Some(source) = source_iter.nth(rng.usize(..(source_count))) {
-                        let dest_iter = organization
-                            .province_control
-                            .0
-                            .iter()
-                            .enumerate()
-                            .filter(|&(i, &c)| c > 0.1)
-                            .flat_map(|(key, _)| {
-                                self.provinces[ProvinceKey(key)]
-                                    .neighbouring_provinces
-                                    .iter()
-                            });
-                        let dest_count = dest_iter.clone().count();
-                        if dest_count > 0 {
-                            if let Some(&dest) = dest_iter.clone().nth(rng.usize(..dest_count)) {
-                                action = Some(Action::MoveTroops {
-                                    source: ProvinceKey(source.0),
-                                    dest,
-                                    ratio: rng.f64(),
-                                });
-                            }
-                        }
-                    }
-                }
-            } else {
-                let action_decider = rng.f64();
-                let law = if action_decider > 0.5 {
-                    Law::DeclareWar(*org_keys.clone().nth(rng.usize(..org_keys.count())).unwrap())
-                } else {
-                    Law::SetTaxRate(rng.f64() * 0.2)
-                };
-                action = Some(Action::EnactLaw(law));
-            }
-
-            //Handle action
-            if let Some(action) = action {
-                match action {
-                    Action::EnactLaw(law) => {
-                        match law {
-                            Law::SetTaxRate(new_rate) => {
-                                for province_key in organization
-                                    .province_control
-                                    .0
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|&(p_key, &c)| c > 0.1)
-                                    .map(|a| ProvinceKey(a.0))
-                                {
-                                    self.provinces[province_key].tax_rate = new_rate;
-                                }
-                            }
-                            Law::DeclareWar(target) => {
-                                self.relations
-                                    .get_relations_mut(*organization_key, target)
-                                    .at_war = true
-                            } // Law::DeclareWar(target) => {}
-                        }
-                    }
-                    Action::MoveTroops {
-                        source,
-                        dest,
-                        ratio,
-                    } => organization.transfer_troops(source, dest, ratio),
-                }
-            }
-
-            let redistribution_amount =
-                (organization.money * 0.5 * delta_year).min(organization.money);
-            organization.money -= redistribution_amount;
-            let province_control_sum = organization.province_control.0.iter().sum::<f64>();
-            if province_control_sum > 0.8 {
-                for (province_key, province_control) in
-                    organization.province_control.0.iter().enumerate()
                 {
-                    for slice in self.provinces[ProvinceKey(province_key)].pops.pop_slices.iter_mut() {
+                    for slice in self.provinces[ProvinceKey(province_key)]
+                        .pops
+                        .pop_slices
+                        .iter_mut()
+                    {
                         let org_payment = redistribution_amount
                             * (province_control / province_control_sum)
                             / (NUM_SLICES as f64);
@@ -1729,37 +2232,43 @@ impl World {
                 }
             }
         }
-        for province in self.provinces.0.iter() {
-            let province_key = province.province_key;
-            if let Some((&biggest_org_key, biggest_organization)) = self
+        for (province_key, province) in self.provinces.iter() {
+            let province_key = province_key;
+            if let Some((biggest_org_key, biggest_organization)) = self
                 .organizations
+                .0
                 .iter_mut()
-                .filter(|(k, o)| o.military.deployed_forces[province_key] > 1.0)
+                .enumerate()
+                .map(|(k, o)| (OrganizationKey(k), o))
+                // .filter(|(k, o)| o.military.deployed_forces[province_key] > 1.0)
                 .max_by_key(|(_org_key, org)| FloatOrd(org.military.deployed_forces[province_key]))
             {
-
                 let control_increase = (1.0 * delta_year)
                     .min(1.0 - biggest_organization.province_control[province_key]);
                 // biggest_organization.province_control[province_key] += control_increase;
 
                 // let num_losing_orgs = self.organizations.iter().filter(|(k,o)|o.military.deployed_forces[province_key] > 1.0 && o.key != biggest_org_key).count();
+                // let losing_control_sum = self
+                //     .organizations.0
+                //     .iter()
+                //     .filter(|(_, o)| {
+                //         o.military.deployed_forces[province_key] > 1.0 && o.key != biggest_org_key
+                //     })
+                //     .map(|o)| o.province_control[province_key])
+                //     .sum::<f64>();
                 let losing_control_sum = self
                     .organizations
                     .iter()
-                    .filter(|(k, o)| {
-                        o.military.deployed_forces[province_key] > 1.0 && o.key != biggest_org_key
-                    })
+                    .filter(|&(k, _)| k != biggest_org_key)
                     .map(|(_, o)| o.province_control[province_key])
                     .sum::<f64>();
                 let control_increase = control_increase.min(losing_control_sum);
 
-                for (&org_key, org) in self.organizations.iter_mut().filter(|(k, o)| {
-                    o.military.deployed_forces[province_key] > 1.0
-                }) {
+                for (org_key, org) in self.organizations.iter_mut() {
                     if org_key != biggest_org_key && losing_control_sum > 0.0 {
                         let control_ratio = org.province_control[province_key] / losing_control_sum;
                         org.province_control[province_key] -= control_ratio * control_increase;
-                    }else if org_key == biggest_org_key{
+                    } else if org_key == biggest_org_key {
                         org.province_control[province_key] += control_increase;
                     }
                 }
@@ -1776,13 +2285,10 @@ impl World {
                 .organizations
                 .iter()
                 .filter(|o| o.1.military.deployed_forces[province_key] > 0.5)
-                .map(|a| *a.0)
+                .map(|a| a.0)
                 .collect();
 
-            let mut combat_orgs_filtered = OrganizationMap::with_capacity_and_hasher(
-                combat_orgs.len(),
-                BuildNoHashHasher::default(),
-            );
+            let mut combat_orgs_filtered = HashMap::with_capacity(combat_orgs.len());
             // let mut combat_orgs_filtered = Vec::with_capacity(combat_orgs.len());
             for i in 0..combat_orgs.len() {
                 for j in 0..combat_orgs.len() {
@@ -1821,10 +2327,10 @@ impl World {
             );
             let second_combatant_key = combat_orgs_filtered[&first_combatant_key][second_index];
 
-            let first_army_size: f64 = self.organizations[&first_combatant_key]
+            let first_army_size: f64 = self.organizations[first_combatant_key]
                 .military
                 .deployed_forces[province_key];
-            let second_army_size: f64 = self.organizations[&second_combatant_key]
+            let second_army_size: f64 = self.organizations[second_combatant_key]
                 .military
                 .deployed_forces[province_key];
             let avg_size = (first_army_size + second_army_size) / 2.0;
@@ -1836,11 +2342,7 @@ impl World {
             // };
 
             {
-                let first_army = &mut self
-                    .organizations
-                    .get_mut(&first_combatant_key)
-                    .unwrap()
-                    .military;
+                let first_army = &mut self.organizations[first_combatant_key].military;
 
                 // let losses = avg_size * (1.0 / army_ratio) * delta_year;
                 let losses = avg_size * 10.0 * delta_year;
@@ -1849,11 +2351,7 @@ impl World {
             }
 
             {
-                let second_army = &mut self
-                    .organizations
-                    .get_mut(&second_combatant_key)
-                    .unwrap()
-                    .military;
+                let second_army = &mut self.organizations[second_combatant_key].military;
 
                 // let losses = avg_size * army_ratio * delta_year;
                 let losses = avg_size * 10.0 * delta_year;
