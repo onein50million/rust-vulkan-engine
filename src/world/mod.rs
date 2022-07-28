@@ -1213,7 +1213,7 @@ impl World {
     }
 
     pub fn new(
-        vertices: &[Vector3<f64>],
+        vertices: &[Vector3<f32>],
         province_indices: &ProvinceMap<Vec<usize>>,
         province_data: &ProvinceMap<ProvinceData>,
         nation_names_and_definitions: Box<[(String, Option<String>)]>,
@@ -1387,7 +1387,8 @@ impl World {
         //     organization.military.push(new_military);
         // }
         // const PRE_SIM_STEPS: usize = 1000;
-        const PRE_SIM_STEPS: usize = 100;
+        // const PRE_SIM_STEPS: usize = 100;
+        const PRE_SIM_STEPS: usize = 0;
 
         let histories = Histories::new(PRE_SIM_STEPS, num_provinces);
 
@@ -1424,9 +1425,11 @@ impl World {
                 let num_orgs = organizations.0.len();
                 num_uncontrolled_provinces += 1;
 
-                for org in organizations.0.iter_mut() {
-                    org.province_control[province_key] = 1.0 / num_orgs as f64;
-                }
+                // for org in organizations.0.iter_mut() {
+                //     org.province_control[province_key] = 1.0 / num_orgs as f64;
+                // }
+
+                organizations[OrganizationKey(rng.usize(..num_orgs))].province_control[province_key] = 1.0;
             }
         }
         dbg!(num_uncontrolled_provinces);
@@ -1874,7 +1877,7 @@ impl World {
         let rng = fastrand::Rng::new();
         // let org_keys: Box<_> = self.organizations.0.iter().enumerate().map(|a|a.0).collect();
         let num_orgs = self.organizations.0.len();
-        for organization_key in 0..self.organizations.0.len() {
+        for organization_key in 0..num_orgs {
             let organization_key = OrganizationKey(organization_key);
 
             //decision phase
@@ -1913,6 +1916,7 @@ impl World {
 
                                     let ideology_difference =
                                         slice_ideology.distance(&party.ideology) + if party.home_org != organization_key{
+                                            // party.ideology.distance(&party.ideology) + if party.home_org != organization_key{
                                             1.0
                                         }else{
                                             0.0
@@ -2028,12 +2032,12 @@ impl World {
                                 }
                                 DecisionCategory::DeclareWar => {
                                     let war_chance = match controlling_ideology.war_support {
-                                        WarSupport::Pacifistic => 0.0,
+                                        WarSupport::Pacifistic => 0.0f64,
                                         WarSupport::Weak => 0.01,
                                         WarSupport::Medium => 0.1,
                                         WarSupport::Strong => 1.0,
                                         WarSupport::Jingoistic => 10.0,
-                                    } * delta_year;
+                                    }.powf(delta_year);
                                     if rng.f64() < war_chance {
                                         Decision::DeclareWar(OrganizationKey(rng.usize(..num_orgs)))
                                     } else {
@@ -2058,7 +2062,7 @@ impl World {
                                         .count();
                                     if source_count > 0
                                         && dest_count > 0
-                                        && rng.f64() < 1.0 * delta_year
+                                        && rng.f64() < 1.0f64.powf(delta_year)
                                     {
                                         let source = organization
                                             .province_control
@@ -2077,7 +2081,7 @@ impl World {
                                             .filter(|&&k| organization.province_control[k] < 0.9)
                                             .nth(rng.usize(..dest_count))
                                             .unwrap();
-                                        Decision::MoveTroops(source, dest, 1.0)
+                                        Decision::MoveTroops(source, dest, 0.8)
                                     } else {
                                         Decision::None
                                     }
@@ -2089,7 +2093,7 @@ impl World {
             }
             //veto/approval phase
             for decision in &mut organization.decisions {
-                if !matches!(decision, Decision::None) && rng.f64() < 0.1 * delta_year {
+                if !matches!(decision, Decision::None) && rng.f64() < 0.1f64.powf(delta_year) {
                     *decision = Decision::Vetoed;
                 }
             }

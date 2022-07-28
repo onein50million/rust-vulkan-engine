@@ -5,8 +5,8 @@ glslc shader.comp -o comp.spv
 glslc ui.vert -o ui_vert.spv
 glslc ui.frag -o ui_frag.spv
 
-glslc line/shader.vert -o line/vert.spv
-glslc line/shader.frag -o line/frag.spv
+glslc province/shader.vert -o province/vert.spv
+glslc province/shader.frag -o province/frag.spv
 
 glslc cubemap/shader.vert -o cubemap/vert.spv
 glslc cubemap/shader.frag -o cubemap/frag.spv

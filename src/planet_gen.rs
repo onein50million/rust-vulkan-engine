@@ -2,9 +2,10 @@ use crate::{
     support::{index_to_coordinate, Vertex, CUBEMAP_WIDTH},
     world::{ProvinceMap, World},
 };
-use gdal::{raster::GdalType, Dataset};
+use gdal::{raster::GdalType, Dataset, vector::FieldValue};
 
 use genmesh::generators::{IcoSphere, IndexedPolygon, SharedVertex};
+use lyon_tessellation::FillTessellator;
 use nalgebra::{Vector2, Vector3, Vector4};
 use serde::Deserialize;
 use std::{
@@ -15,6 +16,8 @@ use std::{
     ops::{Add, AddAssign, Mul},
     path::{Path, PathBuf},
 };
+use lyon_tessellation::path::Path as LyonPath;
+// use triangulate::{Vertex as TriangulateVertex, TriangulateDefault, Triangulate};
 
 pub struct MeshOutput {
     pub vertices: Vec<Vertex>,
@@ -319,14 +322,14 @@ struct Feature {
 #[serde(rename_all = "camelCase")]
 struct Properties {
     #[serde(rename = "adm1_code")]
-    adm1_code: String,
+    // adm1_code: String,
     name: Option<String>,
-    id: i64,
+    // id: i64,
 }
 
 pub fn get_provinces() -> (
     Box<[Option<u16>]>,
-    Box<[Vector3<f64>]>,
+    Box<[Vector3<f32>]>,
     ProvinceMap<Box<[usize]>>,
     ProvinceMap<String>,
 ) {
@@ -341,28 +344,22 @@ pub fn get_provinces() -> (
         &mut samples,
         0,
     );
-    let ids = samples
-        .into_iter()
-        .map(|(a, _)| if a == 0 { None } else { Some(a - 1) })
+
+    let (names, vertices, indices) =
+        load_vector_file(&PathBuf::from("world_data/provinces/provinces.geojson"));
+    // let reader =
+    //     File::open("world_data/provinces/provinces.geojson").expect("Failed to open provinces");
+    // let province_root: ProvinceRoot =
+    //     serde_json::from_reader(reader).expect("Failed to deserialize provinces");
+    let ids = samples.iter().into_iter()
+        .map(|&(a, _)| if a == 0 { None } else { Some(a - 1) })
         .collect();
 
-    let (vertices, indices) =
-        load_vector_file(&PathBuf::from("world_data/provinces/provinces.geojson"));
-    let mut reader =
-        File::open("world_data/provinces/provinces.geojson").expect("Failed to open provinces");
-    let province_root: ProvinceRoot =
-        serde_json::from_reader(reader).expect("Failed to deserialize provinces");
     (
         ids,
         vertices,
         ProvinceMap(indices),
-        ProvinceMap(
-            province_root
-                .features
-                .into_iter()
-                .map(|f| f.properties.name.unwrap_or("UNNAMED".to_string()))
-                .collect(),
-        ),
+        ProvinceMap(names),
     )
 }
 
@@ -628,36 +625,252 @@ fn latlong_to_vector(latitude: f64, longitude: f64) -> Vector3<f64> {
     ) * World::RADIUS
 }
 
-fn load_vector_file(path: &Path) -> (Box<[Vector3<f64>]>, Box<[Box<[usize]>]>) {
+// fn load_vector_file(path: &Path) -> (Box<[Vector3<f64>]>, Box<[Box<[usize]>]>) {
+//     println!("Loading file: {:?}", path);
+//     let dataset = gdal::Dataset::open(path).unwrap();
+//     let mut vector_layer = dataset.layer(0).unwrap();
+
+//     let mut vertices = vec![];
+//     let mut indices = vec![];
+//     let mut current_index = 0;
+//     for feature in vector_layer.features() {
+//         let mut current_indices = vec![];
+//         for i in 0..feature.geometry().geometry_count() {
+//             let geometry = unsafe { feature.geometry().get_unowned_geometry(i) };
+//             let point_vec = geometry.get_point_vec();
+//             assert_ne!(point_vec.len(), 0);
+
+//             let first_index = current_index;
+//             let last_point_index = point_vec.len() - 1;
+//             for &(longitude, latitude, _) in &point_vec[..last_point_index] {
+//                 current_indices.push(current_index);
+//                 current_index += 1;
+//                 current_indices.push(current_index);
+//                 vertices.push(latlong_to_vector(latitude, longitude));
+//             }
+//             let last_point = point_vec[last_point_index];
+//             vertices.push(latlong_to_vector(last_point.1, last_point.0));
+//             current_indices.push(current_index);
+//             current_index += 1;
+//             current_indices.push(first_index);
+//         }
+//         indices.push(current_indices.into_boxed_slice());
+//     }
+//     (vertices.into_boxed_slice(), indices.into_boxed_slice())
+// }
+
+// #[derive(Debug, Clone, Copy)]
+// pub struct MyVertex{
+//     x: f64,
+//     y: f64,
+// }
+// impl TriangulateVertex for MyVertex{
+//     type Coordinate = f64;
+//     fn x(&self) -> Self::Coordinate {
+//         self.x
+//     }
+
+//     fn y(&self) -> Self::Coordinate {
+//         self.y
+//     }
+// }
+
+// fn load_vector_file(path: &Path) -> (Box<[Vector3<f64>]>, Box<[Box<[usize]>]>) {
+//     println!("Loading file: {:?}", path);
+//     let dataset = gdal::Dataset::open(path).unwrap();
+//     let mut vector_layer = dataset.layer(0).unwrap();
+
+//     let mut out_vertices = vec![];
+//     let mut out_indices = vec![];
+//     let mut feature_offset = 0;
+//     for feature in vector_layer.features() {
+//         let mut polygon = vec![];
+//         let mut polygon_indices = vec![];
+//         for i in 0..feature.geometry().geometry_count() {
+//             let geometry = unsafe { feature.geometry().get_unowned_geometry(i) };
+//             let point_vec: Vec<_> = geometry.get_point_vec().into_iter().map(|p|MyVertex{x:p.0, y: p.1}).collect();
+//             let last_point_index = point_vec.len() - 1;
+//             assert_ne!(point_vec.len(), 0);
+
+//             let last_point = point_vec[last_point_index];
+//             out_vertices.push(latlong_to_vector(last_point.x, last_point.y));
+//             polygon.push(point_vec);
+
+//         }
+//         let indices:Vec<_> = polygon.triangulate::<triangulate::builders::FanToListAdapter<_, triangulate::builders::VecIndexedListBuilder<_>>>(
+//             &mut vec![]
+//         ).unwrap().to_vec();
+//         for (polygon_index, point_index) in indices{
+//             let mut offset = 0;
+//             for i in 0..=polygon_index{
+//                 offset += polygon[i].len()
+//             }
+//             polygon_indices.push(feature_offset + offset + point_index);
+//         }
+//         feature_offset += polygon_indices.len();
+
+//         out_indices.push(polygon_indices.into_boxed_slice());
+//     }
+//     (out_vertices.into_boxed_slice(), out_indices.into_boxed_slice())
+// }
+
+// fn load_vector_file(path: &Path) -> (Box<[Vector3<f64>]>, Box<[Box<[usize]>]>) {
+//     println!("Loading file: {:?}", path);
+//     let dataset = gdal::Dataset::open(path).unwrap();
+//     let mut vector_layer = dataset.layer(0).unwrap();
+
+//     let mut out_vertices = vec![];
+//     let mut out_indices = vec![];
+//     let mut feature_offset = 0;
+
+//     let mut i = 0;
+//     let num_features = vector_layer.feature_count();
+//     let mut instant = std::time::Instant::now();
+
+//     for feature in vector_layer.features() {
+//         let time_elapsed = instant.elapsed().as_secs_f64();
+//         if time_elapsed > 1.0 {
+//             instant = std::time::Instant::now();
+//             println!(
+//                 "Percent done file: {:}",
+//                 i as f64 / num_features as f64
+//             );
+//         };
+//         i += 1;
+//         // let mut polygon = vec![];
+//         // let mut polygon_indices = vec![];
+//         let mut path_builder = LyonPath::builder();
+//         for i in 0..feature.geometry().geometry_count() {
+//             let geometry = unsafe { feature.geometry().get_unowned_geometry(i) };
+//             let point_vec: Vec<_> = geometry.get_point_vec().into_iter().map(|p|(p.0, p.1)).collect();
+
+//             let first = point_vec.first().unwrap();
+//             path_builder.begin(
+//                 lyon_tessellation::math::point(first.0 as f32, first.1 as f32)
+//             );
+//             for i in 0..(point_vec.len()){
+//                 let (x, y) = point_vec[i];
+//                 path_builder.line_to(lyon_tessellation::math::point(x as f32, y as f32));
+//             }
+//             path_builder.end(
+//                 false
+//             );
+            
+
+
+//             // let last_point_index = point_vec.len() - 1;
+//             // assert_ne!(point_vec.len(), 0);
+
+//             // let last_point = point_vec[last_point_index];
+//             // out_vertices.push(latlong_to_vector(last_point.x, last_point.y));
+//             // polygon.push(point_vec);
+
+//         }
+//         path_builder.end(true);
+//         let path = path_builder.build();
+//         let mut buffers: lyon_tessellation::VertexBuffers<lyon_tessellation::math::Point, u16> = lyon_tessellation::VertexBuffers::new();
+
+//         {
+//             let mut vertex_builder = lyon_tessellation::geometry_builder::simple_builder(&mut buffers);
+//             let mut tessellator = FillTessellator::new();
+//             let result = tessellator.tessellate_path(
+//                 &path,
+//                 &lyon_tessellation::FillOptions::default(),
+//                 &mut vertex_builder
+//             );
+//             assert!(result.is_ok());
+//         }
+
+//         out_indices.push(buffers.indices.iter().map(|&i|i as usize + feature_offset).collect::<Box<[_]>>());
+//         out_vertices.extend(buffers.vertices.iter().map(|point|{
+//             latlong_to_vector(point.x as f64, point.y as f64)
+//         }));
+//         feature_offset += buffers.vertices.len();
+//     }
+
+//     (out_vertices.into_boxed_slice(), out_indices.into_boxed_slice())
+// }
+
+struct Ctor;
+impl lyon_tessellation::FillVertexConstructor<Vector3<f32>> for Ctor {
+    fn new_vertex(&mut self, mut vertex: lyon_tessellation::FillVertex) -> Vector3<f32> {
+        let position = vertex.position();
+        let attrs = vertex.interpolated_attributes();
+        Vector3::new(
+            position.x,
+            attrs[0],
+            position.y,
+        )
+    }
+}
+
+fn load_vector_file(path: &Path) -> (Box<[String]>, Box<[Vector3<f32>]>, Box<[Box<[usize]>]>) {
     println!("Loading file: {:?}", path);
     let dataset = gdal::Dataset::open(path).unwrap();
     let mut vector_layer = dataset.layer(0).unwrap();
 
-    let mut vertices = vec![];
-    let mut indices = vec![];
-    let mut current_index = 0;
+    let mut out_vertices = vec![];
+    let mut out_indices = vec![];
+    let mut feature_offset = 0;
+
+    let mut i = 0;
+    let num_features = vector_layer.feature_count();
+    let mut instant = std::time::Instant::now();
+
+    let mut names = Vec::with_capacity(num_features as usize);
     for feature in vector_layer.features() {
-        let mut current_indices = vec![];
+        if let FieldValue::StringValue(name) = feature.field("name").unwrap().unwrap(){
+            names.push(name);
+        }
+        let time_elapsed = instant.elapsed().as_secs_f64();
+        if time_elapsed > 1.0 {
+            instant = std::time::Instant::now();
+            println!(
+                "Percent done file: {:}",
+                i as f64 / num_features as f64
+            );
+        };
+        i += 1;
+        // let mut polygon = vec![];
+        // let mut polygon_indices = vec![];
+        let mut path_builder = LyonPath::builder_with_attributes(1);
         for i in 0..feature.geometry().geometry_count() {
             let geometry = unsafe { feature.geometry().get_unowned_geometry(i) };
-            let point_vec = geometry.get_point_vec();
-            assert_ne!(point_vec.len(), 0);
+            let point_vec: Vec<_> = geometry.get_point_vec().into_iter().map(|p|(p.0, p.1)).collect();
 
-            let first_index = current_index;
-            let last_point_index = point_vec.len() - 1;
-            for &(longitude, latitude, _) in &point_vec[..last_point_index] {
-                current_indices.push(current_index);
-                current_index += 1;
-                current_indices.push(current_index);
-                vertices.push(latlong_to_vector(latitude, longitude));
+            let first = point_vec.first().unwrap();
+            let first = latlong_to_vector(first.1, first.0);
+            path_builder.begin(
+                lyon_tessellation::math::point(first.x as f32, first.z as f32),
+                &[first.y as f32]
+            );
+            for i in 0..(point_vec.len()){
+                let point = latlong_to_vector(point_vec[i].1, point_vec[i].0);
+                path_builder.line_to(lyon_tessellation::math::point(point.x as f32, point.z as f32), &[point.y as f32]);
             }
-            let last_point = point_vec[last_point_index];
-            vertices.push(latlong_to_vector(last_point.1, last_point.0));
-            current_indices.push(current_index);
-            current_index += 1;
-            current_indices.push(first_index);
+            path_builder.end(
+                false
+            );
         }
-        indices.push(current_indices.into_boxed_slice());
+        path_builder.end(true);
+        let path = path_builder.build();
+        let mut buffers: lyon_tessellation::VertexBuffers<Vector3<f32>, u16> = lyon_tessellation::VertexBuffers::new();
+
+        {
+            let mut vertex_builder = lyon_tessellation::geometry_builder::BuffersBuilder::new(&mut buffers, Ctor);
+            let mut tessellator = FillTessellator::new();
+            let result = tessellator.tessellate_path(
+                &path,
+                &lyon_tessellation::FillOptions::default(),
+                &mut vertex_builder
+            );
+            assert!(result.is_ok());
+        }
+
+        out_indices.push(buffers.indices.iter().map(|&i|i as usize + feature_offset).collect::<Box<[_]>>());
+        out_vertices.extend(buffers.vertices.iter().copied());
+        feature_offset += buffers.vertices.len();
     }
-    (vertices.into_boxed_slice(), indices.into_boxed_slice())
+
+    (names.into_boxed_slice(), out_vertices.into_boxed_slice(), out_indices.into_boxed_slice())
 }

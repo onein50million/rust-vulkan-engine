@@ -368,6 +368,7 @@ fn main() {
     //     }
     // }
     let (provinces_map, province_vertices, province_indices, province_names) = get_provinces();
+    println!("provinces gotten");
     let water_map = get_water();
     let (language_map, color_to_language_name) = get_languages();
 
@@ -379,35 +380,9 @@ fn main() {
         .sum::<f32>();
 
     dbg!(pops_underwater);
-
-    let mut vulkan_data = VulkanData::new();
-    println!("Vulkan Data created");
-    vulkan_data.init_vulkan(&window, |vulkan_data| {
-        //Planet data maps
-        let elevations_cubemap = vulkan_data.get_cubemap_from_slice(&elevations);
-        vulkan_data
-            .planet_textures
-            .push(vulkan_data.get_normal(&elevations_cubemap));
-        vulkan_data.planet_textures.push(elevations_cubemap);
-        vulkan_data
-            .planet_textures
-            .push(vulkan_data.get_cubemap_from_slice(&aridity));
-        vulkan_data
-            .planet_textures
-            .push(vulkan_data.get_cubemap_from_slice(&feb_temps));
-        vulkan_data
-            .planet_textures
-            .push(vulkan_data.get_cubemap_from_slice(&july_temps));
-        vulkan_data
-            .planet_textures
-            .push(vulkan_data.get_cubemap_from_slice(&water_map));
-    });
-    println!("Vulkan Data initialized");
-
     let planet_mesh = rust_vulkan_engine::planet_gen::get_planet(World::RADIUS as f32);
 
-    let rng = fastrand::Rng::new();
-    let mut elevations: Vec<_> = elevations
+    let mut categorized_elevations: Vec<_> = elevations
         .iter()
         .enumerate()
         .map(|(index, &elevation)| CategorizedElevation {
@@ -432,7 +407,7 @@ fn main() {
         }
         Err(_) => {
             let mut num_provinces = 0;
-            for (i, elevation_value) in elevations.iter_mut().enumerate() {
+            for (i, elevation_value) in categorized_elevations.iter_mut().enumerate() {
                 elevation_value.province_key = match provinces_map[i] {
                     None => ProvinceKeyOptions::Sea,
                     Some(key) => {
@@ -448,7 +423,7 @@ fn main() {
                     ProvinceMap(vec![ProvinceData::new(); num_provinces].into_boxed_slice());
 
                 let perlin = noise::Perlin::new();
-                for (i, categorized_elevation) in elevations.iter().enumerate() {
+                for (i, categorized_elevation) in categorized_elevations.iter().enumerate() {
                     let aridity = categorized_elevation.aridity;
                     let feb_temp = feb_temps[i] as f64;
                     let july_temp = july_temps[i] as f64;
@@ -498,21 +473,47 @@ fn main() {
             world
         }
     };
-    if let Some(line_data) = &mut vulkan_data.line_data {
-        for point in &world.points {
-            line_data.add_point(*point);
-        }
-        for province in world.provinces.0.iter() {
-            for chunk in province.point_indices.chunks(2) {
-                if chunk.len() < 2 {
-                    continue;
-                }
-                let first_point = chunk[0];
-                let second_point = chunk[1];
-                line_data.connect_points(first_point, second_point);
-            }
-        }
-    }
+    let mut vulkan_data = VulkanData::new();
+    println!("Vulkan Data created");
+    vulkan_data.init_vulkan(&window, |vulkan_data| {
+        //Planet data maps
+        let elevations_cubemap = vulkan_data.get_cubemap_from_slice(&elevations);
+        vulkan_data
+            .planet_textures
+            .push(vulkan_data.get_normal(&elevations_cubemap));
+        vulkan_data.planet_textures.push(elevations_cubemap);
+        vulkan_data
+            .planet_textures
+            .push(vulkan_data.get_cubemap_from_slice(&aridity));
+        vulkan_data
+            .planet_textures
+            .push(vulkan_data.get_cubemap_from_slice(&feb_temps));
+        vulkan_data
+            .planet_textures
+            .push(vulkan_data.get_cubemap_from_slice(&july_temps));
+        vulkan_data
+            .planet_textures
+            .push(vulkan_data.get_cubemap_from_slice(&water_map));
+        vulkan_data.create_province_data(province_vertices.iter().map(|&v|v), province_indices.0.iter().flat_map(|p|p.iter().map(|&i|i)))
+    });
+    println!("Vulkan Data initialized");
+
+
+    // if let Some(line_data) = &mut vulkan_data.line_data {
+    //     for point in &world.points {
+    //         line_data.add_point(*point);
+    //     }
+    //     for province in world.provinces.0.iter() {
+    //         for chunk in province.point_indices.chunks(2) {
+    //             if chunk.len() < 2 {
+    //                 continue;
+    //             }
+    //             let first_point = chunk[0];
+    //             let second_point = chunk[1];
+    //             line_data.connect_points(first_point, second_point);
+    //         }
+    //     }
+    // }
 
     let planet_render_object_index = VulkanData::load_vertices_and_indices(
         &mut vulkan_data,
@@ -807,7 +808,7 @@ fn main() {
                         let beliefs = &game.world.provinces[selected_province].pops.pop_slices
                             [selected_slice]
                             .beliefs;
-                        for (question, response) in beliefs.questions.iter().enumerate() {
+                        for (question, response) in beliefs.responses.iter().enumerate() {
                             let question = Beliefs::get_question(question);
                             let question_text = question.question;
                             let answer = if response.get_value() > 0.0 {
@@ -942,14 +943,14 @@ fn main() {
                             ui.label(&org.name);
 
                             ui.label(format!(
-                                "{:.2}",
+                                "{:.4}",
                                 org.province_control[selected_province_key]
                             ));
                             ui.end_row();
                         }
                         ui.label("Sum");
                         ui.label(format!(
-                            "{:.2}",
+                            "{:.4}",
                             game.world
                                 .organizations
                                 .values()
@@ -1109,10 +1110,16 @@ fn main() {
                             close_app(&mut vulkan_data, control_flow);
                         }
                         WindowEvent::CursorMoved { position, .. } => {
-                            game.mouse_position.x =
-                                -((position.x / window.inner_size().width as f64) * 2.0 - 1.0);
-                            game.mouse_position.y =
-                                -((position.y / window.inner_size().height as f64) * 2.0 - 1.0);
+                            match vulkan_data.surface_capabilities{
+                                Some(surface_capabilities) => {
+                                    game.mouse_position.x =
+                                    -((position.x / surface_capabilities.current_extent.width as f64) * 2.0 - 1.0);
+                                    game.mouse_position.y =
+                                        -((position.y / surface_capabilities.current_extent.height as f64) * 2.0 - 1.0);
+    
+                                },
+                                None => {},
+                            }
                             // println!("Position: {:?}", position);
                         }
                         WindowEvent::MouseInput { button, state, .. } => {
@@ -1278,52 +1285,75 @@ fn main() {
                     //     }
                     // }
 
-                    let selected_points =
-                        if let Some(selected_province) = game.world.selected_province {
-                            game.world.provinces[selected_province].point_indices.iter()
-                        } else {
-                            [].iter()
-                        };
-                    let targeted_points =
-                        if let Some(targeted_province) = game.world.targeted_province {
-                            game.world.provinces[targeted_province].point_indices.iter()
-                        } else {
-                            [].iter()
-                        };
-                    let mut highlighted_points: HashSet<usize> =
-                        HashSet::with_capacity(game.world.provinces.0.len());
-                    if let Some(selected_organization) = game.world.selected_organization {
-                        for (province_key, &control_factor) in game.world.organizations
-                            [selected_organization]
-                            .province_control
-                            .iter()
-                        {
-                            if control_factor > 0.5 {
-                                highlighted_points
-                                    .extend(game.world.provinces[province_key].point_indices.iter())
+                    // let selected_points =
+                    //     if let Some(selected_province) = game.world.selected_province {
+                    //         game.world.provinces[selected_province].point_indices.iter()
+                    //     } else {
+                    //         [].iter()
+                    //     };
+                    // let targeted_points =
+                    //     if let Some(targeted_province) = game.world.targeted_province {
+                    //         game.world.provinces[targeted_province].point_indices.iter()
+                    //     } else {
+                    //         [].iter()
+                    //     };
+                    // let mut highlighted_points: HashSet<usize> =
+                    //     HashSet::with_capacity(game.world.provinces.0.len());
+                    // if let Some(selected_organization) = game.world.selected_organization {
+                    //     for (province_key, &control_factor) in game.world.organizations
+                    //         [selected_organization]
+                    //         .province_control
+                    //         .iter()
+                    //     {
+                    //         if control_factor > 0.5 {
+                    //             highlighted_points
+                    //                 .extend(game.world.provinces[province_key].point_indices.iter())
+                    //         }
+                    //     }
+                    // }
+
+                    // let mut player_country_points: HashSet<usize> =
+                    //     HashSet::with_capacity(game.world.provinces.0.len());
+                    // for (province_key, province) in game.world.provinces.0.iter().enumerate() {
+                    //     let province_key = ProvinceKey(province_key);
+                    //     if game.world.organizations[game.world.player_organization].province_control
+                    //         [province_key]
+                    //         > 0.01
+                    //     {
+                    //         player_country_points.extend(province.point_indices.iter())
+                    //     }
+                    // }
+                    // if let Some(line_data) = &mut vulkan_data.line_data {
+                    //     line_data.update_selection(
+                    //         selected_points,
+                    //         highlighted_points.iter(),
+                    //         targeted_points,
+                    //         player_country_points.iter(),
+                    //     )
+                    // }
+                    if let Some(province_data) = &mut vulkan_data.province_data{
+                        for (org_key, org) in game.world.organizations.iter(){
+                            for (province, &control) in org.province_control.iter(){
+                                if control > 0.5{
+                                    for &index in &game.world.provinces[province].point_indices{
+                                        province_data.vertex_data[index].nation_index = org_key.0 as u32;
+                                        province_data.vertex_data[index].flags = 0;
+                                    }
+                                }
                             }
                         }
-                    }
-
-                    let mut player_country_points: HashSet<usize> =
-                        HashSet::with_capacity(game.world.provinces.0.len());
-                    for (province_key, province) in game.world.provinces.0.iter().enumerate() {
-                        let province_key = ProvinceKey(province_key);
-                        if game.world.organizations[game.world.player_organization].province_control
-                            [province_key]
-                            > 0.01
-                        {
-                            player_country_points.extend(province.point_indices.iter())
+                        if let Some(selected_province) = game.world.selected_province{
+                            for &index in &game.world.provinces[selected_province].point_indices{
+                                province_data.vertex_data[index].flags |= provinceflags::SELECTED;
+                            }
                         }
-                    }
-                    if let Some(line_data) = &mut vulkan_data.line_data {
-                        line_data.update_selection(
-                            selected_points,
-                            highlighted_points.iter(),
-                            targeted_points,
-                            player_country_points.iter(),
-                        )
-                    }
+                        if let Some(targeted_province) = game.world.targeted_province{
+                            for &index in &game.world.provinces[targeted_province].point_indices{
+                                province_data.vertex_data[index].flags |= provinceflags::TARGETED;
+                            }
+                        }
+                    } 
+
                     update_renderer(&game, &mut vulkan_data);
                     vulkan_data.transfer_data_to_gpu();
 
@@ -1365,7 +1395,7 @@ fn update_renderer(game: &Game, vulkan_data: &mut VulkanData) {
     vulkan_data.uniform_buffer_object.view = view_matrix.cast();
     vulkan_data.uniform_buffer_object.proj = projection_matrix.cast();
 
-    if let Some(line_data) = &mut vulkan_data.line_data {
+    if let Some(line_data) = &mut vulkan_data.province_data {
         line_data.model_view_projection =
             (projection_matrix * view_matrix * game.planet.get_transform()).cast();
     }

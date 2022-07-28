@@ -320,7 +320,7 @@ fn pick_variant_bounded<T>(
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Beliefs {
-    pub questions: [Response; QUESTIONS.len()],
+    pub responses: [Response; QUESTIONS.len()],
 }
 impl Beliefs {
     pub fn get_question<'a>(i: usize) -> &'a Question<'static> {
@@ -328,23 +328,25 @@ impl Beliefs {
     }
     pub fn new() -> Self {
         Self {
-            questions: [Response {
-                value: 0,
-                importance: 0,
+            responses: [Response {
+                value: 0.0,
+                importance: 0.0,
             }; QUESTIONS.len()],
         }
     }
     pub fn new_random() -> Self {
         let rng = fastrand::Rng::new();
         let mut questions = [Response {
-            value: 0,
-            importance: 0,
+            value: 0.0,
+            importance: 0.0,
         }; QUESTIONS.len()];
         for response in &mut questions {
-            response.value = rng.i16(..);
-            response.importance = rng.u16(..);
+            response.value = rng.f64() * 2.0 - 1.0;
+            response.importance = rng.f64();
+            // response.value = rng.i16(..);
+            // response.importance = rng.u16(..);
         }
-        Self { questions }
+        Self { responses: questions }
     }
     pub fn to_ideology(&self, majority_language: LanguageKey) -> Ideology {
         let tax_rate;
@@ -372,14 +374,14 @@ impl Beliefs {
         let welfare_support;
 
         {
-            let response = self.questions[TAX_QUESTION];
+            let response = self.responses[TAX_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
             tax_rate = pick_variant(value, &[TaxRate::Low, TaxRate::Medium, TaxRate::High])
         }
         {
-            let response = self.questions[TAX_METHOD_QUESTION];
+            let response = self.responses[TAX_METHOD_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -393,7 +395,7 @@ impl Beliefs {
             )
         }
         {
-            let response = self.questions[TARIFF_QUESTION];
+            let response = self.responses[TARIFF_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -419,7 +421,7 @@ impl Beliefs {
             )
         }
         {
-            let response = self.questions[SEP_QUESTION];
+            let response = self.responses[SEP_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -432,7 +434,7 @@ impl Beliefs {
             )
         }
         {
-            let response = self.questions[WELF_QUESTION];
+            let response = self.responses[WELF_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -447,7 +449,7 @@ impl Beliefs {
             )
         }
         {
-            let response = self.questions[RD_QUESTION];
+            let response = self.responses[RD_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -462,7 +464,7 @@ impl Beliefs {
             )
         }
         {
-            let response = self.questions[IMM_ED_QUESTION];
+            let response = self.responses[IMM_ED_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -477,7 +479,7 @@ impl Beliefs {
             }
         }
         {
-            let response = self.questions[IMM_LANG_QUESTION];
+            let response = self.responses[IMM_LANG_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -492,7 +494,7 @@ impl Beliefs {
             }
         }
         {
-            let response = self.questions[IMM_UNL_QUESTION];
+            let response = self.responses[IMM_UNL_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -507,7 +509,7 @@ impl Beliefs {
             }
         }
         {
-            let response = self.questions[ASSIM_QUESTION];
+            let response = self.responses[ASSIM_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -522,7 +524,7 @@ impl Beliefs {
             }
         }
         {
-            let response = self.questions[ASSIM_SYST_QUESTION];
+            let response = self.responses[ASSIM_SYST_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -537,7 +539,7 @@ impl Beliefs {
             }
         }
         {
-            let response = self.questions[ASSIM_GENO_QUESTION];
+            let response = self.responses[ASSIM_GENO_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -552,7 +554,7 @@ impl Beliefs {
             }
         }
         {
-            let response = self.questions[WAR_QUESTION];
+            let response = self.responses[WAR_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -567,7 +569,7 @@ impl Beliefs {
             }
         }
         {
-            let response = self.questions[WAR_LAST_QUESTION];
+            let response = self.responses[WAR_LAST_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -582,7 +584,7 @@ impl Beliefs {
             }
         }
         {
-            let response = self.questions[WAR_NEVER_QUESTION];
+            let response = self.responses[WAR_NEVER_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -597,7 +599,7 @@ impl Beliefs {
             }
         }
         {
-            let response = self.questions[IRRED_QUESTION];
+            let response = self.responses[IRRED_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -612,7 +614,7 @@ impl Beliefs {
             }
         }
         {
-            let response = self.questions[IRRED_LEBEN_QUESTION];
+            let response = self.responses[IRRED_LEBEN_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -627,7 +629,7 @@ impl Beliefs {
             }
         }
         {
-            let response = self.questions[LANG_SUP_QUESTION];
+            let response = self.responses[LANG_SUP_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -642,7 +644,7 @@ impl Beliefs {
             }
         }
         {
-            let response = self.questions[LANG_EQ_QUESTION];
+            let response = self.responses[LANG_EQ_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -657,7 +659,7 @@ impl Beliefs {
             }
         }
         {
-            let response = self.questions[LANG_REV_QUESTION];
+            let response = self.responses[LANG_REV_QUESTION];
             let value = response.get_value();
             let importance = response.get_importance();
 
@@ -705,16 +707,31 @@ impl Beliefs {
 //     }
 // }
 
+// #[derive(Debug, Deserialize, Serialize, Clone, Copy)]
+// pub struct Response {
+//     value: i16,
+//     importance: u16,
+// }
+// impl Response {
+//     pub fn get_value(&self) -> f64 {
+//         self.value as f64 / i16::MAX as f64
+//     }
+//     pub fn get_importance(&self) -> f64 {
+//         ((self.importance as f64 / u16::MAX as f64) * 4.0).powf(3.0)
+//     }
+// }
+
+
 #[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 pub struct Response {
-    value: i16,
-    importance: u16,
+    value: f64,
+    importance: f64,
 }
 impl Response {
     pub fn get_value(&self) -> f64 {
-        self.value as f64 / i16::MAX as f64
+        self.value
     }
     pub fn get_importance(&self) -> f64 {
-        ((self.importance as f64 / u16::MAX as f64) * 4.0).powf(3.0)
+        self.importance
     }
 }

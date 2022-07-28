@@ -950,9 +950,9 @@ impl Drawable for Cubemap {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-struct LineVertex {
+struct ProvinceVertex {
     position: Vector3<f32>,
-    color: Vector4<f32>,
+    // color: Vector4<f32>,
 }
 
 pub struct MappedBufferIterator<T> {
@@ -1121,6 +1121,9 @@ impl<T> MappedBuffer<T> {
         }
         self.count += 1;
     }
+    fn len(&self) -> usize{
+        self.count
+    }
 }
 
 impl<T> Index<usize> for MappedBuffer<T> {
@@ -1189,55 +1192,38 @@ impl<'a, T> IntoIterator for &'a mut MappedBuffer<T> {
 }
 
 #[allow(unused)]
-struct LinePushConstants {
+struct ProvinceDrawPushConstants {
     model_view_projection: Matrix4<f32>,
 }
 
-pub struct LineDrawData {
-    vertex_buffer: MappedBuffer<LineVertex>,
-    index_buffer: MappedBuffer<u32>,
-    index_map: HashSet<(usize, usize)>,
+#[repr(C)]
+pub struct ProvinceDrawVertexData{
+    pub flags: u32,
+    pub nation_index: u32
+}
+
+pub struct ProvinceDrawData {
+    vertex_buffer: UnmappedBuffer<ProvinceVertex>,
+    index_buffer: UnmappedBuffer<u32>,
+    pub vertex_data: MappedBuffer<ProvinceDrawVertexData>,
     pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     descriptor_sets: Vec<vk::DescriptorSet>,
     pub model_view_projection: Matrix4<f32>,
-    selected_points: Vec<usize>,
-    highlighted_points: Vec<usize>,
 }
-impl LineDrawData {
-    fn new(vulkan_data: &VulkanData) -> Self {
+impl ProvinceDrawData {
+    fn new(vulkan_data: &VulkanData, vertices: &[ProvinceVertex], indices: &[u32]) -> Self {
         let vertex_buffer = {
-            let buffer_info = vk::BufferCreateInfoBuilder::new()
-                .size((LINE_DATA_BUFFER_MAX_LENGTH * size_of::<LineVertex>()) as u64)
-                .usage(vk::BufferUsageFlags::VERTEX_BUFFER);
-            let allocation_info = vk_mem_erupt::AllocationCreateInfo {
-                usage: vk_mem_erupt::MemoryUsage::CpuToGpu,
-                flags: vk_mem_erupt::AllocationCreateFlags::MAPPED,
-                required_flags: vk::MemoryPropertyFlags::empty(),
-                preferred_flags: vk::MemoryPropertyFlags::empty(),
-                memory_type_bits: u32::MAX,
-                pool: None,
-                user_data: None,
-            };
-
-            let (buffer, allocation, allocation_info) = vulkan_data
-                .allocator
-                .as_ref()
-                .unwrap()
-                .create_buffer(&buffer_info, &allocation_info)
-                .expect("Line Vertex Data Creation failed");
-            MappedBuffer {
-                buffer,
-                count: 0,
-                allocation,
-                allocation_info,
-                phantom: PhantomData,
-            }
+            UnmappedBuffer::new(vulkan_data, vk::BufferUsageFlags::VERTEX_BUFFER, vertices)
         };
         let index_buffer = {
+            UnmappedBuffer::new(vulkan_data, vk::BufferUsageFlags::INDEX_BUFFER, indices)
+        };
+
+        let vertex_data = {
             let buffer_info = vk::BufferCreateInfoBuilder::new()
-                .size((LINE_DATA_BUFFER_MAX_LENGTH * size_of::<u32>()) as u64)
-                .usage(vk::BufferUsageFlags::INDEX_BUFFER);
+                .size((vertices.len() * size_of::<ProvinceDrawVertexData>()) as u64)
+                .usage(vk::BufferUsageFlags::STORAGE_BUFFER);
             let allocation_info = vk_mem_erupt::AllocationCreateInfo {
                 usage: vk_mem_erupt::MemoryUsage::CpuToGpu,
                 flags: vk_mem_erupt::AllocationCreateFlags::MAPPED,
@@ -1253,37 +1239,46 @@ impl LineDrawData {
                 .as_ref()
                 .unwrap()
                 .create_buffer(&buffer_info, &allocation_info)
-                .expect("Line Index Data Creation failed");
-            MappedBuffer {
+                .expect("Flag Buffer failed to allocate");
+            let mut flag_buffer = MappedBuffer {
                 buffer,
                 count: 0,
                 allocation,
                 allocation_info,
                 phantom: PhantomData,
+            };
+            for _ in 0..vertices.len(){
+                flag_buffer.add_value(ProvinceDrawVertexData { flags: 0, nation_index: 0});
             }
+            flag_buffer
         };
 
-        let (descriptor_sets, set_layouts) = Self::create_descriptor_sets(vulkan_data);
+        let (descriptor_sets, set_layouts) = Self::create_descriptor_sets(vulkan_data, &vertex_data);
         let pipeline_layout = Self::create_pipeline_layout(vulkan_data, &set_layouts);
         let pipeline = Self::create_pipeline(vulkan_data, pipeline_layout);
 
         Self {
             vertex_buffer,
             index_buffer,
+            vertex_data,
             pipeline,
             descriptor_sets,
             pipeline_layout,
-            index_map: HashSet::new(),
             model_view_projection: Matrix4::identity(),
-            selected_points: vec![],
-            highlighted_points: vec![],
+            
         }
     }
 
-    fn create_descriptor_sets(
-        vulkan_data: &VulkanData,
+    fn create_descriptor_sets(vulkan_data: &VulkanData,
+        vertex_data: &MappedBuffer<ProvinceDrawVertexData>,
     ) -> (Vec<vk::DescriptorSet>, Vec<vk::DescriptorSetLayout>) {
-        let bindings = [];
+        let bindings = [
+            vk::DescriptorSetLayoutBindingBuilder::new()
+            .binding(0)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+        ];
         let layout_info = vk::DescriptorSetLayoutCreateInfoBuilder::new().bindings(&bindings);
 
         let descriptor_set_layout = unsafe {
@@ -1300,16 +1295,36 @@ impl LineDrawData {
         let allocate_info = vk::DescriptorSetAllocateInfoBuilder::new()
             .descriptor_pool(vulkan_data.descriptor_pool.unwrap())
             .set_layouts(&layouts);
+        let descriptor_sets = unsafe {
+            vulkan_data
+                .device
+                .as_ref()
+                .unwrap()
+                .allocate_descriptor_sets(&allocate_info)
+        }
+        .unwrap()
+        .to_vec();
+
+        // let mut descriptor_writes = vec![];
+        let buffer_infos = vec![
+            vk::DescriptorBufferInfoBuilder::new()
+            .buffer(vertex_data.buffer)
+            .offset(0)
+            .range((vertex_data.len() * size_of::<ProvinceDrawVertexData>()) as u64)
+        ];
+        let buffer_info = &[buffer_infos[0]];
+        let descriptor_writes = vec![
+            vk::WriteDescriptorSetBuilder::new()
+                .dst_set(descriptor_sets[0])
+                .dst_binding(0)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(buffer_info)];
+        unsafe{
+            vulkan_data.device.as_ref().unwrap().update_descriptor_sets(&descriptor_writes, &[]);
+        }
         (
-            unsafe {
-                vulkan_data
-                    .device
-                    .as_ref()
-                    .unwrap()
-                    .allocate_descriptor_sets(&allocate_info)
-            }
-            .unwrap()
-            .to_vec(),
+            descriptor_sets,
             layouts.into_iter().collect(),
         )
     }
@@ -1320,7 +1335,7 @@ impl LineDrawData {
     ) -> vk::PipelineLayout {
         let push_constant_range = vk::PushConstantRangeBuilder::new()
             .offset(0)
-            .size(std::mem::size_of::<LinePushConstants>() as u32)
+            .size(std::mem::size_of::<ProvinceDrawPushConstants>() as u32)
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
         let push_constant_ranges = [push_constant_range];
 
@@ -1344,7 +1359,7 @@ impl LineDrawData {
     ) -> vk::Pipeline {
         let binding_descriptions = vec![vk::VertexInputBindingDescriptionBuilder::new()
             .binding(0)
-            .stride(std::mem::size_of::<LineVertex>() as u32)
+            .stride(std::mem::size_of::<ProvinceVertex>() as u32)
             .input_rate(vk::VertexInputRate::VERTEX)];
         let attribute_descriptions = vec![
             vk::VertexInputAttributeDescriptionBuilder::new()
@@ -1352,18 +1367,18 @@ impl LineDrawData {
                 .location(0)
                 .format(vk::Format::R32G32B32_SFLOAT)
                 .offset(0),
-            vk::VertexInputAttributeDescriptionBuilder::new()
-                .binding(0)
-                .location(1)
-                .format(vk::Format::R32G32B32A32_SFLOAT)
-                .offset(12),
+            // vk::VertexInputAttributeDescriptionBuilder::new()
+            //     .binding(0)
+            //     .location(1)
+            //     .format(vk::Format::R32G32B32A32_SFLOAT)
+            //     .offset(12),
         ];
         let vertex_input_create_info = vk::PipelineVertexInputStateCreateInfoBuilder::new()
             .vertex_binding_descriptions(&binding_descriptions)
             .vertex_attribute_descriptions(&attribute_descriptions);
 
         let input_assembly_create_info = vk::PipelineInputAssemblyStateCreateInfoBuilder::new()
-            .topology(vk::PrimitiveTopology::LINE_LIST)
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
             .primitive_restart_enable(false);
         let viewport = vk::ViewportBuilder::new()
             .x(0.0f32)
@@ -1404,7 +1419,8 @@ impl LineDrawData {
             .polygon_mode(vk::PolygonMode::FILL)
             .cull_mode(vk::CullModeFlags::NONE)
             .front_face(vk::FrontFace::CLOCKWISE)
-            .depth_bias_enable(false)
+            .depth_bias_enable(true)
+            .depth_bias_constant_factor(0.1)
             .line_width(LINE_WIDTH)
             .extend_from(&line_raster);
 
@@ -1432,8 +1448,8 @@ impl LineDrawData {
         let vert_entry_string = CString::new("main").unwrap();
         let frag_entry_string = CString::new("main").unwrap();
 
-        let vert_shader_file = std::fs::read("shaders/line/vert.spv").unwrap();
-        let frag_shader_file = std::fs::read("shaders/line/frag.spv").unwrap();
+        let vert_shader_file = std::fs::read("shaders/province/vert.spv").unwrap();
+        let frag_shader_file = std::fs::read("shaders/province/frag.spv").unwrap();
         let vert_shader_code = erupt::utils::decode_spv(&vert_shader_file).unwrap();
         let frag_shader_code = erupt::utils::decode_spv(&frag_shader_file).unwrap();
         let vert_shader_module = VulkanData::create_shader_module(
@@ -1458,7 +1474,7 @@ impl LineDrawData {
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfoBuilder::new()
             .depth_test_enable(true)
             .depth_write_enable(true)
-            .depth_compare_op(vk::CompareOp::ALWAYS)
+            .depth_compare_op(vk::CompareOp::LESS)
             .depth_bounds_test_enable(false)
             .min_depth_bounds(0.0)
             .max_depth_bounds(1.0)
@@ -1492,43 +1508,43 @@ impl LineDrawData {
         pipeline
     }
 
-    pub fn add_point(&mut self, point: Vector3<f32>) -> usize {
-        self.vertex_buffer.add_value(LineVertex {
-            position: point,
-            color: Vector4::new(1.0, 1.0, 1.0, 0.1),
-        });
-        self.vertex_buffer.count - 1
-    }
+    // pub fn add_point(&mut self, point: Vector3<f32>) -> usize {
+    //     self.vertex_buffer.add_value(ProvinceVertex {
+    //         position: point,
+    //         color: Vector4::new(1.0, 1.0, 1.0, 0.1),
+    //     });
+    //     self.vertex_buffer.count - 1
+    // }
 
-    pub fn update_selection<
-        'a,
-        I: Iterator<Item = &'a usize>,
-        J: Iterator<Item = &'a usize>,
-        K: Iterator<Item = &'a usize>,
-        L: Iterator<Item = &'a usize>,
-    >(
-        &mut self,
-        selected_point_indices: I,
-        highlighted_point_indices: J,
-        targeted_point_indices: K,
-        player_country_point_indices: L,
-    ) {
-        for point in &mut self.vertex_buffer {
-            point.color = Vector4::new(0.0, 0.0, 0.0, 0.0);
-        }
-        for &index in player_country_point_indices {
-            self.vertex_buffer[index].color = Vector4::new(0.1, 0.9, 0.1, 1.0);
-        }
-        for &index in highlighted_point_indices {
-            self.vertex_buffer[index].color = Vector4::new(1.0, 1.0, 1.0, 0.1);
-        }
-        for &index in selected_point_indices {
-            self.vertex_buffer[index].color = Vector4::new(1.0, 1.0, 1.0, 1.0);
-        }
-        for &index in targeted_point_indices {
-            self.vertex_buffer[index].color = Vector4::new(0.8, 0.1, 0.1, 1.0);
-        }
-    }
+    // pub fn update_selection<
+    //     'a,
+    //     I: Iterator<Item = &'a usize>,
+    //     J: Iterator<Item = &'a usize>,
+    //     K: Iterator<Item = &'a usize>,
+    //     L: Iterator<Item = &'a usize>,
+    // >(
+    //     &mut self,
+    //     selected_point_indices: I,
+    //     highlighted_point_indices: J,
+    //     targeted_point_indices: K,
+    //     player_country_point_indices: L,
+    // ) {
+    //     for point in &mut self.vertex_buffer {
+    //         point.color = Vector4::new(0.0, 0.0, 0.0, 0.0);
+    //     }
+    //     for &index in player_country_point_indices {
+    //         self.vertex_buffer[index].color = Vector4::new(0.1, 0.9, 0.1, 1.0);
+    //     }
+    //     for &index in highlighted_point_indices {
+    //         self.vertex_buffer[index].color = Vector4::new(1.0, 1.0, 1.0, 0.1);
+    //     }
+    //     for &index in selected_point_indices {
+    //         self.vertex_buffer[index].color = Vector4::new(1.0, 1.0, 1.0, 1.0);
+    //     }
+    //     for &index in targeted_point_indices {
+    //         self.vertex_buffer[index].color = Vector4::new(0.8, 0.1, 0.1, 1.0);
+    //     }
+    // }
 
     // pub fn select_points(&mut self, point_indices: &[usize]) {
     //     // self.index_buffer.count = 0;
@@ -1558,13 +1574,13 @@ impl LineDrawData {
 
     // }
 
-    pub fn connect_points(&mut self, first_index: usize, second_index: usize) {
-        if !self.index_map.insert((first_index, second_index)) {
-            return;
-        }
-        self.index_buffer.add_value(first_index as u32);
-        self.index_buffer.add_value(second_index as u32);
-    }
+    // pub fn connect_points(&mut self, first_index: usize, second_index: usize) {
+    //     if !self.index_map.insert((first_index, second_index)) {
+    //         return;
+    //     }
+    //     self.index_buffer.add_value(first_index as u32);
+    //     self.index_buffer.add_value(second_index as u32);
+    // }
 }
 
 //TODO: Clean this up, maybe split it into multiple structs so it's less of a mess
@@ -1579,7 +1595,7 @@ pub struct VulkanData {
     main_queue_index: Option<u32>,
     surface: Option<vk::SurfaceKHR>,
     surface_format: Option<vk::SurfaceFormatKHR>,
-    pub(crate) surface_capabilities: Option<vk::SurfaceCapabilitiesKHR>,
+    pub surface_capabilities: Option<vk::SurfaceCapabilitiesKHR>,
     swapchain_created: bool,
     swapchain: Option<vk::SwapchainKHR>,
     swapchain_images: SmallVec<vk::Image>,
@@ -1603,7 +1619,7 @@ pub struct VulkanData {
     in_flight_fence: Option<vk::Fence>,
     vertex_buffer: Option<vk::Buffer>,
     vertex_buffer_memory: Option<vk::DeviceMemory>,
-    pub line_data: Option<LineDrawData>,
+    pub province_data: Option<ProvinceDrawData>,
     pub ui_data: UiData,
     index_buffer: Option<vk::Buffer>,
     index_buffer_memory: Option<vk::DeviceMemory>,
@@ -1725,7 +1741,7 @@ impl VulkanData {
             in_flight_fence: None,
             vertex_buffer: None,
             vertex_buffer_memory: None,
-            line_data: None,
+            province_data: None,
             ui_data: UiData {
                 vertex_buffer: None,
                 vertex_allocation: None,
@@ -1790,7 +1806,7 @@ impl VulkanData {
     {
         let mut validation_layer_names = vec![];
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature="validation-layers")]
         validation_layer_names.push(erupt::cstr!("VK_LAYER_KHRONOS_validation"));
 
         self.entry = Some(erupt::EntryLoader::new().unwrap());
@@ -2029,7 +2045,6 @@ impl VulkanData {
 
         println!("Creating Descriptor pools");
         self.create_descriptor_pool();
-        self.create_line_data();
 
         // println!("Running test compute shader");
         // self.run_test_shader();
@@ -3997,9 +4012,13 @@ impl VulkanData {
         };
     }
 
-    fn create_line_data(&mut self) {
-        let line_data = LineDrawData::new(self);
-        self.line_data = Some(line_data);
+    pub fn create_province_data(&mut self, vertices: impl Iterator<Item = Vector3<f32>>, indices: impl Iterator<Item = usize>) {
+        let province_data = ProvinceDrawData::new(self, &vertices.map(|v|{
+            ProvinceVertex{
+                position: v.cast(),
+            }
+        }).collect::<Box<[_]>>(), &indices.map(|i|i as u32).collect::<Box<[_]>>());
+        self.province_data = Some(province_data);
     }
 
     pub fn update_vertex_and_index_buffers(&mut self) {
@@ -4985,7 +5004,7 @@ impl VulkanData {
                 };
 
                 //Probably should move this into it's own method
-                if let Some(line_data) = &self.line_data {
+                if let Some(line_data) = &self.province_data {
                     unsafe {
                         self.device.as_ref().unwrap().cmd_bind_pipeline(
                             *command_buffer,
@@ -5019,15 +5038,23 @@ impl VulkanData {
                             .as_ref()
                             .unwrap()
                             .cmd_set_line_width(*command_buffer, LINE_WIDTH);
-                        let push_constant = LinePushConstants {
+                        let push_constant = ProvinceDrawPushConstants {
                             model_view_projection: line_data.model_view_projection,
                         };
+                        self.device.as_ref().unwrap().cmd_bind_descriptor_sets(
+                            *command_buffer,
+                            vk::PipelineBindPoint::COMPUTE,
+                            self.pipeline_layout.unwrap(),
+                            0,
+                            &self.descriptor_sets.as_ref().unwrap(),
+                            &[],
+                        );
                         self.device.as_ref().unwrap().cmd_push_constants(
                             *command_buffer,
                             line_data.pipeline_layout,
                             vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                             0,
-                            size_of::<LinePushConstants>() as u32,
+                            size_of::<ProvinceDrawPushConstants>() as u32,
                             &push_constant as *const _ as *const c_void,
                         );
                         self.device.as_ref().unwrap().cmd_draw_indexed(
@@ -5135,10 +5162,10 @@ impl VulkanData {
 
         self.create_compute_pipelines();
         self.create_ui_pipeline();
-        if self.line_data.is_some() {
-            self.line_data.as_mut().unwrap().pipeline = LineDrawData::create_pipeline(
+        if self.province_data.is_some() {
+            self.province_data.as_mut().unwrap().pipeline = ProvinceDrawData::create_pipeline(
                 self,
-                self.line_data.as_ref().unwrap().pipeline_layout,
+                self.province_data.as_ref().unwrap().pipeline_layout,
             );
         }
         self.create_command_buffers();
@@ -5983,7 +6010,7 @@ impl VulkanData {
                 .unwrap()
                 .destroy_pipeline(self.ui_data.pipeline, None);
 
-            if let Some(line_data) = &self.line_data {
+            if let Some(line_data) = &self.province_data {
                 self.device
                     .as_ref()
                     .unwrap()

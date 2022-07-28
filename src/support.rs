@@ -54,6 +54,11 @@ pub(crate) mod flags {
     pub(crate) const IS_VIEW_PROJ_MATRIX_IGNORED: u32 = 0b10000;
 }
 
+pub mod provinceflags {
+    pub const SELECTED: u32 = 0b1;
+    pub const TARGETED: u32 = 0b10;
+}
+
 pub mod map_modes {
     pub const SATELITE: u8 = 0;
     pub const PAPER: u8 = 1;

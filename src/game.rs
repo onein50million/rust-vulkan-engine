@@ -12,6 +12,7 @@ Client predicted: Uses client side prediction to reduce latency
 Client only (Animations, particles)
  */
 const GAME_SPEEDS: [f64; 5] = [0.0, 1.0, 24.0, 24.0 * 7.0, 24.0 * 30.0];
+// const GAME_SPEEDS: [f64; 5] = [0.0, 182.5*24.0, 24.0, 24.0 * 7.0, 24.0 * 30.0];
 
 pub mod directions {
     use nalgebra::Vector3;
