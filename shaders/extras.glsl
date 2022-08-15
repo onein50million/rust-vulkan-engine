@@ -11,7 +11,7 @@ const int NUM_RANDOM = 100;
 const int NUM_LIGHTS = 2;
 const int NUM_MODELS = 1000;
 const int NUM_BONES_PER_BONESET = 256;
-const int NUM_BONE_SETS = 256;
+const int NUM_BONE_SETS = 2048;
 const float PI = 3.14159;
 
 const int IS_CUBEMAP = 1;
@@ -28,7 +28,8 @@ layout(push_constant) uniform PushConstants{
     mat4 model;
     int texture_index;
     uint bitfield; //32 bits, LSB is cubemap flag
-    uint animation_frames; // u8 previous_frame, u8 next_frame, u16 UNORM progress
+    uint animation_progress;
+    uint animation_frames; //two u16 packed
 } pushConstant;
 
 

@@ -1,7 +1,7 @@
-use crate::support::Inputs;
+use bincode::{Decode, Encode};
+use nalgebra::{Vector2, Vector3};
 
-use serde::{Deserialize, Serialize};
-
+use crate::{game::{GameTick, PlayerKey, PlayerState}, support::Inputs};
 /*
 Client requests Connection
 Server Accepts connection
@@ -21,32 +21,71 @@ loop {
 //     GenericFail
 // }
 
+pub const NETWORK_TICKRATE: f64 = 100.0;
+
 #[derive(Copy, Clone, Debug)]
 pub enum ClientState {
     Disconnected,
     ConnectionAwaiting,
     Connected,
+    TimedOut,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum Packet {
-    RequestConnect { username: String },
-    RequestAccepted,
-    RequestDenied,
-    RequestGameWorld,
-    Input(Inputs),
+#[derive(Encode, Decode, Clone, Debug)]
+pub enum ClientToServerPacket {
+    RequestConnect {
+        username: String,
+    },
+    Input {
+        inputs: Inputs,
+        tick_sent: f64,
+    },
 }
 
-impl Packet {
+impl ClientToServerPacket {
     pub fn to_bytes(&self) -> Vec<u8> {
         let config = bincode::config::standard().with_big_endian();
 
-        bincode::serde::encode_to_vec(self, config).unwrap()
+        bincode::encode_to_vec(self, config).unwrap()
     }
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         let config = bincode::config::standard().with_big_endian();
 
-        match bincode::serde::decode_from_slice(bytes, config) {
+        match bincode::decode_from_slice(bytes, config) {
+            Err(_) => {
+                println!("Invalid packet");
+                None
+            }
+            Ok(result) => Some(result.0),
+        }
+    }
+}
+#[derive(Encode, Decode, Clone, Debug)]
+pub struct NetworkPlayer {
+    name: String,
+}
+
+#[derive(Encode, Decode, Clone, Debug)]
+pub enum ServerToClientPacket {
+    RequestAccepted(GameTick, PlayerKey, usize),
+    RequestDenied,
+    PlayerUpdate {
+        key: PlayerKey,
+        player_state: PlayerState,
+        last_client_input: f64,
+    },
+}
+impl ServerToClientPacket {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let config = bincode::config::standard().with_big_endian();
+
+        let out = bincode::encode_to_vec(self, config).unwrap();
+        out
+    }
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let config = bincode::config::standard().with_big_endian();
+
+        match bincode::decode_from_slice(bytes, config) {
             Err(_) => {
                 println!("Invalid packet");
                 None

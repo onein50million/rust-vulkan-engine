@@ -1,19 +1,22 @@
 use crate::cube::*;
 use crate::support::*;
-use crate::world::World;
 use erupt::extensions;
 use erupt::vk::{DescriptorBufferInfoBuilder, DescriptorImageInfoBuilder};
 
 use erupt::{vk, DeviceLoader, EntryLoader, ExtendableFromConst, InstanceLoader, SmallVec};
 
+use gltf::Node;
 use gltf::animation::util::{ReadOutputs, Rotations};
 
 use image::{GenericImageView, ImageFormat};
 
+use nalgebra::Reflection3;
+use nalgebra::UnitVector3;
 use nalgebra::{
     Matrix4, Point3, Quaternion, Scale3, Translation3, UnitQuaternion, Vector2, Vector3, Vector4,
 };
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryInto;
 use std::default::Default;
@@ -711,11 +714,13 @@ impl TextureSet {
     }
 }
 
-pub(crate) struct AnimationObject {
-    pub(crate) frame_start: usize,
-    pub(crate) frame_count: usize,
+#[derive(Clone)]
+pub struct AnimationObject {
+    pub frame_start: usize,
+    pub frame_count: usize,
 }
 
+#[derive(Clone)]
 pub struct RenderObject {
     pub(crate) vertex_start: u32,
     pub(crate) vertex_count: u32,
@@ -728,7 +733,7 @@ pub struct RenderObject {
     pub(crate) is_view_proj_matrix_ignored: bool,
     pub(crate) is_viewmodel: bool,
     pub model: Matrix4<f32>,
-    pub(crate) animations: Vec<AnimationObject>,
+    pub animations: Vec<AnimationObject>,
     previous_frame: usize,
     next_frame: usize,
     animation_progress: f64,
@@ -848,16 +853,15 @@ impl Drawable for RenderObject {
             } else {
                 0
             };
-            let previous_frame = (self.previous_frame as u8).to_be_bytes();
-            let next_frame = (self.next_frame as u8).to_be_bytes();
+            let previous_frame = (self.previous_frame as u16).to_be_bytes();
+            let next_frame = (self.next_frame as u16).to_be_bytes();
 
             let animation_progress =
-                ((self.animation_progress * u16::MAX as f64) as u16).to_be_bytes();
+                (self.animation_progress * u32::MAX as f64) as u32;
 
             let animation_bytes = [
-                &previous_frame[..],
                 &next_frame[..],
-                &animation_progress[..],
+                &previous_frame[..],
             ]
             .concat();
 
@@ -865,6 +869,7 @@ impl Drawable for RenderObject {
                 model: self.model,
                 texture_index,
                 bitfield,
+                animation_progress,
                 animation_frames: u32::from_be_bytes(animation_bytes.try_into().unwrap()),
             };
             device.cmd_push_constants(
@@ -948,13 +953,6 @@ impl Drawable for Cubemap {
             .draw(device, command_buffer, pipeline_layout);
     }
 }
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-struct ProvinceVertex {
-    position: Vector3<f32>,
-    // color: Vector4<f32>,
-}
-
 pub struct MappedBufferIterator<T> {
     ptr: *const T,
     end: *const T,
@@ -1121,7 +1119,7 @@ impl<T> MappedBuffer<T> {
         }
         self.count += 1;
     }
-    fn len(&self) -> usize{
+    fn len(&self) -> usize {
         self.count
     }
 }
@@ -1191,398 +1189,6 @@ impl<'a, T> IntoIterator for &'a mut MappedBuffer<T> {
     }
 }
 
-#[allow(unused)]
-struct ProvinceDrawPushConstants {
-    model_view_projection: Matrix4<f32>,
-}
-
-#[repr(C)]
-pub struct ProvinceDrawVertexData{
-    pub flags: u32,
-    pub nation_index: u32
-}
-
-pub struct ProvinceDrawData {
-    vertex_buffer: UnmappedBuffer<ProvinceVertex>,
-    index_buffer: UnmappedBuffer<u32>,
-    pub vertex_data: MappedBuffer<ProvinceDrawVertexData>,
-    pipeline: vk::Pipeline,
-    pipeline_layout: vk::PipelineLayout,
-    descriptor_sets: Vec<vk::DescriptorSet>,
-    pub model_view_projection: Matrix4<f32>,
-}
-impl ProvinceDrawData {
-    fn new(vulkan_data: &VulkanData, vertices: &[ProvinceVertex], indices: &[u32]) -> Self {
-        let vertex_buffer = {
-            UnmappedBuffer::new(vulkan_data, vk::BufferUsageFlags::VERTEX_BUFFER, vertices)
-        };
-        let index_buffer = {
-            UnmappedBuffer::new(vulkan_data, vk::BufferUsageFlags::INDEX_BUFFER, indices)
-        };
-
-        let vertex_data = {
-            let buffer_info = vk::BufferCreateInfoBuilder::new()
-                .size((vertices.len() * size_of::<ProvinceDrawVertexData>()) as u64)
-                .usage(vk::BufferUsageFlags::STORAGE_BUFFER);
-            let allocation_info = vk_mem_erupt::AllocationCreateInfo {
-                usage: vk_mem_erupt::MemoryUsage::CpuToGpu,
-                flags: vk_mem_erupt::AllocationCreateFlags::MAPPED,
-                required_flags: vk::MemoryPropertyFlags::empty(),
-                preferred_flags: vk::MemoryPropertyFlags::empty(),
-                memory_type_bits: u32::MAX,
-                pool: None,
-                user_data: None,
-            };
-
-            let (buffer, allocation, allocation_info) = vulkan_data
-                .allocator
-                .as_ref()
-                .unwrap()
-                .create_buffer(&buffer_info, &allocation_info)
-                .expect("Flag Buffer failed to allocate");
-            let mut flag_buffer = MappedBuffer {
-                buffer,
-                count: 0,
-                allocation,
-                allocation_info,
-                phantom: PhantomData,
-            };
-            for _ in 0..vertices.len(){
-                flag_buffer.add_value(ProvinceDrawVertexData { flags: 0, nation_index: 0});
-            }
-            flag_buffer
-        };
-
-        let (descriptor_sets, set_layouts) = Self::create_descriptor_sets(vulkan_data, &vertex_data);
-        let pipeline_layout = Self::create_pipeline_layout(vulkan_data, &set_layouts);
-        let pipeline = Self::create_pipeline(vulkan_data, pipeline_layout);
-
-        Self {
-            vertex_buffer,
-            index_buffer,
-            vertex_data,
-            pipeline,
-            descriptor_sets,
-            pipeline_layout,
-            model_view_projection: Matrix4::identity(),
-            
-        }
-    }
-
-    fn create_descriptor_sets(vulkan_data: &VulkanData,
-        vertex_data: &MappedBuffer<ProvinceDrawVertexData>,
-    ) -> (Vec<vk::DescriptorSet>, Vec<vk::DescriptorSetLayout>) {
-        let bindings = [
-            vk::DescriptorSetLayoutBindingBuilder::new()
-            .binding(0)
-            .descriptor_count(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-        ];
-        let layout_info = vk::DescriptorSetLayoutCreateInfoBuilder::new().bindings(&bindings);
-
-        let descriptor_set_layout = unsafe {
-            vulkan_data
-                .device
-                .as_ref()
-                .unwrap()
-                .create_descriptor_set_layout(&layout_info, None)
-        }
-        .unwrap();
-        let set_layout = descriptor_set_layout;
-
-        let layouts = [set_layout];
-        let allocate_info = vk::DescriptorSetAllocateInfoBuilder::new()
-            .descriptor_pool(vulkan_data.descriptor_pool.unwrap())
-            .set_layouts(&layouts);
-        let descriptor_sets = unsafe {
-            vulkan_data
-                .device
-                .as_ref()
-                .unwrap()
-                .allocate_descriptor_sets(&allocate_info)
-        }
-        .unwrap()
-        .to_vec();
-
-        // let mut descriptor_writes = vec![];
-        let buffer_infos = vec![
-            vk::DescriptorBufferInfoBuilder::new()
-            .buffer(vertex_data.buffer)
-            .offset(0)
-            .range((vertex_data.len() * size_of::<ProvinceDrawVertexData>()) as u64)
-        ];
-        let buffer_info = &[buffer_infos[0]];
-        let descriptor_writes = vec![
-            vk::WriteDescriptorSetBuilder::new()
-                .dst_set(descriptor_sets[0])
-                .dst_binding(0)
-                .dst_array_element(0)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(buffer_info)];
-        unsafe{
-            vulkan_data.device.as_ref().unwrap().update_descriptor_sets(&descriptor_writes, &[]);
-        }
-        (
-            descriptor_sets,
-            layouts.into_iter().collect(),
-        )
-    }
-
-    fn create_pipeline_layout(
-        vulkan_data: &VulkanData,
-        descriptor_set_layouts: &[vk::DescriptorSetLayout],
-    ) -> vk::PipelineLayout {
-        let push_constant_range = vk::PushConstantRangeBuilder::new()
-            .offset(0)
-            .size(std::mem::size_of::<ProvinceDrawPushConstants>() as u32)
-            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
-        let push_constant_ranges = [push_constant_range];
-
-        let pipeline_layout_create_info = vk::PipelineLayoutCreateInfoBuilder::new()
-            .set_layouts(descriptor_set_layouts)
-            .push_constant_ranges(&push_constant_ranges);
-
-        unsafe {
-            vulkan_data
-                .device
-                .as_ref()
-                .unwrap()
-                .create_pipeline_layout(&pipeline_layout_create_info, None)
-        }
-        .unwrap()
-    }
-
-    fn create_pipeline(
-        vulkan_data: &VulkanData,
-        pipeline_layout: vk::PipelineLayout,
-    ) -> vk::Pipeline {
-        let binding_descriptions = vec![vk::VertexInputBindingDescriptionBuilder::new()
-            .binding(0)
-            .stride(std::mem::size_of::<ProvinceVertex>() as u32)
-            .input_rate(vk::VertexInputRate::VERTEX)];
-        let attribute_descriptions = vec![
-            vk::VertexInputAttributeDescriptionBuilder::new()
-                .binding(0)
-                .location(0)
-                .format(vk::Format::R32G32B32_SFLOAT)
-                .offset(0),
-            // vk::VertexInputAttributeDescriptionBuilder::new()
-            //     .binding(0)
-            //     .location(1)
-            //     .format(vk::Format::R32G32B32A32_SFLOAT)
-            //     .offset(12),
-        ];
-        let vertex_input_create_info = vk::PipelineVertexInputStateCreateInfoBuilder::new()
-            .vertex_binding_descriptions(&binding_descriptions)
-            .vertex_attribute_descriptions(&attribute_descriptions);
-
-        let input_assembly_create_info = vk::PipelineInputAssemblyStateCreateInfoBuilder::new()
-            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-            .primitive_restart_enable(false);
-        let viewport = vk::ViewportBuilder::new()
-            .x(0.0f32)
-            .y(0.0f32)
-            .width(
-                vulkan_data
-                    .surface_capabilities
-                    .unwrap()
-                    .current_extent
-                    .width as f32,
-            )
-            .height(
-                vulkan_data
-                    .surface_capabilities
-                    .unwrap()
-                    .current_extent
-                    .height as f32,
-            )
-            .min_depth(0.0f32)
-            .max_depth(1.0f32);
-
-        let scissor = vk::Rect2DBuilder::new()
-            .offset(vk::Offset2D { x: 0, y: 0 })
-            .extent(vulkan_data.surface_capabilities.unwrap().current_extent);
-
-        let viewports = [viewport];
-        let scissors = [scissor];
-        let viewport_state_create_info = vk::PipelineViewportStateCreateInfoBuilder::new()
-            .viewports(&viewports)
-            .scissors(&scissors);
-
-        let line_raster = vk::PipelineRasterizationLineStateCreateInfoEXTBuilder::new()
-            .line_rasterization_mode(vk::LineRasterizationModeEXT::RECTANGULAR_SMOOTH_EXT)
-            .stippled_line_enable(false);
-        let rasterizer = vk::PipelineRasterizationStateCreateInfoBuilder::new()
-            .depth_clamp_enable(false)
-            .rasterizer_discard_enable(false)
-            .polygon_mode(vk::PolygonMode::FILL)
-            .cull_mode(vk::CullModeFlags::NONE)
-            .front_face(vk::FrontFace::CLOCKWISE)
-            .depth_bias_enable(true)
-            .depth_bias_constant_factor(0.1)
-            .line_width(LINE_WIDTH)
-            .extend_from(&line_raster);
-
-        let multisampling = vk::PipelineMultisampleStateCreateInfoBuilder::new()
-            .sample_shading_enable(false)
-            .rasterization_samples(vulkan_data.msaa_samples);
-
-        let color_blend_attachment = vk::PipelineColorBlendAttachmentStateBuilder::new()
-            .color_write_mask(vk::ColorComponentFlags::all())
-            .blend_enable(true)
-            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-            .color_blend_op(vk::BlendOp::ADD)
-            .src_alpha_blend_factor(vk::BlendFactor::ONE)
-            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
-            .alpha_blend_op(vk::BlendOp::ADD);
-
-        let color_blend_attachments = [color_blend_attachment];
-
-        let color_blending = vk::PipelineColorBlendStateCreateInfoBuilder::new()
-            .logic_op_enable(false)
-            .logic_op(vk::LogicOp::OR)
-            .attachments(&color_blend_attachments);
-
-        let vert_entry_string = CString::new("main").unwrap();
-        let frag_entry_string = CString::new("main").unwrap();
-
-        let vert_shader_file = std::fs::read("shaders/province/vert.spv").unwrap();
-        let frag_shader_file = std::fs::read("shaders/province/frag.spv").unwrap();
-        let vert_shader_code = erupt::utils::decode_spv(&vert_shader_file).unwrap();
-        let frag_shader_code = erupt::utils::decode_spv(&frag_shader_file).unwrap();
-        let vert_shader_module = VulkanData::create_shader_module(
-            &vulkan_data.device.as_ref().unwrap(),
-            vert_shader_code,
-        );
-        let frag_shader_module = VulkanData::create_shader_module(
-            &vulkan_data.device.as_ref().unwrap(),
-            frag_shader_code,
-        );
-
-        let vert_shader_stage_create_info = vk::PipelineShaderStageCreateInfoBuilder::new()
-            .stage(vk::ShaderStageFlagBits::VERTEX)
-            .module(vert_shader_module)
-            .name(vert_entry_string.as_c_str());
-        let frag_shader_stage_create_info = vk::PipelineShaderStageCreateInfoBuilder::new()
-            .stage(vk::ShaderStageFlagBits::FRAGMENT)
-            .module(frag_shader_module)
-            .name(frag_entry_string.as_c_str());
-        let shader_stages = vec![vert_shader_stage_create_info, frag_shader_stage_create_info];
-
-        let depth_stencil = vk::PipelineDepthStencilStateCreateInfoBuilder::new()
-            .depth_test_enable(true)
-            .depth_write_enable(true)
-            .depth_compare_op(vk::CompareOp::LESS)
-            .depth_bounds_test_enable(false)
-            .min_depth_bounds(0.0)
-            .max_depth_bounds(1.0)
-            .stencil_test_enable(false);
-
-        let dynamic_state = vk::PipelineDynamicStateCreateInfoBuilder::new()
-            .dynamic_states(&[vk::DynamicState::LINE_WIDTH]);
-        let pipeline_infos = [vk::GraphicsPipelineCreateInfoBuilder::new()
-            .stages(&shader_stages)
-            .vertex_input_state(&vertex_input_create_info)
-            .input_assembly_state(&input_assembly_create_info)
-            .viewport_state(&viewport_state_create_info)
-            .rasterization_state(&rasterizer)
-            .multisample_state(&multisampling)
-            .color_blend_state(&color_blending)
-            .layout(pipeline_layout)
-            .render_pass(vulkan_data.render_pass.unwrap())
-            .subpass(0)
-            .depth_stencil_state(&depth_stencil)
-            .dynamic_state(&dynamic_state)];
-
-        let pipeline = unsafe {
-            vulkan_data
-                .device
-                .as_ref()
-                .unwrap()
-                .create_graphics_pipelines(None, &pipeline_infos, None)
-        }
-        .unwrap()[0];
-
-        pipeline
-    }
-
-    // pub fn add_point(&mut self, point: Vector3<f32>) -> usize {
-    //     self.vertex_buffer.add_value(ProvinceVertex {
-    //         position: point,
-    //         color: Vector4::new(1.0, 1.0, 1.0, 0.1),
-    //     });
-    //     self.vertex_buffer.count - 1
-    // }
-
-    // pub fn update_selection<
-    //     'a,
-    //     I: Iterator<Item = &'a usize>,
-    //     J: Iterator<Item = &'a usize>,
-    //     K: Iterator<Item = &'a usize>,
-    //     L: Iterator<Item = &'a usize>,
-    // >(
-    //     &mut self,
-    //     selected_point_indices: I,
-    //     highlighted_point_indices: J,
-    //     targeted_point_indices: K,
-    //     player_country_point_indices: L,
-    // ) {
-    //     for point in &mut self.vertex_buffer {
-    //         point.color = Vector4::new(0.0, 0.0, 0.0, 0.0);
-    //     }
-    //     for &index in player_country_point_indices {
-    //         self.vertex_buffer[index].color = Vector4::new(0.1, 0.9, 0.1, 1.0);
-    //     }
-    //     for &index in highlighted_point_indices {
-    //         self.vertex_buffer[index].color = Vector4::new(1.0, 1.0, 1.0, 0.1);
-    //     }
-    //     for &index in selected_point_indices {
-    //         self.vertex_buffer[index].color = Vector4::new(1.0, 1.0, 1.0, 1.0);
-    //     }
-    //     for &index in targeted_point_indices {
-    //         self.vertex_buffer[index].color = Vector4::new(0.8, 0.1, 0.1, 1.0);
-    //     }
-    // }
-
-    // pub fn select_points(&mut self, point_indices: &[usize]) {
-    //     // self.index_buffer.count = 0;
-    //     // for &index in point_indices {
-    //     //     self.index_buffer.add_value(index as u32);
-    //     // }
-    //     // for (index, vertex) in (&mut self.vertex_buffer).into_iter().enumerate() {
-    //     //     if point_indices.contains(&index) {
-    //     //         vertex.color.w = 1.0;
-    //     //     } else {
-    //     //         vertex.color.w = 0.0;
-    //     //     }
-    //     // }
-    // }
-
-    // pub fn set_color(&mut self, point_indices: &[usize], color: Vector4<f32>) {
-    //     // for &index in point_indices {
-    //     //     self.vertex_buffer[index].color = color;
-    //     // }
-    //     for (index, vertex) in (&mut self.vertex_buffer).into_iter().enumerate() {
-    //         if point_indices.contains(&index) {
-    //             vertex.color = color;
-    //         } else {
-    //             vertex.color.w = 0.0;
-    //         }
-    //     }
-
-    // }
-
-    // pub fn connect_points(&mut self, first_index: usize, second_index: usize) {
-    //     if !self.index_map.insert((first_index, second_index)) {
-    //         return;
-    //     }
-    //     self.index_buffer.add_value(first_index as u32);
-    //     self.index_buffer.add_value(second_index as u32);
-    // }
-}
-
 //TODO: Clean this up, maybe split it into multiple structs so it's less of a mess
 pub struct VulkanData {
     rng: fastrand::Rng,
@@ -1619,7 +1225,6 @@ pub struct VulkanData {
     in_flight_fence: Option<vk::Fence>,
     vertex_buffer: Option<vk::Buffer>,
     vertex_buffer_memory: Option<vk::DeviceMemory>,
-    pub province_data: Option<ProvinceDrawData>,
     pub ui_data: UiData,
     index_buffer: Option<vk::Buffer>,
     index_buffer_memory: Option<vk::DeviceMemory>,
@@ -1656,7 +1261,6 @@ pub struct VulkanData {
     cubemaps: Vec<CombinedImage>,
     irradiance_maps: Vec<CombinedImage>,
     environment_maps: Vec<CombinedImage>,
-    pub planet_textures: Vec<CombinedImage>,
     brdf_lut: Option<CombinedImage>,
     fallback_texture: Option<TextureSet>,
     pub(crate) cpu_images: Vec<CpuImage>,
@@ -1682,8 +1286,8 @@ impl VulkanData {
         let lights = [
             Light::new(Vector3::zeros(), Vector3::new(1.0, 1.0, 1.0)),
             Light::new(
-                Vector3::new((World::RADIUS * 2.0) as f32, 0.0, 0.0),
-                Vector3::new(254.0 / 255.0, 196.0 / 255.0, 127.0 / 255.0) * 4.06e13,
+                Vector3::zeros(),
+                Vector3::new(254.0 / 255.0, 196.0 / 255.0, 127.0 / 255.0),
             ),
         ];
         let uniform_buffer_object = UniformBufferObject {
@@ -1741,7 +1345,6 @@ impl VulkanData {
             in_flight_fence: None,
             vertex_buffer: None,
             vertex_buffer_memory: None,
-            province_data: None,
             ui_data: UiData {
                 vertex_buffer: None,
                 vertex_allocation: None,
@@ -1796,7 +1399,6 @@ impl VulkanData {
             fallback_texture: None,
             cpu_images: vec![],
             current_boneset: 0,
-            planet_textures: vec![],
             images_3d: vec![],
         };
     }
@@ -1806,7 +1408,7 @@ impl VulkanData {
     {
         let mut validation_layer_names = vec![];
 
-        #[cfg(feature="validation-layers")]
+        #[cfg(feature = "validation-layers")]
         validation_layer_names.push(erupt::cstr!("VK_LAYER_KHRONOS_validation"));
 
         self.entry = Some(erupt::EntryLoader::new().unwrap());
@@ -2381,79 +1983,6 @@ impl VulkanData {
         out_cubemap
     }
 
-    pub fn get_normal(&self, elevations: &CombinedImage) -> CombinedImage {
-        let normal_cubemap = self.create_blank_cubemap(
-            2048,
-            2048,
-            1,
-            vk::Format::R32G32B32A32_SFLOAT,
-            vk::ImageLayout::GENERAL,
-            vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
-        );
-        let combined_descriptors = [
-            CombinedDescriptor {
-                descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                descriptor_count: 1,
-                descriptor_info: DescriptorInfoData::Image {
-                    image_view: elevations.image_view,
-                    sampler: Some(elevations.sampler),
-                    layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                },
-            },
-            CombinedDescriptor {
-                descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
-                descriptor_count: 1,
-                descriptor_info: DescriptorInfoData::Image {
-                    image_view: normal_cubemap.image_view,
-                    sampler: None,
-                    layout: vk::ImageLayout::GENERAL,
-                },
-            },
-        ];
-        println!("Running planet normal generation shader");
-        self.run_arbitrary_compute_shader(
-            self.load_shader("shaders/planet/normal.spv".parse().unwrap()),
-            1u32,
-            &combined_descriptors,
-            (
-                normal_cubemap.width / 8 + u32::from(normal_cubemap.width % 8 == 0),
-                normal_cubemap.height / 8 + u32::from(normal_cubemap.height % 8 == 0),
-                6,
-            ),
-        );
-
-        let target_barrier = vk::ImageMemoryBarrierBuilder::new()
-            .old_layout(vk::ImageLayout::GENERAL)
-            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(normal_cubemap.image)
-            .subresource_range(
-                *vk::ImageSubresourceRangeBuilder::new()
-                    .level_count(1)
-                    .layer_count(6)
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(0)
-                    .base_array_layer(0),
-            );
-
-        let command_buffer = self.begin_single_time_commands();
-        unsafe {
-            self.device.as_ref().unwrap().cmd_pipeline_barrier(
-                command_buffer,
-                Some(vk::PipelineStageFlags::ALL_COMMANDS),
-                Some(vk::PipelineStageFlags::ALL_COMMANDS),
-                None,
-                &[],
-                &[],
-                &[target_barrier],
-            )
-        };
-
-        self.end_single_time_commands(command_buffer);
-        normal_cubemap
-    }
-
     pub fn load_folder(&mut self, folder: PathBuf) -> usize {
         let albedo_path = folder.join("albedo.png");
         let albedo = CombinedImage::new(
@@ -2549,24 +2078,44 @@ impl VulkanData {
         let mut out_animations = vec![];
         // let mut positions = vec![];
 
-        let root_node = gltf.scenes().nth(0).unwrap().nodes().nth(0).unwrap();
+        // let root_node = gltf.scenes().nth(0).unwrap().nodes().nth(0).unwrap();
+        // dbg!(&root_node);
 
-        let mut mesh_transform = Matrix4::identity();
+        let nodes:Box<[_]> = gltf.scenes().next().unwrap().nodes().collect();
+        let mut possible_roots: HashMap<usize, Node> = gltf.scenes().next().unwrap().nodes().map(|n|(n.index(), n)).collect();
+
+        for node in nodes.iter(){
+            for child in node.children(){
+                possible_roots.remove(&child.index());
+            }
+        }
+        assert_eq!(possible_roots.iter().count(), 1);
+        let root_node = possible_roots.into_iter().next().unwrap().1;
+
+        let mut mesh_transform:Matrix4<f32> = Matrix4::identity();
         // let vulkan_correction_transform =
         //     Matrix4::from_axis_angle(&Vector3::x_axis(), std::f32::consts::PI);
-        let vulkan_correction_transform =
-            Matrix4::from(UnitQuaternion::from_euler_angles(0.0, 0.0, PI));
-        // let vulkan_correction_transform = Matrix4::identity();
+
+        // let vulkan_correction_transform = {
+        //     let mut transform = Matrix4::from(UnitQuaternion::from_euler_angles(0.0, PI, 0.0));
+        //     Reflection3::new(UnitVector3::new_normalize(Vector3::new(1.0, 0.0, 0.0)),0.0).reflect(&mut transform);
+        //     transform
+        // };
+        // let vulkan_correction_transform = Matrix4::from(UnitQuaternion::from_euler_angles(0.0, PI, 0.0));
+        // let vulkan_correction_transform = Scale3::new(1.0,1.0, -1.0).to_homogeneous();
+        let vulkan_correction_transform: Matrix4<f32> = Matrix4::identity();
+
+        //     Matrix4::from(UnitQuaternion::from_euler_angles(0.0, 0.0, PI));
+        // let vulkan_correction_transform = Matrix4::<f32>::identity();
         // let vulkan_correction_transform = Scale3::new(1.0,-1.0,1.0).to_homogeneous();
         // let vulkan_correction_transform = Scale3::new(1.0,-1.0,1.0).to_homogeneous();
         for node in gltf.nodes() {
             // let transformation_matrix = Matrix4::from(node.transform().matrix())
             //     * Matrix4::from_axis_angle(&Vector3::x_axis(), std::f32::consts::PI);
             // let transformation_matrix = Matrix4::from(node.transform().matrix());
-            // let transformation_matrix = Matrix4::identity();
             let transformation_matrix = Matrix4::identity();
-            // * vulkan_correction_transform;
-
+            // let transformation_matrix = vulkan_correction_transform;
+            let node_transform = Matrix4::from(node.transform().matrix());
             let _transformation_position = transformation_matrix.column(3).xyz();
             match node.mesh() {
                 None => {}
@@ -2597,11 +2146,11 @@ impl VulkanData {
                             None => None,
                             Some(joints) => Some(joints.into_u16().collect::<Vec<_>>()),
                         };
-
-                        out_indices.extend_from_slice(&indices);
+                        let index_offset = out_vertices.len();
+                        out_indices.extend(indices.iter().map(|i|i + index_offset as u32));
                         for i in 0..positions.len() {
                             let position = Vector3::from(positions[i]);
-                            let position = transformation_matrix
+                            let position = (node_transform * transformation_matrix)
                                 .transform_point(&Point3::from(position))
                                 .coords;
                             out_vertices.push(Vertex {
@@ -2614,7 +2163,6 @@ impl VulkanData {
                                 bone_weights: Vector4::new(0.0, 0.0, 0.0, 0.0),
                             });
                         }
-
                         for triangle in indices.chunks(3) {
                             for i in 0..3 {
                                 let normal = normals[triangle[i] as usize];
@@ -2668,15 +2216,15 @@ impl VulkanData {
                                     normal_tangent.z,
                                     tangent.w,
                                 );
-                                out_vertices[index1].normal = normal;
-                                out_vertices[index1].texture_coordinate = texture_coordinate;
-                                out_vertices[index1].tangent = tangent;
+                                out_vertices[index1 + index_offset].normal = normal;
+                                out_vertices[index1 + index_offset].texture_coordinate = texture_coordinate;
+                                out_vertices[index1 + index_offset].tangent = tangent;
 
                                 match (joints.as_ref(), weights.as_ref()) {
                                     (Some(joints), Some(weights)) => {
-                                        out_vertices[index1].bone_indices =
+                                        out_vertices[index1 + index_offset].bone_indices =
                                             Vector4::from(joints[index1]).cast();
-                                        out_vertices[index1].bone_weights =
+                                        out_vertices[index1 + index_offset].bone_weights =
                                             Vector4::from(weights[index1]);
                                     }
                                     (_, _) => {}
@@ -2827,10 +2375,10 @@ impl VulkanData {
                         let mut bones = vec![];
                         for (joint_index, joint) in skin.joints().enumerate() {
                             let new_bone = Bone {
-                                matrix: vulkan_correction_transform
-                                    * (mesh_transform.try_inverse().unwrap()
+                                matrix: vulkan_correction_transform *
+                                    mesh_transform.try_inverse().unwrap()
                                         * node_global_transforms[joint.index()]
-                                        * inverse_bind_matrices[joint_index]),
+                                        * inverse_bind_matrices[joint_index],
                             };
                             bones.push(new_bone);
                         }
@@ -2842,6 +2390,15 @@ impl VulkanData {
         }
 
         return (out_vertices, out_indices, out_animations);
+    }
+
+
+    pub fn get_bone_matrix(&self, render_index: usize, vertex_index: usize, bone_index: usize) -> Matrix4<f32>{
+
+        let render_object = &self.objects[render_index];
+        // Translation3::from(self.vertices[render_object.vertex_start as usize + vertex_index].position).to_homogeneous().cast::<f64>() * self.storage_buffer_object.bone_sets[render_object.previous_frame].bones[bone_index].matrix.cast()
+        // render_object.model * self.storage_buffer_object.bone_sets[render_object.previous_frame].bones[bone_index].matrix * Translation3::from(self.vertices[render_object.vertex_start as usize + vertex_index].position).to_homogeneous()
+        render_object.model * self.storage_buffer_object.bone_sets[render_object.previous_frame].bones[bone_index].matrix * Translation3::from(self.vertices[vertex_index].position).to_homogeneous()
     }
 
     fn create_depth_resources(&mut self) {
@@ -3022,11 +2579,6 @@ impl VulkanData {
             vk::DescriptorSetLayoutBindingBuilder::new()
                 .binding(9)
                 .descriptor_count(NUM_MODELS as u32)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
-            vk::DescriptorSetLayoutBindingBuilder::new()
-                .binding(10)
-                .descriptor_count(NUM_PLANET_TEXTURES as u32)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
             vk::DescriptorSetLayoutBindingBuilder::new()
@@ -3279,25 +2831,6 @@ impl VulkanData {
                     );
                 }
 
-                let mut planet_textures_info = vec![];
-
-                for planet_texture in &self.planet_textures {
-                    planet_textures_info.push(
-                        vk::DescriptorImageInfoBuilder::new()
-                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                            .image_view(planet_texture.image_view)
-                            .sampler(planet_texture.sampler),
-                    );
-                }
-                for _ in 0..(NUM_PLANET_TEXTURES - self.planet_textures.len()) {
-                    planet_textures_info.push(
-                        vk::DescriptorImageInfoBuilder::new()
-                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                            .image_view(self.planet_textures[0].image_view)
-                            .sampler(self.planet_textures[0].sampler),
-                    );
-                }
-
                 let mut descriptor_writes = vec![
                     vk::WriteDescriptorSetBuilder::new()
                         .dst_set(*descriptor_set)
@@ -3360,15 +2893,6 @@ impl VulkanData {
                         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                         .image_info(&cpu_image_infos),
                 ];
-
-                descriptor_writes.push(
-                    vk::WriteDescriptorSetBuilder::new()
-                        .dst_set(*descriptor_set)
-                        .dst_binding(10)
-                        .dst_array_element(0)
-                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .image_info(&planet_textures_info),
-                );
                 descriptor_writes.push(
                     vk::WriteDescriptorSetBuilder::new()
                         .dst_set(*descriptor_set)
@@ -4012,15 +3536,6 @@ impl VulkanData {
         };
     }
 
-    pub fn create_province_data(&mut self, vertices: impl Iterator<Item = Vector3<f32>>, indices: impl Iterator<Item = usize>) {
-        let province_data = ProvinceDrawData::new(self, &vertices.map(|v|{
-            ProvinceVertex{
-                position: v.cast(),
-            }
-        }).collect::<Box<[_]>>(), &indices.map(|i|i as u32).collect::<Box<[_]>>());
-        self.province_data = Some(province_data);
-    }
-
     pub fn update_vertex_and_index_buffers(&mut self) {
         if self.vertex_buffer.is_some() || self.vertex_buffer_memory.is_some() {
             self.destroy_vertex_buffer();
@@ -4602,11 +4117,18 @@ impl VulkanData {
         let dynamic_state_info =
             vk::PipelineDynamicStateCreateInfoBuilder::new().dynamic_states(&dynamic_states);
 
+        // let viewport = vk::ViewportBuilder::new()
+        //     .x(0.0)
+        //     .y(0.0)
+        //     .width(self.surface_capabilities.unwrap().current_extent.width as f32)
+        //     .height(self.surface_capabilities.unwrap().current_extent.height as f32)
+        //     .min_depth(0.0f32)
+        //     .max_depth(1.0f32);
         let viewport = vk::ViewportBuilder::new()
             .x(0.0f32)
-            .y(0.0f32)
+            .y(self.surface_capabilities.unwrap().current_extent.height as f32)
             .width(self.surface_capabilities.unwrap().current_extent.width as f32)
-            .height(self.surface_capabilities.unwrap().current_extent.height as f32)
+            .height(-(self.surface_capabilities.unwrap().current_extent.height as f32))
             .min_depth(0.0f32)
             .max_depth(1.0f32);
 
@@ -4624,7 +4146,7 @@ impl VulkanData {
             .depth_clamp_enable(false)
             .rasterizer_discard_enable(false)
             .polygon_mode(vk::PolygonMode::FILL)
-            .cull_mode(vk::CullModeFlags::BACK)
+            .cull_mode(vk::CullModeFlags::FRONT)
             .front_face(vk::FrontFace::CLOCKWISE)
             .depth_bias_enable(false)
             .line_width(1.0f32);
@@ -4849,6 +4371,7 @@ impl VulkanData {
                     texture_index: 0,
                     bitfield: 0,
                     animation_frames: 0,
+                    animation_progress: 0,
                 };
                 unsafe {
                     self.device.as_ref().unwrap().cmd_push_constants(
@@ -5002,72 +4525,6 @@ impl VulkanData {
                         .unwrap()
                         .cmd_set_depth_test_enable_ext(*command_buffer, true)
                 };
-
-                //Probably should move this into it's own method
-                if let Some(line_data) = &self.province_data {
-                    unsafe {
-                        self.device.as_ref().unwrap().cmd_bind_pipeline(
-                            *command_buffer,
-                            vk::PipelineBindPoint::GRAPHICS,
-                            line_data.pipeline,
-                        );
-
-                        self.device.as_ref().unwrap().cmd_bind_vertex_buffers(
-                            *command_buffer,
-                            0,
-                            &[line_data.vertex_buffer.buffer],
-                            &offsets,
-                        );
-
-                        self.device.as_ref().unwrap().cmd_bind_index_buffer(
-                            *command_buffer,
-                            line_data.index_buffer.buffer,
-                            0 as vk::DeviceSize,
-                            vk::IndexType::UINT32,
-                        );
-                        self.device.as_ref().unwrap().cmd_bind_descriptor_sets(
-                            *command_buffer,
-                            vk::PipelineBindPoint::GRAPHICS,
-                            line_data.pipeline_layout,
-                            0,
-                            &line_data.descriptor_sets,
-                            &[],
-                        );
-
-                        self.device
-                            .as_ref()
-                            .unwrap()
-                            .cmd_set_line_width(*command_buffer, LINE_WIDTH);
-                        let push_constant = ProvinceDrawPushConstants {
-                            model_view_projection: line_data.model_view_projection,
-                        };
-                        self.device.as_ref().unwrap().cmd_bind_descriptor_sets(
-                            *command_buffer,
-                            vk::PipelineBindPoint::COMPUTE,
-                            self.pipeline_layout.unwrap(),
-                            0,
-                            &self.descriptor_sets.as_ref().unwrap(),
-                            &[],
-                        );
-                        self.device.as_ref().unwrap().cmd_push_constants(
-                            *command_buffer,
-                            line_data.pipeline_layout,
-                            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                            0,
-                            size_of::<ProvinceDrawPushConstants>() as u32,
-                            &push_constant as *const _ as *const c_void,
-                        );
-                        self.device.as_ref().unwrap().cmd_draw_indexed(
-                            *command_buffer,
-                            line_data.index_buffer.count as u32,
-                            1,
-                            0,
-                            0,
-                            0,
-                        );
-                    }
-                }
-
                 unsafe {
                     self.device.as_ref().unwrap().cmd_bind_pipeline(
                         *command_buffer,
@@ -5162,12 +4619,6 @@ impl VulkanData {
 
         self.create_compute_pipelines();
         self.create_ui_pipeline();
-        if self.province_data.is_some() {
-            self.province_data.as_mut().unwrap().pipeline = ProvinceDrawData::create_pipeline(
-                self,
-                self.province_data.as_ref().unwrap().pipeline_layout,
-            );
-        }
         self.create_command_buffers();
         self.update_descriptor_sets();
 
@@ -5317,12 +4768,6 @@ impl VulkanData {
     fn create_array_image_resources(&mut self) {
         self.images_3d
             .push(self.load_image_sequence(&Path::new("models/planet/drawn-globe/mountain_drawn")));
-        self.images_3d
-            .push(self.load_image_sequence(&Path::new("models/planet/drawn-globe/grass")));
-        self.images_3d
-            .push(self.load_image_sequence(&Path::new("models/planet/drawn-globe/trees")));
-        self.images_3d
-            .push(self.load_image_sequence(&Path::new("models/planet/drawn-globe/wavygrass")));
     }
 
     fn load_image_sequence(&self, folder: &Path) -> CombinedImage {
@@ -5538,7 +4983,7 @@ impl VulkanData {
     fn create_cubemap_resources(&mut self) {
         let cubemap_folders = [
             PathBuf::from("cubemap_space"),
-            PathBuf::from("cubemap_fire"),
+            // PathBuf::from("cubemap_fire"),
         ];
         for cubemap_folder in cubemap_folders {
             self.cubemap = Some(Cubemap::new(
@@ -6009,13 +5454,6 @@ impl VulkanData {
                 .as_ref()
                 .unwrap()
                 .destroy_pipeline(self.ui_data.pipeline, None);
-
-            if let Some(line_data) = &self.province_data {
-                self.device
-                    .as_ref()
-                    .unwrap()
-                    .destroy_pipeline(Some(line_data.pipeline), None);
-            }
         }
 
         unsafe {
@@ -6134,17 +5572,14 @@ impl VulkanData {
         self.index_buffer_memory = None;
     }
 
-    pub fn get_projection(&self, zoom: f64) -> nalgebra::Perspective3<f64> {
+    pub fn get_projection(&self, zoom: f64) -> Matrix4<f64> {
         let surface_width = self.surface_capabilities.unwrap().current_extent.width as f64;
         let surface_height = self.surface_capabilities.unwrap().current_extent.height as f64;
         let aspect_ratio = surface_width / surface_height;
+        let mut out = nalgebra::Perspective3::new(aspect_ratio, 90.0f64.to_radians() * zoom, 0.1, 1000.0).to_homogeneous();
+        // out[(3, 2)] = 1.0;
 
-        return nalgebra::Perspective3::new(
-            aspect_ratio,
-            90.0f64.to_radians() * zoom,
-            1_000_000.0,
-            20_000_000.0,
-        );
+        return out;
     }
     pub fn transfer_data_to_gpu(&mut self) {
         let random: [f32; NUM_RANDOM] =

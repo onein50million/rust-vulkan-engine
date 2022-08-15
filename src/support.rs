@@ -1,11 +1,9 @@
+use bincode::{Encode, Decode};
 use erupt::vk;
 use nalgebra::{Matrix3, Matrix4, Point3, Rotation3, Translation3, Vector2, Vector3, Vector4};
 use serde::{Deserialize, Serialize};
 
-use crate::world::World;
-
-pub const NETWORK_TICK_RATE: f64 = 10.0;
-pub const FRAMERATE_TARGET: f64 = 60.0;
+pub const FRAMERATE_TARGET: f64 = 280.0;
 pub const NUM_RANDOM: usize = 100;
 pub const FRAME_SAMPLES: usize = 100;
 pub const NUM_MODELS: usize = 1000;
@@ -14,34 +12,20 @@ pub const NUM_PLANET_TEXTURES: usize = 6;
 
 pub const CUBEMAP_WIDTH: usize = 512;
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, Copy, Clone)]
 pub struct Inputs {
-    pub up: f64,
-    pub down: f64,
-    pub left: f64,
-    pub right: f64,
-    pub map_mode: u8,
-    pub zoom: f64,
-    pub exposure: f64,
-    pub angle: f64,
-    pub panning: bool,
-    pub left_click: bool,
-    pub right_click: bool,
+    pub left_stick: Vector2<f64>,
+    pub right_stick: Vector2<f64>,
+    pub camera_direction: Vector3<f64>,
+    pub jump: bool,
 }
 impl Inputs {
     pub fn new() -> Self {
         return Inputs {
-            up: 0.0,
-            down: 0.0,
-            left: 0.0,
-            right: 0.0,
-            map_mode: 0,
-            zoom: 1.0,
-            exposure: 1.0,
-            angle: 0.0,
-            panning: false,
-            left_click: false,
-            right_click: false,
+            left_stick: Vector2::zeros(),
+            right_stick: Vector2::zeros(),
+            camera_direction: Vector3::new(1.0,0.0,0.0),
+            jump: false,
         };
     }
 }
@@ -122,7 +106,7 @@ impl Bone {
 }
 
 pub(crate) const NUM_BONES_PER_BONESET: usize = 256;
-pub(crate) const NUM_BONE_SETS: usize = 256;
+pub(crate) const NUM_BONE_SETS: usize = 2048;
 
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -186,6 +170,7 @@ pub(crate) struct PushConstants {
     pub(crate) model: Matrix4<f32>,
     pub(crate) texture_index: u32,
     pub(crate) bitfield: u32,
+    pub(crate) animation_progress: u32,
     pub(crate) animation_frames: u32,
 }
 
@@ -364,7 +349,7 @@ pub fn index_to_coordinate(index: usize) -> Vector3<f32> {
         .transform_point(&Point3::from(normal))
         .coords;
     let normal = normal.component_mul(&Vector3::new(1.0, 1.0, 1.0));
-    let point = normal * World::RADIUS;
+    let point = normal;
 
     point.cast()
 }

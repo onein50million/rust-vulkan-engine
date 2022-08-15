@@ -4,10 +4,6 @@
 
 const uint MAX_UINT = 4294967295;
 
-
-
-
-
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec4 inTangent;
@@ -51,10 +47,9 @@ float cubic_spline(float start, float previous_tangent, float end, float next_ta
 }
 
 void main() {
-    uint previous_animation_frame = pushConstant.animation_frames >> 24;
-    uint next_animation_frame = (pushConstant.animation_frames & 16711680) >> 16; //0b0000_0000_1111_1111_0000_0000_0000_0000
-
-    float animation_progress = unpackUnorm2x16(pushConstant.animation_frames).x; //x because we want the least significant bits
+    uint previous_animation_frame = pushConstant.animation_frames & 65535;
+    uint next_animation_frame = (pushConstant.animation_frames >> 16) & 65535;
+    float animation_progress = float(pushConstant.animation_progress) / float(MAX_UINT);
 
     float previous_tangent = ssbo.bone_sets[previous_animation_frame].output_tangent;
     float next_tangent = ssbo.bone_sets[next_animation_frame].input_tangent;
