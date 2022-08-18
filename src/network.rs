@@ -1,7 +1,7 @@
 use bincode::{Decode, Encode};
 use nalgebra::{Vector2, Vector3};
 
-use crate::{game::{GameTick, PlayerKey, PlayerState}, support::Inputs};
+use crate::{game::{NetworkTick, PlayerKey, PlayerState}, support::Inputs};
 /*
 Client requests Connection
 Server Accepts connection
@@ -67,7 +67,7 @@ pub struct NetworkPlayer {
 
 #[derive(Encode, Decode, Clone, Debug)]
 pub enum ServerToClientPacket {
-    RequestAccepted(GameTick, PlayerKey, usize),
+    RequestAccepted(NetworkTick, PlayerKey, usize),
     RequestDenied,
     PlayerUpdate {
         key: PlayerKey,

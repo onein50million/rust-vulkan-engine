@@ -4982,7 +4982,8 @@ impl VulkanData {
 
     fn create_cubemap_resources(&mut self) {
         let cubemap_folders = [
-            PathBuf::from("cubemap_space"),
+            // PathBuf::from("cubemap_space"),
+            PathBuf::from("cubemap_alps"),
             // PathBuf::from("cubemap_fire"),
         ];
         for cubemap_folder in cubemap_folders {

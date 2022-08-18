@@ -6,7 +6,7 @@ use gilrs::Gilrs;
 use nalgebra::{Matrix4, UnitQuaternion, Vector2, Vector3};
 
 use rust_vulkan_engine::game::{
-    AnimationHandler, ClientGame, GameObject, GameTick, PlayerKey, PlayerMap, ClientPlayer, NetworkBuffer,
+    AnimationHandler, ClientGame, GameObject, NetworkTick, PlayerKey, PlayerMap, ClientPlayer, CircularBuffer, PHYSICS_TICKRATE,
 };
 
 use rust_vulkan_engine::network::{ClientState, ClientToServerPacket, ServerToClientPacket, NETWORK_TICKRATE};
@@ -181,7 +181,7 @@ fn get_full_neighbour_pixels(index: usize) -> Box<[usize]> {
 struct LocalClient {
     socket: UdpSocket,
     state: ClientState,
-    current_tick: GameTick,
+    current_tick: NetworkTick,
     player_key: Option<PlayerKey>,
     player_model_index: usize,
     start_time: Instant,
@@ -223,7 +223,7 @@ impl LocalClient {
                                 .push(vulkan_data.objects[self.player_model_index].clone());
                                 game.players.push(ClientPlayer::new(render_object_index, &vulkan_data));
                         }
-                        game.players[player_key].input_buffer = Some(NetworkBuffer::new(||Inputs::new()));
+                        game.players[player_key].input_buffer = Some(CircularBuffer::new(||Inputs::new()));
                     }
                     (
                         ClientState::Connected,
@@ -293,6 +293,7 @@ fn main() {
     // let mut time_since_last_network_tick: f64 = 0.0; //seconds
     let mut frame_start = std::time::Instant::now();
     let mut network_start = std::time::Instant::now();
+    let mut physics_start = std::time::Instant::now();
 
     let mut frametimes = [0.0; FRAME_SAMPLES];
     let mut frametimes_start = 0;
@@ -321,7 +322,7 @@ fn main() {
     let mut client = LocalClient {
         socket,
         state: ClientState::Disconnected,
-        current_tick: GameTick::new(0),
+        current_tick: NetworkTick::new(0),
         player_key: None,
         player_model_index: vulkan_data.load_folder(PathBuf::from("models/person")),
         start_time: Instant::now(),
@@ -469,6 +470,14 @@ fn main() {
                     // dbg!(client.current_tick);
                 }
 
+                while physics_start.elapsed().as_secs_f64() > 1.0 / PHYSICS_TICKRATE{
+                    physics_start += Duration::from_secs_f64(1.0 / PHYSICS_TICKRATE);
+
+                    if let Some(player_key) = client.player_key{
+                        game.players[player_key].input_buffer.as_mut().unwrap().add_value(game.inputs);
+                    }
+                }
+
                 if frame_start.elapsed().as_secs_f64() > 1.0 / FRAMERATE_TARGET {
                     frame_start += Duration::from_secs_f64(1.0 / FRAMERATE_TARGET);
                     let delta_time = last_tick.elapsed().as_secs_f64();
@@ -483,20 +492,17 @@ fn main() {
                     window.set_title(format!("Frametimes: {:}", average_frametime).as_str());
                     
                     client.process_packets(&mut game, &mut vulkan_data);
-                    if let Some(player_key) = client.player_key{
-                        game.inputs.camera_direction = game.camera.get_direction(game.players[player_key].game_object.position);
-                        game.players[player_key].input_buffer.as_mut().unwrap().add_value(game.inputs);
-                    }
-                    game.camera.longitude += game.inputs.right_stick.x * delta_time;
+                    
+                    
+                    game.camera.longitude -= game.inputs.right_stick.x * delta_time;
                     game.camera.latitude += game.inputs.right_stick.y * delta_time;
 
                     if let Some(player_key) = client.player_key{
+                        game.inputs.camera_direction = game.camera.get_direction(game.players[player_key].game_object.position);
                         game.players[player_key].game_object.animation_handler.as_mut().unwrap().process(delta_time * game.inputs.left_stick.y.abs())
                     }
+
                     for player in &mut game.players {
-                        // if let Some(animation_handler) = &mut player.game_object.animation_handler {
-                        //     animation_handler.process(delta_time * game.inputs.left_stick.y.abs());
-                        // }
                         player.update_gameobject(&client.start_time);
                     }
 

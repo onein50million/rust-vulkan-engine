@@ -1,6 +1,6 @@
 use lyon_tessellation::geom::euclid::num::Zero;
 use nalgebra::{Vector2, Vector3};
-use rust_vulkan_engine::game::{GameObject, PlayerKey, PlayerObject, ServerGame, GameTick, PlayerState};
+use rust_vulkan_engine::game::{GameObject, PlayerKey, PlayerObject, ServerGame, NetworkTick, PlayerState};
 use rust_vulkan_engine::network::{ClientState, ClientToServerPacket, ServerToClientPacket, NETWORK_TICKRATE};
 use rust_vulkan_engine::support::Inputs;
 use std::collections::HashMap;
@@ -16,7 +16,7 @@ pub struct ConnectedClient {
     state: ClientState,
     username: String,
     player_key: Option<PlayerKey>,
-    last_received_tick: GameTick,
+    last_received_tick: NetworkTick,
 }
 impl ConnectedClient {
     fn new(address: SocketAddr) -> Self {
@@ -25,7 +25,7 @@ impl ConnectedClient {
             state: ClientState::ConnectionAwaiting,
             username: "".to_string(),
             player_key: None,
-            last_received_tick: GameTick::new(0),
+            last_received_tick: NetworkTick::new(0),
         };
         out
     }

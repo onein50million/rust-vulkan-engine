@@ -12,9 +12,10 @@ Client predicted: Uses client side prediction to reduce latency
 Client only (Animations, particles)
  */
 
+pub const PHYSICS_TICKRATE: f64 = 60.0;
+
 pub mod directions {
     use nalgebra::Vector3;
-    use std::f64::consts::FRAC_1_SQRT_2;
 
     pub const UP: Vector3<f64> = Vector3::new(0.0, 1.0, 0.0);
     pub const DOWN: Vector3<f64> = Vector3::new(0.0, -1.0, 0.0);
@@ -24,6 +25,7 @@ pub mod directions {
     pub const BACKWARDS: Vector3<f64> = Vector3::new(0.0, 0.0, -1.0);
 }
 
+use std::f64::consts::E;
 use std::iter;
 use std::ops::IndexMut;
 use std::{f64::consts::PI, ops::Index};
@@ -36,6 +38,7 @@ use bincode::{Decode, Encode};
 use float_ord::FloatOrd;
 use lyon_tessellation::geom::euclid::num::Zero;
 use nalgebra::{Matrix4, Perspective3, Point3, Translation3, UnitQuaternion, Vector2, Vector3, Rotation3};
+// use rapier3d_f64::prelude::{IntegrationParameters, PhysicsPipeline, IslandManager, BroadPhase, NarrowPhase, ImpulseJointSet, MultibodyJointSet, CCDSolver, RigidBodySet, ColliderSet, EventHandler, PhysicsHooks, RigidBodyHandle};
 
 pub struct AnimationHandler {
     pub index: usize,
@@ -127,11 +130,11 @@ impl GameObject {
 
 
 //index 0 is newest, 1 is second newest, 2 is third newest, etc
-pub struct NetworkBuffer<T, const L: usize>{
+pub struct CircularBuffer<T, const L: usize>{
     buffer: Box<[T]>,
     start: usize,
 }
-impl<T,const L: usize> NetworkBuffer<T, L>{
+impl<T,const L: usize> CircularBuffer<T, L>{
     pub fn new<F:FnMut()-> T>(callback: F) -> Self{
         let buffer = iter::repeat_with(callback).take(L).collect();
         Self { buffer, start: 0 }
@@ -144,23 +147,23 @@ impl<T,const L: usize> NetworkBuffer<T, L>{
         self.buffer[self.start] = value;
     }
 }
-impl<T,const L: usize> Index<GameTick> for NetworkBuffer<T, L>{
+impl<T,const L: usize> Index<usize> for CircularBuffer<T, L>{
     type Output = T;
 
-    fn index(&self, index: GameTick) -> &Self::Output {
-        if index.val > L{
+    fn index(&self, index: usize) -> &Self::Output {
+        if index > L{
             eprintln!("Trying to access out of bounds in network buffer, clamping");
         }
-        let index = index.val.min(L);
+        let index = index.min(L);
         &self.buffer[(self.start as i64 - index as i64).rem_euclid(L as i64 ) as usize]
     }
 }
-impl<T,const L: usize> IndexMut<GameTick> for NetworkBuffer<T, L>{
-    fn index_mut(&mut self, index: GameTick) -> &mut Self::Output {
-        if index.val > L{
+impl<T,const L: usize> IndexMut<usize> for CircularBuffer<T, L>{
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        if index > L{
             eprintln!("Trying to access out of bounds in network buffer, clamping");
         }
-        let index = index.val.min(L);
+        let index = index.min(L);
         &mut self.buffer[(self.start as i64 - index as i64).rem_euclid(L as i64 ) as usize]
     }
 }
@@ -169,7 +172,8 @@ pub struct ClientPlayer{
     pub game_object: GameObject,
     pub last_server_player_state: PlayerState,
     pub last_client_input_from_server: f64,
-    pub input_buffer: Option<NetworkBuffer<Inputs, NETWORK_INPUT_BUFFER>>, //Only the local player has an input buffer
+    pub input_buffer: Option<CircularBuffer<Inputs, INPUT_BUFFER_LEN>>, //Only the local player has an input buffer
+    extra_sim_time: f64,
 
 }
 impl ClientPlayer{
@@ -180,6 +184,7 @@ impl ClientPlayer{
                 rotation: UnitQuaternion::identity(),
                 render_object_index,
                 animation_handler: Some(AnimationHandler::new(2, vulkan_data.objects[render_object_index].animations[2].frame_count)),
+
                 // animation_handler: None
             },
             last_server_player_state: PlayerState {
@@ -189,31 +194,48 @@ impl ClientPlayer{
             },
             last_client_input_from_server: 0.0,
             input_buffer: None,
+            extra_sim_time: 0.0,
 
         }
     }
+    // pub fn update_gameobject(&mut self, client_start: &Instant){
+    //     let mut new_state = self.last_server_player_state;
+    //     let mut time_to_simulate = client_start.elapsed().as_secs_f64() - self.last_client_input_from_server;
+    //     let mut ticks_behind = NetworkTick::new((time_to_simulate / (1.0 / FRAMERATE_TARGET)) as usize);
+    //     while time_to_simulate > 1.0/FRAMERATE_TARGET{
+    //         let input_at_time = match &self.input_buffer{
+    //             Some(input_buffer) => input_buffer[ticks_behind],
+    //             None => Inputs::new(),
+    //         };
+
+    //         simulate_new_player_state(&mut new_state, &input_at_time, 1.0/FRAMERATE_TARGET);
+    //         ticks_behind.val -= 1;
+    //         time_to_simulate -= 1.0/FRAMERATE_TARGET;
+    //     }
+    //     self.game_object.position = new_state.position;
+    //     if let Some(input_buffer) = &self.input_buffer{
+    //         self.game_object.rotation = UnitQuaternion::face_towards(&(input_buffer[0].camera_direction.component_mul(&Vector3::new(1.0,0.0,1.0))), &directions::UP)
+    //     }
+    // }
+
     pub fn update_gameobject(&mut self, client_start: &Instant){
         let mut new_state = self.last_server_player_state;
-        let mut time_to_simulate = client_start.elapsed().as_secs_f64() - self.last_client_input_from_server;
-        let mut ticks_behind = GameTick::new((time_to_simulate / (1.0 / FRAMERATE_TARGET)) as usize);
-        while time_to_simulate > 1.0/FRAMERATE_TARGET{
-            let input_at_time = match &self.input_buffer{
-                Some(input_buffer) => input_buffer[ticks_behind],
-                None => Inputs::new(),
-            };
 
-            simulate_new_player_state(&mut new_state, &input_at_time, 1.0/FRAMERATE_TARGET);
-            ticks_behind.val -= 1;
-            time_to_simulate -= 1.0/FRAMERATE_TARGET;
-        }
+        let default_inputs = Inputs::new();
+        let inputs = match &self.input_buffer{
+            Some(inputs) => SimulationInput::Buffer(inputs),
+            None => SimulationInput::SingleInput(&default_inputs),
+        };
+
+        simulate_new_player_state(&mut new_state, inputs, client_start.elapsed().as_secs_f64() - self.last_client_input_from_server, &mut self.extra_sim_time);
         self.game_object.position = new_state.position;
         if let Some(input_buffer) = &self.input_buffer{
-            self.game_object.rotation = UnitQuaternion::face_towards(&(input_buffer[GameTick::new(0)].camera_direction.component_mul(&Vector3::new(1.0,0.0,1.0))), &directions::UP)
+            self.game_object.rotation = UnitQuaternion::face_towards(&(input_buffer[0].camera_direction.component_mul(&Vector3::new(1.0,0.0,1.0))), &directions::UP)
         }
     }
 
 } 
-const NETWORK_INPUT_BUFFER: usize = (FRAMERATE_TARGET * (FRAMERATE_TARGET/NETWORK_TICKRATE) * 4.0) as usize;
+const INPUT_BUFFER_LEN: usize = (4.0 * PHYSICS_TICKRATE) as usize; // 4 seconds of input buffer
 pub struct ClientGame {
     pub inputs: Inputs,
     pub mouse_position: Vector2<f64>,
@@ -233,7 +255,7 @@ impl ClientGame {
 
 safe_index::new! {
     #[derive(Encode, Decode)]
-    GameTick
+    NetworkTick
 }
 
 #[derive(Encode,Decode, Debug, Clone, Copy)]
@@ -254,46 +276,172 @@ safe_index::new! {
     map: PlayerMap
 }
 
-fn simulate_new_player_state(player_state: &mut PlayerState, inputs: &Inputs, delta_time: f64){
-    if player_state.position.y > 0.0 {
-        player_state.velocity.y -= 9.8 * delta_time;
-        player_state.is_jumping = false;
-    } else {
-        player_state.velocity.y = 0.0;
-        let movement = inputs.camera_direction;
-        let sideways = movement.cross(&directions::UP) * inputs.left_stick.x;
-        let forward = movement * inputs.left_stick.y;
+// pub struct PhysicsState{
+//     gravity: Vector3<f64>,
+//     integration_parameters: IntegrationParameters,
+//     physics_pipeline: PhysicsPipeline,
+//     island_manager: IslandManager,
+//     broad_phase: BroadPhase,
+//     narrow_phase: NarrowPhase,
+//     pub rigid_body_set: RigidBodySet,
+//     collider_set: ColliderSet,
+//     impulse_joint_set: ImpulseJointSet,
+//     multibody_joint_set: MultibodyJointSet,
+//     ccd_solver: CCDSolver,
 
-        let mut movement = sideways + forward;
-        let movement_magnitude = inputs.left_stick.magnitude();
-        movement.y = 0.0;
+// }
+// impl PhysicsState{
+//     pub fn new() -> Self{
+//         let gravity = Vector3::new(0.0, -9.81, 0.0);
+//         let integration_parameters = IntegrationParameters::default();
+//         let physics_pipeline = PhysicsPipeline::new();
+//         let island_manager = IslandManager::new();
+//         let broad_phase = BroadPhase::new();
+//         let narrow_phase = NarrowPhase::new();
+//         let rigid_body_set = RigidBodySet::new();
+//         let collider_set = ColliderSet::new();
+//         let impulse_joint_set = ImpulseJointSet::new();
+//         let multibody_joint_set = MultibodyJointSet::new();
+//         let ccd_solver = CCDSolver::new();
 
-        movement = if movement.magnitude() > 0.01{movement.normalize() * movement_magnitude} else {Vector3::zeros()};
-        player_state.velocity += 4.0 * delta_time * movement;
-        if inputs.jump && !player_state.is_jumping{
-            player_state.is_jumping = true;
-            player_state.velocity.y = 10.0;
-            player_state.position.y = 1.0;
+//         Self{
+//             gravity,
+//             integration_parameters,
+//             physics_pipeline,
+//             island_manager,
+//             broad_phase,
+//             narrow_phase,
+//             rigid_body_set,
+//             collider_set,
+//             impulse_joint_set,
+//             multibody_joint_set,
+//             ccd_solver,
+//         }
+//     }
+//     pub fn step(&mut self){
+//         self.physics_pipeline.step(
+//             &self.gravity,
+//             &self.integration_parameters,
+//             &mut self.island_manager,
+//             &mut self.broad_phase,
+//             &mut self.narrow_phase,
+//             &mut self.rigid_body_set,
+//             &mut self.collider_set,
+//             &mut self.impulse_joint_set,
+//             &mut self.multibody_joint_set,
+//             &mut self.ccd_solver,
+//             &(),
+//             &())
+//     }
+// }
+
+// fn simulate_new_player_state(player_state: &mut PlayerState, inputs: &Inputs, delta_time: f64){
+//     if player_state.position.y > 0.0 {
+//         player_state.velocity.y -= 9.8 * delta_time;
+//         player_state.is_jumping = false;
+//     } else {
+//         player_state.velocity.y = 0.0;
+//         let movement = inputs.camera_direction;
+//         let sideways = movement.cross(&directions::UP) * inputs.left_stick.x;
+//         let forward = movement * inputs.left_stick.y;
+
+//         let mut movement = sideways + forward;
+//         let movement_magnitude = inputs.left_stick.magnitude();
+//         movement.y = 0.0;
+
+//         movement = if movement.magnitude() > 0.01{movement.normalize() * movement_magnitude} else {Vector3::zeros()};
+//         player_state.velocity += 50.0 * delta_time * movement;
+//         if inputs.jump && !player_state.is_jumping{
+//             player_state.is_jumping = true;
+//             player_state.velocity.y = 10.0;
+//             player_state.position.y = 1.0;
+//         }
+//     }
+//     let horizontal_friction = -50.0;
+//     player_state.velocity.x *= E.powf(delta_time * horizontal_friction);
+//     player_state.velocity.y *= E.powf(delta_time * -0.1);
+//     player_state.velocity.z *= E.powf(delta_time * horizontal_friction);
+//     player_state.position += player_state.velocity * delta_time;
+//     // player_state.velocity -= player_state.velocity * (10.0 * delta_time).min(1.0);
+// }
+
+enum SimulationInput<'a>{
+    SingleInput(&'a Inputs),
+    Buffer(&'a CircularBuffer<Inputs, INPUT_BUFFER_LEN>)
+}
+impl<'a> SimulationInput<'a>{
+    fn get_input(&self, seconds_ago: f64) -> Inputs{
+        match self{
+            SimulationInput::SingleInput(inputs) => **inputs,
+            SimulationInput::Buffer(buffer) => {
+                buffer[(seconds_ago * PHYSICS_TICKRATE ) as usize]
+            },
         }
     }
-    player_state.position += player_state.velocity * delta_time;
-    player_state.velocity -= player_state.velocity * (10.0 * delta_time).min(1.0);
 }
+
+fn simulate_new_player_state(player_state: &mut PlayerState, inputs: SimulationInput, time_to_simulate: f64, extra_sim_time: &mut f64){
+    let mut time_to_simulate_left = time_to_simulate;
+
+    while *extra_sim_time > 1.0/PHYSICS_TICKRATE{
+        time_to_simulate_left += 1.0/PHYSICS_TICKRATE;
+        *extra_sim_time -= 1.0/PHYSICS_TICKRATE;
+    }
+
+    while time_to_simulate_left > 1.0 / PHYSICS_TICKRATE{
+        time_to_simulate_left -= 1.0 / PHYSICS_TICKRATE;
+        let inputs = inputs.get_input(time_to_simulate_left);
+        let delta_time = 1.0/PHYSICS_TICKRATE;
+        if player_state.position.y > 0.0 {
+            player_state.velocity.y -= 9.8 * delta_time;
+            player_state.is_jumping = false;
+        } else {
+            player_state.velocity.y = 0.0;
+            let movement = inputs.camera_direction;
+            let sideways = movement.cross(&directions::UP) * inputs.left_stick.x;
+            let forward = movement * inputs.left_stick.y;
+
+            let mut movement = sideways + forward;
+            let movement_magnitude = inputs.left_stick.magnitude();
+            movement.y = 0.0;
+
+            movement = if movement.magnitude() > 0.01{movement.normalize() * movement_magnitude} else {Vector3::zeros()};
+            player_state.velocity += 10.0 * delta_time * movement;
+            if inputs.jump && !player_state.is_jumping{
+                player_state.is_jumping = true;
+                player_state.velocity.y = 10.0;
+                player_state.position.y = 1.0;
+            }
+        }
+        let horizontal_friction = -5.0;
+        player_state.velocity.x *= E.powf(delta_time * horizontal_friction);
+        player_state.velocity.y *= E.powf(delta_time * -0.1);
+        player_state.velocity.z *= E.powf(delta_time * horizontal_friction);
+        player_state.position += player_state.velocity * delta_time;
+    }
+    // dbg!(player_state);
+    *extra_sim_time += time_to_simulate_left;
+}
+
 
 pub struct ServerGame {
     pub players: PlayerMap<PlayerObject>,
-    pub current_tick: GameTick,
+    pub current_tick: NetworkTick,
+    extra_sim_time: f64,
 }
 impl ServerGame {
     pub fn new() -> Self {
         Self {
             players: PlayerMap::new(),
-            current_tick: GameTick::new(0),
+            current_tick: NetworkTick::new(0),
+            extra_sim_time: 0.0,
         }
     }
     pub fn process(&mut self, delta_time: f64) {
         for player in &mut self.players {
-            simulate_new_player_state(&mut player.player_state, &player.inputs, delta_time);
+            // dbg!(&player.inputs);
+            simulate_new_player_state(&mut player.player_state, SimulationInput::SingleInput(&player.inputs), delta_time, &mut self.extra_sim_time);
+            // println!("{:}", player.player_state.position);
             // dbg!(&player.player_state);
         }
         self.current_tick.val += 1;
