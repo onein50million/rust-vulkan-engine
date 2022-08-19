@@ -257,7 +257,7 @@ impl Market {
         //     self.price[good as usize] *= 1.1;
         // }
 
-        self.price[good as usize] = self.price[good as usize].clamp(0.01, 1000.0);
+        self.price[good as usize] = self.price[good as usize].clamp(0.01, 1_000_000.0);
         assert!(!self.price[good as usize].is_nan());
 
         // self.price[good as usize] = 0.01;
@@ -557,7 +557,7 @@ impl Pops {
             let slice_population = (total_population / NUM_SLICES as f64) * (rng.f64() + 0.5);
             out.push(PopSlice {
                 population: slice_population,
-                money: 10.0 * slice_population,
+                money: 10000.0 * slice_population,
                 // owned_goods: [1_000_000_000_000.0 / SLICE_COUNT as f64; Good::VARIANT_COUNT],
                 owned_goods: [0.0 * slice_population as f64; Good::VARIANT_COUNT],
                 // met_inputs: [0.0; Good::VARIANT_COUNT],
@@ -677,7 +677,7 @@ pub struct ProvinceData {
     feb_temps: f64,
     july_temps: f64,
     ore: f64,
-    organization_owner: Vec<Option<usize>>,
+    organization_owner: Vec<Option<u16>>,
     languages: Vec<u32>,
 }
 impl ProvinceData {
@@ -704,7 +704,7 @@ impl ProvinceData {
         july_temps: f64,
         ore: f64,
         population: f64,
-        owner: Option<usize>,
+        owner: Option<u16>,
         language: u32,
     ) {
         self.num_samples += 1;
@@ -756,11 +756,11 @@ impl ProvinceData {
     pub fn population(&self) -> f64 {
         self.population
     }
-    pub fn owner(&self) -> Option<usize> {
+    pub fn owner(&self) -> Option<u16> {
         let mut occurences = HashMap::with_capacity(self.organization_owner.len());
         for owner in &self.organization_owner {
             if let Some(owner) = owner {
-                *occurences.entry(owner).or_insert(0usize) += 1;
+                *occurences.entry(owner).or_insert(0u16) += 1;
             }
         }
         occurences.iter().max_by_key(|o| o.1).map(|(&&id, _)| id)
@@ -1257,7 +1257,8 @@ impl World {
         for (province_key, province_indices) in province_indices.0.iter().enumerate() {
             let province_key = ProvinceKey(province_key);
             if province_indices.len() < 3 {
-                println!("degenerate province given");
+                println!("degenerate province given: {:}", province_key.0);
+                dbg!(province_indices);
                 continue;
             }
             let out_indices = province_indices.to_vec();
@@ -1333,7 +1334,7 @@ impl World {
                 //     organizations.entry(new_org_key).or_insert(new_org);
                 //     new_org_key
                 // });
-                organizations[OrganizationKey(owner)].province_control[province_key] = 1.0;
+                organizations[OrganizationKey(owner as usize)].province_control[province_key] = 1.0;
             }
         }
 
@@ -1387,8 +1388,8 @@ impl World {
         //     organization.military.push(new_military);
         // }
         // const PRE_SIM_STEPS: usize = 1000;
-        // const PRE_SIM_STEPS: usize = 100;
-        const PRE_SIM_STEPS: usize = 0;
+        const PRE_SIM_STEPS: usize = 1;
+        // const PRE_SIM_STEPS: usize = 0;
 
         let histories = Histories::new(PRE_SIM_STEPS, num_provinces);
 

@@ -361,13 +361,13 @@ fn main() {
     let feb_temps = get_feb_temps();
     let july_temps = get_july_temps();
     let population = get_populations();
-    let (nations_map, nation_names_and_defintions) = get_countries();
+    let nation_names_and_defintions = get_countries();
     // for nation in nations_map.iter(){
     //     if nation.is_some(){
     //         dbg!(nation);
     //     }
     // }
-    let (provinces_map, province_vertices, province_indices, province_names) = get_provinces();
+    let (provinces_map, province_vertices, province_indices, province_names, province_owners) = get_provinces();
     println!("provinces gotten");
     let water_map = get_water();
     let (language_map, color_to_language_name) = get_languages();
@@ -448,7 +448,7 @@ fn main() {
                             july_temp,
                             ore,
                             population,
-                            nations_map[i].map(|n| n as usize),
+                            province_owners.0.get(key.0).copied(),
                             language_map[i],
                         );
                     }
@@ -457,6 +457,7 @@ fn main() {
             };
 
             let mut province_indices_vec = vec![vec![]; num_provinces];
+            dbg!(num_provinces);
             for i in 0..num_provinces {
                 province_indices_vec[i].extend(province_indices[ProvinceKey(i)].iter());
             }
