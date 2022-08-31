@@ -16,12 +16,16 @@ use egui_winit::winit::event::{ElementState, Event, VirtualKeyCode, WindowEvent}
 use egui_winit::winit::event_loop::{ControlFlow, EventLoop};
 use egui_winit::winit::window::WindowBuilder;
 
+use float_ord::FloatOrd;
 use nalgebra::ComplexField;
+use nalgebra::Orthographic3;
+use nalgebra::Point3;
 use nalgebra::{Matrix4, Rotation3, Translation3, Vector2, Vector3};
 
 use noise::NoiseFn;
 use rust_vulkan_engine::game::client::Game;
 
+use rust_vulkan_engine::game::directions;
 use rust_vulkan_engine::network::{ClientState, Packet};
 use rust_vulkan_engine::planet_gen::get_aridity;
 use rust_vulkan_engine::planet_gen::get_countries;
@@ -38,11 +42,15 @@ use rust_vulkan_engine::support::*;
 use rust_vulkan_engine::world::ideology::Beliefs;
 use rust_vulkan_engine::world::organization::OrganizationKey;
 use rust_vulkan_engine::world::*;
+use rusttype::Font;
+use rusttype::GlyphId;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 
+use std::f64::consts::PI;
 use std::fmt::Debug;
+use std::fs;
 use std::net::UdpSocket;
 use std::ops::Add;
 
@@ -260,8 +268,8 @@ impl Client {
 
 fn add_plot(ui: &mut Ui, values: &[(f64, f64)], heading: &str, num_samples: usize, start: usize) {
     let values = &values[start..];
-    let num_samples = num_samples.min(values.len());
-    let chunk_size = values.len() / num_samples;
+    let num_samples = num_samples.min(values.len()).max(1);
+    let chunk_size = (values.len() / num_samples).max(1);
     let line = egui::plot::Line::new(Values::from_values_iter(values.chunks(chunk_size).map(
         |values| {
             let mut sum = 0.0;
@@ -280,7 +288,7 @@ fn add_plot(ui: &mut Ui, values: &[(f64, f64)], heading: &str, num_samples: usiz
             .view_aspect(1.0)
             .allow_zoom(false)
             .include_y(0.0)
-            .include_x(values[0].0)
+            .include_x(values.get(0).unwrap_or(&(0.0, 0.0)).0)
             .allow_drag(false),
     );
 }
@@ -295,8 +303,8 @@ fn double_line_plot(
 ) {
     let line_a = {
         let values = &values_a[start..];
-        let num_samples = num_samples.min(values.len());
-        let chunk_size = values.len() / num_samples;
+        let num_samples = num_samples.min(values.len()).max(1);
+        let chunk_size = (values.len() / num_samples).max(1);
         egui::plot::Line::new(Values::from_values_iter(values.chunks(chunk_size).map(
             |values| {
                 let mut sum = 0.0;
@@ -311,8 +319,8 @@ fn double_line_plot(
     };
     let line_b = {
         let values = &values_b[start..];
-        let num_samples = num_samples.min(values.len());
-        let chunk_size = values.len() / num_samples;
+        let num_samples = num_samples.min(values.len()).max(1);
+        let chunk_size = (values.len() / num_samples).max(1);
         egui::plot::Line::new(Values::from_values_iter(values.chunks(chunk_size).map(
             |values| {
                 let mut sum = 0.0;
@@ -333,7 +341,13 @@ fn double_line_plot(
             .view_aspect(1.0)
             .allow_zoom(false)
             .include_y(0.0)
-            .include_x(values_a.last().unwrap().0.max(values_b.last().unwrap().0))
+            .include_x(
+                values_a
+                    .last()
+                    .unwrap_or(&(0.0, 0.0))
+                    .0
+                    .max(values_b.last().unwrap_or(&(0.0, 0.0)).0),
+            )
             .allow_drag(false),
     );
 }
@@ -367,7 +381,8 @@ fn main() {
     //         dbg!(nation);
     //     }
     // }
-    let (provinces_map, province_vertices, province_indices, province_names, province_owners) = get_provinces();
+    let (provinces_map, province_vertices, province_indices, province_names, province_owners) =
+        get_provinces();
     println!("provinces gotten");
     let water_map = get_water();
     let (language_map, color_to_language_name) = get_languages();
@@ -448,7 +463,12 @@ fn main() {
                             july_temp,
                             ore,
                             population,
-                            province_owners.0.get(key.0).copied(),
+                            Some(
+                                *province_owners
+                                    .0
+                                    .get(key.0)
+                                    .expect("Missing province owner in province"),
+                            ),
                             language_map[i],
                         );
                     }
@@ -495,10 +515,31 @@ fn main() {
         vulkan_data
             .planet_textures
             .push(vulkan_data.get_cubemap_from_slice(&water_map));
-        vulkan_data.create_province_data(province_vertices.iter().map(|&v|v), province_indices.0.iter().flat_map(|p|p.iter().map(|&i|i)))
+
+        const LETTERS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        let font = Font::try_from_vec(fs::read("fonts/Aboreto-Regular.ttf").unwrap()).unwrap();
+
+        let width = 64;
+        let height = 128;
+        let font = font.layout(
+            LETTERS,
+            rusttype::Scale {
+                x: width as f32,
+                y: height as f32,
+            },
+            rusttype::Point { x: 0.0, y: 0.0 },
+        );
+
+        vulkan_data.create_province_data(
+            province_vertices.iter().map(|&v| v),
+            province_indices.0.iter().flat_map(|p| p.iter().map(|&i| i)),
+            font,
+            width,
+            height,
+            LETTERS.len(),
+        );
     });
     println!("Vulkan Data initialized");
-
 
     // if let Some(line_data) = &mut vulkan_data.line_data {
     //     for point in &world.points {
@@ -633,15 +674,20 @@ fn main() {
                         game.world.organizations[game.world.player_organization].money
                     )
                 ));
-                for good_index in 0..Good::VARIANT_COUNT {
-                    let good = Good::try_from(good_index).unwrap();
-                    ui.label(format!(
-                        "{:?}: {:.1}",
-                        good,
-                        &game.world.organizations[game.world.player_organization].owned_goods
-                            [good_index]
-                    ));
-                }
+                Grid::new("owned_goods").show(ui, |ui|{
+                    for good_index in 0..Good::VARIANT_COUNT {
+                        let good = Good::try_from(good_index).unwrap();
+                        ui.label(format!(
+                            "{:?}: {:.1}",
+                            good,
+                            &game.world.organizations[game.world.player_organization].owned_goods
+                                [good_index]
+                        ));
+                        if good_index % 10 == 0{
+                            ui.end_row();
+                        }
+                    }
+                });
             });
             ui.horizontal(|ui| {
                 match (&game.world.selected_province, &game.world.targeted_province) {
@@ -773,7 +819,10 @@ fn main() {
                                 ui.label(format!("{:.2}", slice.minimum_met_needs));
                                 ui.label(format!("{:.2}", slice.trickleback));
                                 for good_index in 0..Good::VARIANT_COUNT {
-                                    ui.label(format!("{:.2}", slice.owned_goods[good_index]));
+                                    ui.label(format!(
+                                        "{:}",
+                                        big_number_format(slice.owned_goods[good_index])
+                                    ));
                                 }
                                 ui.end_row();
                             }
@@ -913,21 +962,23 @@ fn main() {
                         ui.label("Org name");
                         // ui.label("Military type");
                         ui.label("Deployed troops");
+                        ui.label("Survival Needs");
+                        ui.label("Ammo Needs");
                         ui.end_row();
-                        for org in game
-                            .world
-                            .organizations
-                            .values()
-                            .filter(|o| o.military.deployed_forces[selected_province_key] > 0.5)
-                        {
+                        for org in game.world.organizations.values().filter(|o| {
+                            o.military.deployed_forces[selected_province_key].num_troops > 0.5
+                        }) {
                             ui.label(&org.name);
 
                             ui.label(format!(
                                 "{:}",
                                 big_number_format(
-                                    org.military.deployed_forces[selected_province_key]
+                                    org.military.deployed_forces[selected_province_key].num_troops
                                 )
                             ));
+                            ui.label(org.military.deployed_forces[selected_province_key].survival_needs_met);
+                            ui.label(org.military.deployed_forces[selected_province_key].ammo_needs_met);
+
                             ui.end_row();
                         }
                     });
@@ -1038,7 +1089,12 @@ fn main() {
                                 ui.label(format!(
                                     "{:}",
                                     big_number_format(
-                                        org.military.deployed_forces.0.iter().sum::<f64>()
+                                        org.military
+                                            .deployed_forces
+                                            .0
+                                            .iter()
+                                            .map(|f| f.num_troops)
+                                            .sum::<f64>()
                                     )
                                 ));
                             });
@@ -1111,15 +1167,18 @@ fn main() {
                             close_app(&mut vulkan_data, control_flow);
                         }
                         WindowEvent::CursorMoved { position, .. } => {
-                            match vulkan_data.surface_capabilities{
+                            match vulkan_data.surface_capabilities {
                                 Some(surface_capabilities) => {
-                                    game.mouse_position.x =
-                                    -((position.x / surface_capabilities.current_extent.width as f64) * 2.0 - 1.0);
-                                    game.mouse_position.y =
-                                        -((position.y / surface_capabilities.current_extent.height as f64) * 2.0 - 1.0);
-    
-                                },
-                                None => {},
+                                    game.mouse_position.x = -((position.x
+                                        / surface_capabilities.current_extent.width as f64)
+                                        * 2.0
+                                        - 1.0);
+                                    game.mouse_position.y = -((position.y
+                                        / surface_capabilities.current_extent.height as f64)
+                                        * 2.0
+                                        - 1.0);
+                                }
+                                None => {}
                             }
                             // println!("Position: {:?}", position);
                         }
@@ -1277,83 +1336,115 @@ fn main() {
                         &vulkan_data.get_projection(game.inputs.zoom),
                         game_speed,
                     );
+                    if let Some(province_data) = &mut vulkan_data.province_data {
+                        for (org_key, org) in game.world.organizations.iter() {
+                            //Deciding how to place the nation text label, it's pretty slow (~0.03ms) so it should either be optimized or done less frequently, or even replaced entirely
+                            if let Some((province, _)) = org
+                                .province_control
+                                .iter()
+                                .filter(|&(_, &c)| c > 0.5)
+                                .max_by_key(|&(p, _)| {
+                                    let province = &game.world.provinces[p];
+                                    let largest_circle_radius = province
+                                        .point_indices
+                                        .iter()
+                                        .map(|&index| {
+                                            let vertex = &game.world.points[index];
+                                            FloatOrd(nalgebra::distance(
+                                                &Point3::from(vertex.cast()),
+                                                &Point3::from(province.position),
+                                            ))
+                                        })
+                                        .max()
+                                        .unwrap()
+                                        .0;
+                                    let province_approx_area =
+                                        largest_circle_radius * largest_circle_radius * PI;
+                                    FloatOrd(province_approx_area)
+                                })
+                            {
+                                let province = &game.world.provinces[province];
+                                let province_position = province.position;
 
-                    // if let Some(selected_province) = game.selected_province {
-                    //     let province_indices =
-                    //         &game.world.provinces[selected_province].point_indices;
-                    //     if let Some(line_data) = &mut vulkan_data.line_data {
-                    //         line_data.set_color(&province_indices, Vector4::new(1.0,1.0,1.0,1.0));
-                    //     }
-                    // }
+                                // let width = (World::RADIUS * 0.01) * org.name.len() as f64;
+                                let width = province
+                                    .point_indices
+                                    .iter()
+                                    .map(|&index| {
+                                        let vertex = &game.world.points[index];
+                                        FloatOrd(nalgebra::distance(
+                                            &Point3::from(vertex.cast()),
+                                            &Point3::from(province_position),
+                                        ))
+                                    })
+                                    .max()
+                                    .unwrap()
+                                    .0
+                                    * 0.5;
+                                let height = (width / org.name.len() as f64) * 2.0;
+                                let ortho = Orthographic3::new(
+                                    -width * 0.5,
+                                    width * 0.5,
+                                    -height * 0.5,
+                                    height * 0.5,
+                                    -World::RADIUS,
+                                    World::RADIUS,
+                                )
+                                .to_homogeneous()
+                                .cast::<f32>();
 
-                    // let selected_points =
-                    //     if let Some(selected_province) = game.world.selected_province {
-                    //         game.world.provinces[selected_province].point_indices.iter()
-                    //     } else {
-                    //         [].iter()
-                    //     };
-                    // let targeted_points =
-                    //     if let Some(targeted_province) = game.world.targeted_province {
-                    //         game.world.provinces[targeted_province].point_indices.iter()
-                    //     } else {
-                    //         [].iter()
-                    //     };
-                    // let mut highlighted_points: HashSet<usize> =
-                    //     HashSet::with_capacity(game.world.provinces.0.len());
-                    // if let Some(selected_organization) = game.world.selected_organization {
-                    //     for (province_key, &control_factor) in game.world.organizations
-                    //         [selected_organization]
-                    //         .province_control
-                    //         .iter()
-                    //     {
-                    //         if control_factor > 0.5 {
-                    //             highlighted_points
-                    //                 .extend(game.world.provinces[province_key].point_indices.iter())
-                    //         }
-                    //     }
-                    // }
-
-                    // let mut player_country_points: HashSet<usize> =
-                    //     HashSet::with_capacity(game.world.provinces.0.len());
-                    // for (province_key, province) in game.world.provinces.0.iter().enumerate() {
-                    //     let province_key = ProvinceKey(province_key);
-                    //     if game.world.organizations[game.world.player_organization].province_control
-                    //         [province_key]
-                    //         > 0.01
-                    //     {
-                    //         player_country_points.extend(province.point_indices.iter())
-                    //     }
-                    // }
-                    // if let Some(line_data) = &mut vulkan_data.line_data {
-                    //     line_data.update_selection(
-                    //         selected_points,
-                    //         highlighted_points.iter(),
-                    //         targeted_points,
-                    //         player_country_points.iter(),
-                    //     )
-                    // }
-                    if let Some(province_data) = &mut vulkan_data.province_data{
-                        for (org_key, org) in game.world.organizations.iter(){
-                            for (province, &control) in org.province_control.iter(){
-                                if control > 0.5{
-                                    for &index in &game.world.provinces[province].point_indices{
-                                        province_data.vertex_data[index].nation_index = org_key.0 as u32;
+                                province_data.nation_data[org_key.0].name_matrix = ortho
+                                    * Matrix4::face_towards(
+                                        &Point3::origin(),
+                                        &Point3::from(province_position.normalize()),
+                                        &directions::UP,
+                                    )
+                                    .try_inverse()
+                                    .unwrap()
+                                    .cast();
+                                let mut name_string: Vec<_> = org
+                                    .name
+                                    .to_uppercase()
+                                    .as_bytes()
+                                    .iter()
+                                    .map(|b| if b == &b' ' { 255 } else { b - b'A' })
+                                    .collect();
+                                for _ in 0..(4 - name_string.len().rem_euclid(4)) {
+                                    name_string.push(255);
+                                }
+                                for (i, chunk) in name_string.chunks(4).enumerate() {
+                                    if i < province_data.nation_data[org_key.0].name_string.len() {
+                                        province_data.nation_data[org_key.0].name_string[i] =
+                                            u32::from_le_bytes(chunk.try_into().unwrap());
+                                    }
+                                }
+                                province_data.nation_data[org_key.0].name_length =
+                                    org.name.len() as u32;
+                            }
+                            for (province, &control) in org.province_control.iter() {
+                                if control > 0.5 {
+                                    // position += game.world.provinces[province].position.cast();
+                                    for &index in &game.world.provinces[province].point_indices {
+                                        province_data.vertex_data[index].nation_index =
+                                            org_key.0 as u32;
                                         province_data.vertex_data[index].flags = 0;
                                     }
                                 }
                             }
+
+                            // province_data.nation_data[org_key.0].name_matrix = vulkan_data.objects[planet_render_object_index].model * ortho * Matrix4::face_towards(&Point3::origin(), &Point3::from(position), &directions::UP).try_inverse().unwrap().cast();
                         }
-                        if let Some(selected_province) = game.world.selected_province{
-                            for &index in &game.world.provinces[selected_province].point_indices{
+                        if let Some(selected_province) = game.world.selected_province {
+                            for &index in &game.world.provinces[selected_province].point_indices {
                                 province_data.vertex_data[index].flags |= provinceflags::SELECTED;
                             }
                         }
-                        if let Some(targeted_province) = game.world.targeted_province{
-                            for &index in &game.world.provinces[targeted_province].point_indices{
+                        if let Some(targeted_province) = game.world.targeted_province {
+                            for &index in &game.world.provinces[targeted_province].point_indices {
                                 province_data.vertex_data[index].flags |= provinceflags::TARGETED;
                             }
                         }
-                    } 
+                    }
 
                     update_renderer(&game, &mut vulkan_data);
                     vulkan_data.transfer_data_to_gpu();

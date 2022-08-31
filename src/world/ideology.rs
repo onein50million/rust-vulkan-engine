@@ -346,7 +346,9 @@ impl Beliefs {
             // response.value = rng.i16(..);
             // response.importance = rng.u16(..);
         }
-        Self { responses: questions }
+        Self {
+            responses: questions,
+        }
     }
     pub fn to_ideology(&self, majority_language: LanguageKey) -> Ideology {
         let tax_rate;
@@ -720,7 +722,6 @@ impl Beliefs {
 //         ((self.importance as f64 / u16::MAX as f64) * 4.0).powf(3.0)
 //     }
 // }
-
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 pub struct Response {

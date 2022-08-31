@@ -1,11 +1,9 @@
 use std::{
-    cell::UnsafeCell,
-    collections::{HashMap, HashSet, VecDeque},
-    f64::consts::PI,
+    collections::{HashMap, VecDeque},
+    f64::consts::{E, PI},
     fmt::Display,
     hash::Hash,
     ops::{Index, IndexMut},
-    path::PathBuf,
     time::Instant,
 };
 
@@ -14,6 +12,7 @@ pub mod language;
 pub mod organization;
 mod party_names;
 pub mod questions;
+pub mod recipes;
 
 use float_ord::FloatOrd;
 use nalgebra::Vector3;
@@ -22,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use variant_count::VariantCount;
 
 use crate::{
-    support::{hash_usize_fast, map_range_linear_f64},
+    support::{exponential_decay, hash_usize_fast, map_range_linear_f64},
     world::{
         ideology::{
             positions::{
@@ -34,6 +33,7 @@ use crate::{
         },
         language::{Language, LanguageManager, LanguageMap},
         party_names::PARTY_NAMES,
+        recipes::get_recipe_count,
     },
 };
 
@@ -41,52 +41,53 @@ use self::{
     ideology::{Beliefs, PoliticalParty, PoliticalPartyMap},
     organization::{
         Branch, BranchControlDecision, BranchControlFlag, BranchMap, Decision, DecisionCategory,
-        DecisionControlFlag, Organization, OrganizationKey, Relation,
+        DecisionControlFlag, Organization, OrganizationKey, Relation, Military,
     },
+    recipes::{get_enabled_buildings, Recipe, RECIPES},
 };
 
-const BASE_INDUSTRY_SIZE: f64 = 1000.0;
 const TRICKLEBACK_RATIO: f64 = 0.25;
 
 #[repr(usize)]
 #[derive(Clone, Copy, VariantCount, Debug, IntoPrimitive, TryFromPrimitive)]
 pub enum Culture {
     CultureA,
-    // CultureB,
-    // CultureC,
-    // D,
-    // E,
-    // F,
-    // G,
-    // H,
-    // J,
-    // K,
-    // L,
-    // M,
-    // N,
-    // O,
-    // P,
-    // Q,
-    // R,
 }
 #[repr(usize)]
 #[derive(Clone, Copy, VariantCount, Debug, IntoPrimitive, TryFromPrimitive)]
 pub enum Industry {
-    Forage,
-    Farm,
-    Mill,
-    Mine,
-    Smelter,
-    Labor, //Building things
+    Agriculture,
+    Mining,
+    Manufacturing,
+    GeneralLabor,
+    Unemployed,
 }
 
 #[repr(usize)]
 #[derive(Clone, Copy, VariantCount, Debug, IntoPrimitive, TryFromPrimitive)]
 pub enum Good {
-    Grain,
-    Food,
-    Ore,
-    Metal,
+    Produce,
+    AnimalProducts,
+    ProcessedFood,
+    Iron,
+    NonFerrousMetal,
+    Carbon,
+    Steel,
+    StableSuperheavyElement,
+    Silica,
+    Semiconductor,
+    RawHydrocarbons,
+    Plastics,
+    Composites,
+    Batteries,
+    SolarCells,
+    LowGradeElectronics,
+    HighGradeElectronics,
+    Explosives,
+    SmallArms,
+    HeavyWeaponry,
+    Ammunition,
+    Armor,
 }
 
 #[repr(usize)]
@@ -95,6 +96,47 @@ pub enum IntangibleGoods {
     //Aren't owned by anyone, reside in the province level, can't be moved or traded, only consumed
     Work, // in man-years
 }
+#[repr(usize)]
+#[derive(Clone, Copy, VariantCount, Debug, IntoPrimitive, TryFromPrimitive)]
+pub enum Building {
+    ProduceFarm,
+    LivestockFarm,
+    IronMine,
+    NonFerrousMetalMine,
+    SilicaQuarry,
+    FossilFuelExtraction,
+    VerticalFarm,
+    FoodProcessor,
+    Metalworks,
+    ParticleCollider,
+    CompositesFacility,
+    ChemicalPlant,
+    SemiconductorFab,
+    ArmsFactory,
+}
+
+const AGRICULTURE_BUILDINGS: &[Building] = &[
+    Building::ProduceFarm,
+    Building::LivestockFarm,
+    Building::VerticalFarm,
+];
+
+const MINING_BUILDINGS: &[Building] = &[
+    Building::IronMine,
+    Building::NonFerrousMetalMine,
+    Building::SilicaQuarry,
+    Building::FossilFuelExtraction,
+];
+
+const MANUFACTURING_BUILDINGS: &[Building] = &[
+    Building::FoodProcessor,
+    Building::Metalworks,
+    Building::ParticleCollider,
+    Building::CompositesFacility,
+    Building::ChemicalPlant,
+    Building::SemiconductorFab,
+    Building::ArmsFactory,
+];
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct IndustryData {
@@ -116,9 +158,44 @@ impl Market {
         &mut self,
         delta_year: f64,
         pop_slices: &mut [PopSlice],
+        organizations: Option<&mut [Organization]>,
+        building_ratios: &[f64],
+        recipe_ratios: &[f64],
         spend_leftovers_ratio: f64,
         trade_modifier: f64, //modifies supply and demand so that some provinces are less efficient to import/export to/from
     ) {
+
+        if let Some (organizations) = organizations{
+            for organization in organizations{
+                organization.demand = [0.0; Good::VARIANT_COUNT];
+                organization.supply = [0.0; Good::VARIANT_COUNT];
+    
+                let needs = organization.military.get_total_needs();
+                let needs_sum = needs.iter().sum::<f64>();
+                // if needs_sum.is_nan(){
+                //     dbg!(needs);
+                //     dbg!(organization.owned_goods);
+                // }
+                for i in 0..Good::VARIANT_COUNT {
+                    let good = Good::try_from(i).unwrap();
+    
+                    let good_needed = needs[good as usize];
+                    let good_needed_to_be_bought =
+                        (good_needed - organization.owned_goods[good as usize]).max(0.0);
+    
+                    // let affordable_good = (organization.money / (good_needed/needs_sum)) / self.price[good as usize];
+                    let affordable_good = (organization.money * (good_needed/needs_sum).max(0.0)) / self.price[good as usize];
+                    let good_demand = (good_needed_to_be_bought).min(affordable_good);
+                    organization.demand[good as usize] = good_demand;
+                    self.demand[good as usize] += good_demand;
+    
+                    let good_supply = 0.0; //TODO: Manual selling of goods
+                    organization.supply[good as usize] = good_supply;
+                    self.supply[good as usize] += good_supply;
+                }
+            }
+        }
+
         for (index, slice) in pop_slices.iter_mut().enumerate() {
             // slice.met_inputs = [0.0; Good::VARIANT_COUNT];
             slice.individual_demand = [0.0; Good::VARIANT_COUNT];
@@ -126,8 +203,37 @@ impl Market {
 
             let _culture = Culture::try_from(index / Industry::VARIANT_COUNT).unwrap();
             let industry = Industry::try_from(index % Industry::VARIANT_COUNT).unwrap();
+            let mut industry_needs = std::array::from_fn(|_| 0.0);
 
-            let goods_needed: Vec<_> = get_inputs(industry, slice.population, delta_year)
+            let matching_buildings = get_enabled_buildings(industry);
+            for (recipe_index, recipe) in RECIPES.iter().enumerate().filter(|(i, r)| {
+                matching_buildings
+                    .iter()
+                    .any(|b| r.building as usize == *b as usize)
+            }) {
+                let building_ratio = building_ratios[recipe.building as usize];
+                let recipe_ratio = recipe_ratios[recipe_index];
+                let cheapest_good = Good::try_from(
+                    (0..Good::VARIANT_COUNT)
+                        .into_iter()
+                        .min_by_key(|&g| FloatOrd(self.price[g]))
+                        .unwrap(),
+                )
+                .unwrap();
+                let building_population = slice.population
+                    * building_ratio
+                    * recipe_ratio
+                    * (1.0 / Culture::VARIANT_COUNT as f64);
+                add_inputs(
+                    &mut industry_needs,
+                    recipe,
+                    cheapest_good,
+                    building_population,
+                    delta_year,
+                )
+            }
+            // dbg!(&industry_needs);
+            let goods_needed: Vec<_> = industry_needs
                 .iter()
                 .zip(get_needs(slice.population, delta_year).iter())
                 .map(|(a, b)| a + b)
@@ -184,8 +290,34 @@ impl Market {
             }
         }
     }
-    fn buy_and_sell(&mut self, good: Good, delta_year: f64, pop_slices: &mut [PopSlice]) {
-        let mut trader_total_profit = 0.0;
+    fn buy_and_sell(&mut self, good: Good, delta_year: f64, pop_slices: &mut [PopSlice], organizations: Option<&mut [Organization]>) {
+        if let Some(organizations) = organizations{
+            for organization in organizations{
+                //Selling
+                let sell_ratio = if self.supply[good as usize] > 0.0 {
+                    (self.demand[good as usize] / self.supply[good as usize]).min(1.0)
+                } else {
+                    0.0
+                };
+                let amount_sold = organization.supply[good as usize] * sell_ratio;
+                organization.owned_goods[good as usize] -= amount_sold;
+                let price_of_goods_sold = amount_sold * self.price[good as usize];
+                organization.money += price_of_goods_sold;
+    
+                //Buying
+                let buy_ratio = if self.demand[good as usize] > 0.0 {
+                    (self.supply[good as usize] / self.demand[good as usize]).min(1.0)
+                } else {
+                    0.0
+                };
+                let amount_bought = organization.demand[good as usize] * buy_ratio;
+                organization.owned_goods[good as usize] += amount_bought;
+                let price_of_goods_bought = amount_bought * self.price[good as usize];
+                organization.money -= price_of_goods_bought;
+            }
+        }
+
+
         for (index, slice) in pop_slices.iter_mut().enumerate() {
             let _culture = Culture::try_from(index / Industry::VARIANT_COUNT).unwrap();
             let _industry = Industry::try_from(index % Industry::VARIANT_COUNT).unwrap();
@@ -227,40 +359,18 @@ impl Market {
         }
     }
     fn update_price(&mut self, good: Good, delta_year: f64, error_divisor: f64) {
-        //PID for price
-        const PRICE_PID_P: f64 = 1.0;
-        const PRICE_PID_I: f64 = 0.00;
-        const PRICE_PID_D: f64 = 0.00;
 
-        let supply_demand_delta = self.supply[good as usize] - self.demand[good as usize];
-        // let error_divisor = 1000000.0; //make the error a lot smaller so it's easier to deal with
-        let error = (0.0 - supply_demand_delta) / error_divisor;
-        let proportional = error * delta_year;
-        self.supply_demand_error_integral[good as usize] += error * delta_year;
-        let derivative = (error - self.previous_supply_demand_error[good as usize]) / delta_year;
-        let output = PRICE_PID_P * proportional
-            + PRICE_PID_I * self.supply_demand_error_integral[good as usize]
-            + PRICE_PID_D * derivative;
-        self.previous_supply_demand_error[good as usize] = error;
-
-        self.price[good as usize] += output;
-        assert!(!self.price[good as usize].is_nan());
-
-        // self.price[good as usize] += output.clamp(
-        //     -0.1 * self.price[good as usize],
-        //     0.1 * self.price[good as usize],
-        // );
-
-        // if self.supply[good as usize] > self.demand[good as usize]{
-        //     self.price[good as usize] *= 0.9;
-        // }else{
-        //     self.price[good as usize] *= 1.1;
-        // }
+        if self.supply[good as usize] > self.demand[good as usize] {
+            self.price[good as usize] +=
+                exponential_decay(self.price[good as usize], -0.1, delta_year);
+        } else {
+            self.price[good as usize] +=
+                exponential_decay(self.price[good as usize], 0.1, delta_year);
+        }
 
         self.price[good as usize] = self.price[good as usize].clamp(0.01, 1_000_000.0);
         assert!(!self.price[good as usize].is_nan());
 
-        // self.price[good as usize] = 0.01;
     }
 }
 
@@ -285,17 +395,6 @@ const NUM_SLICES: usize = Culture::VARIANT_COUNT * Industry::VARIANT_COUNT;
 const GOOD_STORAGE_RATIO: f64 = 1000.0;
 
 const SIM_START_YEAR: f64 = 2022.0;
-const NEEDS_GRACE_PERIOD: f64 = 100.0;
-
-// const FARM_MODIFIER: f64 = 2.1;
-// const MILL_MODIFIER: f64 = 2.1;
-// const MINE_MODIFIER: f64 = 6.5;
-// const SMELT_MODIFIER: f64 = 2.1;
-const FORAGE_MODIFIER: f64 = 1.0;
-const FARM_MODIFIER: f64 = 1.1;
-const MILL_MODIFIER: f64 = 1.1;
-const MINE_MODIFIER: f64 = 10.1;
-const SMELT_MODIFIER: f64 = 1.1;
 
 fn production_curve(population: f64, curviness: f64, base_slope: f64, slope_falloff: f64) -> f64 {
     //https://www.desmos.com/calculator/majp9k0bcy
@@ -319,127 +418,69 @@ fn kernel(value: f64, horizontal_offset: f64, vertical_offset: f64, width: f64) 
 //     population*base_slope
 // }
 
-fn get_inputs(industry: Industry, population: f64, delta_year: f64) -> [f64; Good::VARIANT_COUNT] {
-    let mut output = [0.0; Good::VARIANT_COUNT];
-
-    match industry {
-        Industry::Forage => {}
-        Industry::Farm => {}
-        Industry::Mill => {
-            output[Good::Grain as usize] = population * 1.0 * delta_year * MILL_MODIFIER;
+fn add_inputs(
+    inputs: &mut [f64; Good::VARIANT_COUNT],
+    recipe: &Recipe,
+    cheapest_good: Good,
+    population: f64,
+    delta_year: f64,
+) {
+    for recipe_inputs in recipe.inputs {
+        match recipe_inputs {
+            recipes::RecipeGood::Anything(amount) => {
+                inputs[cheapest_good as usize] += *amount * delta_year * population;
+            }
+            recipes::RecipeGood::Good { good, amount } => {
+                inputs[*good as usize] += *amount * delta_year * population;
+            }
+            recipes::RecipeGood::RandomRatioGood { good, weight } => {
+                unreachable!();
+            }
         }
-        Industry::Mine => {}
-        Industry::Smelter => {
-            output[Good::Ore as usize] = population * 4.0 * delta_year * SMELT_MODIFIER;
-        }
-        Industry::Labor => {}
     }
-
-    return output;
 }
 
 fn get_needs(population: f64, delta_year: f64) -> [f64; Good::VARIANT_COUNT] {
     let mut output = [0.0; Good::VARIANT_COUNT];
 
-    output[Good::Food as usize] = population * 1.0 * delta_year;
-    output[Good::Metal as usize] = population * 0.1 * delta_year;
+    output[Good::ProcessedFood as usize] = population * 1.0 * delta_year;
+    output[Good::LowGradeElectronics as usize] = population * 0.001 * delta_year;
+    output[Good::HighGradeElectronics as usize] = population * 0.0001 * delta_year;
 
     return output;
 }
 
-fn get_outputs(
-    industry: Industry,
+fn add_outputs(
+    outputs: &mut [f64; Good::VARIANT_COUNT],
+    recipe: &Recipe,
+    industry_ratio: f64,
     industry_data: IndustryData,
     population: f64,
     delta_year: f64,
-) -> [f64; Good::VARIANT_COUNT] {
-    let mut output = [0.0; Good::VARIANT_COUNT];
-    match industry {
-        Industry::Forage => {
-            // output[Good::Food as usize] = production_curve(
-            //     population,
-            //     1.0,
-            //     (Industry::VARIANT_COUNT as f64) * FORAGE_MODIFIER * industry_data.productivity,
-            //     0.0001 * industry_data.size,
-            // ) * delta_year;
-            // output[Good::Metal as usize] = production_curve(
-            //     population,
-            //     1.0,
-            //     (Industry::VARIANT_COUNT as f64) * FORAGE_MODIFIER * industry_data.productivity,
-            //     0.001 * industry_data.size,
-            // ) * delta_year;
+) {
+    for recipe_outputs in recipe.outputs {
+        match recipe_outputs {
+            recipes::RecipeGood::Anything(amount) => {
+                unreachable!();
+            }
+            recipes::RecipeGood::Good { good, amount } => {
+                outputs[*good as usize] += production_curve(
+                    population,
+                    1.0,
+                    *amount,
+                    industry_data.size * industry_ratio,
+                ) * delta_year;
+            }
+            recipes::RecipeGood::RandomRatioGood { good, weight } => { //TODO: Replace this placeholder with actual randomness
+                outputs[*good as usize] += production_curve(
+                    population,
+                    1.0,
+                    *weight,
+                    industry_data.size * industry_ratio,
+                ) * delta_year; 
+            }
         }
-        Industry::Farm => {
-            output[Good::Grain as usize] = production_curve(
-                population,
-                1.0,
-                (Industry::VARIANT_COUNT as f64) * FARM_MODIFIER * industry_data.productivity,
-                industry_data.size,
-            ) * delta_year;
-            output[Good::Food as usize] = production_curve(
-                population,
-                1.0,
-                (Industry::VARIANT_COUNT as f64)
-                    * FARM_MODIFIER
-                    * 0.01
-                    * industry_data.productivity,
-                industry_data.size,
-            ) * delta_year;
-        }
-        Industry::Mill => {
-            output[Good::Food as usize] = production_curve(
-                population,
-                1.0,
-                (Industry::VARIANT_COUNT as f64) * MILL_MODIFIER * industry_data.productivity,
-                industry_data.size,
-            ) * delta_year;
-        }
-        Industry::Mine => {
-            output[Good::Ore as usize] = production_curve(
-                population,
-                1.0,
-                (Industry::VARIANT_COUNT as f64) * MINE_MODIFIER * industry_data.productivity,
-                industry_data.size,
-            ) * delta_year;
-            output[Good::Metal as usize] = production_curve(
-                population,
-                1.0,
-                (Industry::VARIANT_COUNT as f64)
-                    * MINE_MODIFIER
-                    * 0.01
-                    * industry_data.productivity,
-                industry_data.size,
-            ) * delta_year;
-        }
-        Industry::Smelter => {
-            output[Good::Metal as usize] = production_curve(
-                population,
-                1.0,
-                (Industry::VARIANT_COUNT as f64) * SMELT_MODIFIER * industry_data.productivity,
-                industry_data.size,
-            ) * delta_year;
-        }
-        Industry::Labor => {} //Produces work in a separate stage
     }
-
-    return output;
-}
-
-fn get_intangible_outputs(
-    industry: Industry,
-    population: f64,
-    delta_year: f64,
-) -> [f64; IntangibleGoods::VARIANT_COUNT] {
-    let mut output = [0.0; IntangibleGoods::VARIANT_COUNT];
-    match industry {
-        Industry::Forage => {}
-        Industry::Farm => {}
-        Industry::Mill => {}
-        Industry::Mine => {}
-        Industry::Smelter => {}
-        Industry::Labor => output[IntangibleGoods::Work as usize] = population * delta_year,
-    }
-    return output;
 }
 
 #[derive(Serialize, Deserialize)]
@@ -557,7 +598,7 @@ impl Pops {
             let slice_population = (total_population / NUM_SLICES as f64) * (rng.f64() + 0.5);
             out.push(PopSlice {
                 population: slice_population,
-                money: 10000.0 * slice_population,
+                money: 1000.0 * slice_population,
                 // owned_goods: [1_000_000_000_000.0 / SLICE_COUNT as f64; Good::VARIANT_COUNT],
                 owned_goods: [0.0 * slice_population as f64; Good::VARIANT_COUNT],
                 // met_inputs: [0.0; Good::VARIANT_COUNT],
@@ -605,6 +646,8 @@ pub struct Province {
     pub market: Market,
     pub position: Vector3<f64>,
     pub industry_data: [IndustryData; Industry::VARIANT_COUNT],
+    pub recipe_ratios: [f64; RECIPES.len()], //what recipes are being used
+    pub building_ratios: [f64; Building::VARIANT_COUNT], //what buildings have been built
     pub intangible_goods: [f64; IntangibleGoods::VARIANT_COUNT],
     pub feb_temp: f64,
     pub july_temp: f64,
@@ -1111,7 +1154,7 @@ impl World {
                         {
                             self.organizations[selected_org_key]
                                 .military
-                                .deployed_forces[selected_province_key] += amount;
+                                .deployed_forces[selected_province_key].num_troops += amount;
                             return format!(
                                 "Added {amount} troops in province {:} for organization {:}\n",
                                 selected_province_key.0, selected_org_key.0
@@ -1182,6 +1225,7 @@ impl World {
             .map(|a| a.pops.pop_slices.iter().map(|a| a.money).sum::<f64>())
             .sum::<f64>()
             .max(1.0)
+            + self.organizations.values().map(|o| o.money).sum::<f64>()
     }
 
     pub fn intersect_planet(
@@ -1207,9 +1251,9 @@ impl World {
 
     pub fn save(&self, filename: &str) {
         return;
-        let out_writer = std::fs::File::create(filename).expect("Failed to open file for writing");
-        let mut out_writer = snap::write::FrameEncoder::new(out_writer);
-        serde_json::to_writer(&mut out_writer, self).expect("Failed to encode World")
+        // let out_writer = std::fs::File::create(filename).expect("Failed to open file for writing");
+        // let mut out_writer = snap::write::FrameEncoder::new(out_writer);
+        // serde_json::to_writer(&mut out_writer, self).expect("Failed to encode World")
     }
 
     pub fn new(
@@ -1291,15 +1335,32 @@ impl World {
                 let pop_size = population / (Industry::VARIANT_COUNT as f64);
                 industry_data[i].size = pop_size
                     * match industry {
-                        Industry::Forage => 1.0,
-                        Industry::Farm => {
+                        Industry::Agriculture => {
                             (province_data[province_key].aridity() as f64 - 0.3).clamp(0.0, 1.1)
                         }
-                        Industry::Mill => 1.0,
-                        Industry::Mine => province_data[province_key].ore() as f64,
-                        Industry::Smelter => 1.0,
-                        Industry::Labor => 1.0,
+                        Industry::Mining => province_data[province_key].ore() as f64,
+                        Industry::Manufacturing => 1.0,
+                        Industry::GeneralLabor => 1.0,
+                        Industry::Unemployed => 1.0,
                     };
+            }
+
+            let recipe_ratios = std::array::from_fn(|i| {
+                let recipe = &RECIPES[i];
+                let building = recipe.building;
+                let num_recipes = get_recipe_count(building);
+                1.0 / (num_recipes as f64)
+            });
+
+            let mut building_ratios = [0.0; Building::VARIANT_COUNT];
+            for building in AGRICULTURE_BUILDINGS {
+                building_ratios[*building as usize] = 1.0 / (AGRICULTURE_BUILDINGS.len() as f64);
+            }
+            for building in MINING_BUILDINGS {
+                building_ratios[*building as usize] = 1.0 / (MINING_BUILDINGS.len() as f64);
+            }
+            for building in MANUFACTURING_BUILDINGS {
+                building_ratios[*building as usize] = 1.0 / (MANUFACTURING_BUILDINGS.len() as f64);
             }
 
             provinces.push(Province {
@@ -1317,6 +1378,8 @@ impl World {
                 industry_data,
                 province_area,
                 intangible_goods: [0.0; IntangibleGoods::VARIANT_COUNT],
+                recipe_ratios,
+                building_ratios,
                 trader_cost_multiplier: 1.0,
                 feb_temp: province_data[province_key].feb_temps(),
                 july_temp: province_data[province_key].july_temps(),
@@ -1388,7 +1451,7 @@ impl World {
         //     organization.military.push(new_military);
         // }
         // const PRE_SIM_STEPS: usize = 1000;
-        const PRE_SIM_STEPS: usize = 1;
+        const PRE_SIM_STEPS: usize = 0;
         // const PRE_SIM_STEPS: usize = 0;
 
         let histories = Histories::new(PRE_SIM_STEPS, num_provinces);
@@ -1404,14 +1467,12 @@ impl World {
 
         let mut num_uncontrolled_provinces = 0;
         for (province_key, province) in provinces.iter_mut() {
-            if (1.0
-                - organizations
-                    .0
-                    .iter()
-                    .map(|o| o.province_control[province_key])
-                    .sum::<f64>())
-            .abs()
-                > 0.1
+            if (organizations
+                .0
+                .iter()
+                .map(|o| o.province_control[province_key])
+                .sum::<f64>())
+                < 0.1
             {
                 // dbg!(&province.name);
                 // let mut nearest_owner = None;
@@ -1423,6 +1484,7 @@ impl World {
                 //         if provinces[neighbour].
                 //     }
                 // }
+                dbg!(province_key, &province.name);
                 let num_orgs = organizations.0.len();
                 num_uncontrolled_provinces += 1;
 
@@ -1430,7 +1492,8 @@ impl World {
                 //     org.province_control[province_key] = 1.0 / num_orgs as f64;
                 // }
 
-                organizations[OrganizationKey(rng.usize(..num_orgs))].province_control[province_key] = 1.0;
+                organizations[OrganizationKey(rng.usize(..num_orgs))].province_control
+                    [province_key] = 1.0;
             }
         }
         dbg!(num_uncontrolled_provinces);
@@ -1573,7 +1636,7 @@ impl World {
         //Process market, selling yesterday's produced goods and buying needs for today
         for province in self.provinces.0.iter_mut() {
             //update productivities
-            province.industry_data[Industry::Farm as usize].productivity = kernel(
+            province.industry_data[Industry::Agriculture as usize].productivity = kernel(
                 province.get_current_temp(self.current_year),
                 24.0,
                 0.1,
@@ -1585,14 +1648,20 @@ impl World {
             province.intangible_goods[IntangibleGoods::Work as usize] = 0.0; //Work doesn't carry over between ticks
             province.market.demand = [0.0; Good::VARIANT_COUNT];
             province.market.supply = [0.0; Good::VARIANT_COUNT];
-            province
-                .market
-                .process(delta_year, &mut province.pops.pop_slices, 0.5, 1.0);
+            province.market.process(
+                delta_year,
+                &mut province.pops.pop_slices,
+                None,
+                &province.building_ratios,
+                &province.recipe_ratios,
+                0.5,
+                1.0,
+            );
             for good_index in 0..Good::VARIANT_COUNT {
                 let good = Good::try_from(good_index).unwrap();
                 province
                     .market
-                    .buy_and_sell(good, delta_year, &mut province.pops.pop_slices);
+                    .buy_and_sell(good, delta_year, &mut province.pops.pop_slices, None);
                 province
                     .market
                     .update_price(good, delta_year, province.pops.population().max(1.0));
@@ -1604,6 +1673,9 @@ impl World {
             self.global_market.process(
                 delta_year,
                 &mut province.pops.pop_slices,
+                Some(&mut self.organizations.0),
+                &province.building_ratios,
+                &province.recipe_ratios,
                 1.0,
                 province.trader_cost_multiplier,
             );
@@ -1612,7 +1684,7 @@ impl World {
             let good = Good::try_from(good_index).unwrap();
             for province in self.provinces.0.iter_mut() {
                 self.global_market
-                    .buy_and_sell(good, delta_year, &mut province.pops.pop_slices);
+                    .buy_and_sell(good, delta_year, &mut province.pops.pop_slices, Some(&mut self.organizations.0));
             }
             self.global_market
                 .update_price(good, delta_year, self.get_total_population());
@@ -1628,7 +1700,7 @@ impl World {
             let mut num_unhealthy_slices = 0;
             for (slice_index, slice) in province.pops.pop_slices.iter_mut().enumerate() {
                 let needs = get_needs(slice.population, delta_year);
-                let industry_index = slice_index % Industry::VARIANT_COUNT;
+                let _industry_index = slice_index % Industry::VARIANT_COUNT;
                 let minimum_met_needs = needs
                     .iter()
                     .enumerate()
@@ -1660,33 +1732,56 @@ impl World {
 
             //consume daily living needs
             for (slice_index, slice) in province.pops.pop_slices.iter_mut().enumerate() {
-                let population_change = if slice.minimum_met_needs > 0.9 {
-                    slice.population
-                        * 0.02
-                        * delta_year
-                        * map_range_linear_f64(slice.minimum_met_needs, 0.98, 1.0, 0.1, 1.0)
+                // let population_change = if slice.minimum_met_needs > 0.9 {
+                //     slice.population
+                //         * 0.02
+                //         * delta_year
+                //         * map_range_linear_f64(slice.minimum_met_needs, 0.98, 1.0, 0.1, 1.0)
+                // } else if slice.minimum_met_needs > 0.25 {
+                //     ((((hash_usize_fast((self.current_year * 365.0 * 24.0) as usize) as f64)
+                //         / (usize::MAX as f64))
+                //         * 2.0)
+                //         - 1.0)
+                //         * 0.5
+                // } else {
+                //     (slice.population * -0.3 * delta_year).min(-100.0 * delta_year)
+                // }
+                // .max(-slice.population);
+                let population_growth_rate = if slice.minimum_met_needs > 0.9 {
+                    0.01 + map_range_linear_f64(slice.minimum_met_needs, 0.98, 1.0, 0.0, 0.05)
                 } else if slice.minimum_met_needs > 0.25 {
-                    ((((hash_usize_fast((self.current_year * 365.0 * 24.0) as usize) as f64)
-                        / (usize::MAX as f64))
-                        * 2.0)
-                        - 1.0)
-                        * 0.5
+                    // ((((hash_usize_fast((self.current_year * 365.0 * 24.0*20.0) as usize) as f64)
+                    //     / (usize::MAX as f64))
+                    //     * 2.0)
+                    //     - 1.0)
+                    //     * 0.01
+                    0.0
                 } else {
-                    (slice.population * -0.3 * delta_year).min(-100.0 * delta_year)
-                }
-                .max(-slice.population);
+                    -0.1
+                };
+                // let population_change = slice.population * population_multiplication_factor - slice.population;
+                // dbg!(population_multiplication_factor);
+                // let population_change = slice.population * population_growth_rate - 1.0);
+                let population_change =
+                    exponential_decay(slice.population, population_growth_rate, delta_year);
+                // dbg!(population_change);
                 let cannibalism_amount =
                     (-population_change).max(0.0) / slice.population * TRICKLEBACK_RATIO;
                 slice.trickleback += cannibalism_amount;
-                let trickleback_amount =
-                    (slice.trickleback * 0.5 * delta_year).min(slice.trickleback);
+                // let trickleback_amount =
+                //     (slice.trickleback * 0.5 * delta_year).min(slice.trickleback);
+                let trickleback_amount = exponential_decay(slice.trickleback, 0.5, delta_year);
+
                 slice.population += trickleback_amount;
                 slice.trickleback -= trickleback_amount;
                 assert!(!slice.population.is_nan());
                 slice.population += population_change;
+                // dbg!(slice.population);
                 if slice.minimum_met_needs < 0.9 {
+                    // let migration_pops_amount =
+                    //     (slice.population * 0.1 * delta_year).min(slice.population);
                     let migration_pops_amount =
-                        (slice.population * 0.1 * delta_year).min(slice.population);
+                        exponential_decay(slice.population, 0.1, delta_year);
                     let migration_money_amount = if slice.population > 0.0 {
                         (migration_pops_amount / slice.population) * slice.money
                     } else {
@@ -1731,96 +1826,152 @@ impl World {
                 }
             }
             // dbg!(num_unhealthy_slices);
-            // dbg!(migration_pool);
+            // dbg!(migration_pool_pops);
             // dbg!(total_migrations);
             assert!((migration_pool_pops - total_migrations).abs() < 1.0);
 
-            let industry_populations = {
-                let mut industry_populations = [0.0; Industry::VARIANT_COUNT];
+            // let industry_populations = {
+            //     let mut industry_populations = [0.0; Industry::VARIANT_COUNT];
 
-                for (slice_index, slice) in province.pops.pop_slices.iter().enumerate() {
-                    let industry =
-                        Industry::try_from(slice_index % Industry::VARIANT_COUNT).unwrap();
-                    industry_populations[industry as usize] += slice.population;
-                }
-                industry_populations
-            };
+            //     for (slice_index, slice) in province.pops.pop_slices.iter().enumerate() {
+            //         let industry =
+            //             Industry::try_from(slice_index % Industry::VARIANT_COUNT).unwrap();
+            //         industry_populations[industry as usize] += slice.population;
+            //     }
+            //     industry_populations
+            // };
+
             //use remaining resources for industry
             let mut _money_sum = 0.0;
+            let cheapest_good = Good::try_from(
+                (0..Good::VARIANT_COUNT)
+                    .into_iter()
+                    .min_by_key(|&g| FloatOrd(province.market.price[g]))
+                    .unwrap(),
+            )
+            .unwrap();
             for (slice_index, slice) in province.pops.pop_slices.iter_mut().enumerate() {
                 _money_sum += slice.money;
                 let industry = Industry::try_from(slice_index % Industry::VARIANT_COUNT).unwrap();
-                let inputs = get_inputs(industry, slice.population, delta_year);
-                let minimum_met_input = inputs
-                    .iter()
-                    .enumerate()
-                    .map(|(good_index, need_amount)| {
-                        // println!("good: {:?}, amount: {:}",Good::try_from(good_index).unwrap() , need_amount);
-                        if need_amount <= &0.0 {
-                            1.0
-                        } else {
-                            (slice.owned_goods[good_index] / need_amount).min(1.0)
-                        }
-                    })
-                    .min_by(|x, y| x.partial_cmp(y).unwrap())
-                    .unwrap();
 
-                let mut outputs = get_outputs(
-                    industry,
-                    province.industry_data[industry as usize],
-                    industry_populations[industry as usize],
-                    delta_year,
-                );
+                let mut total_requested_inputs = [0.0; Good::VARIANT_COUNT];
 
-                //correct for entire industry population
-                for output in &mut outputs {
-                    *output *= slice.population / industry_populations[industry as usize];
+                let matching_buildings = get_enabled_buildings(industry);
+                for (recipe_index, recipe) in RECIPES.iter().enumerate().filter(|(i, r)| {
+                    matching_buildings
+                        .iter()
+                        .any(|b| r.building as usize == *b as usize)
+                }) {
+                    let building_ratio = province.building_ratios[recipe.building as usize];
+                    let recipe_ratio = province.recipe_ratios[recipe_index];
+                    let building_population = slice.population
+                        * building_ratio
+                        * recipe_ratio
+                        * (1.0 / Culture::VARIANT_COUNT as f64);
+                    add_inputs(
+                        &mut total_requested_inputs,
+                        recipe,
+                        cheapest_good,
+                        building_population,
+                        delta_year,
+                    )
                 }
-                let intangible_outputs =
-                    get_intangible_outputs(industry, slice.population, delta_year);
 
-                for (intangible_good_index, output) in intangible_outputs.iter().enumerate() {
-                    province.intangible_goods[intangible_good_index] += output;
+                let actual_total_inputs: [_; Good::VARIANT_COUNT] =
+                    std::array::from_fn(|i| total_requested_inputs[i].min(slice.owned_goods[i]));
+                let allocated_amounts_and_ratio: [_; Good::VARIANT_COUNT] =
+                    std::array::from_fn(|i| {
+                        let allocation_ratio =
+                            (actual_total_inputs[i] / total_requested_inputs[i]).min(1.0);
+                        (allocation_ratio, allocation_ratio * slice.owned_goods[i])
+                    });
+
+                for (recipe_index, recipe) in RECIPES.iter().enumerate().filter(|(i, r)| {
+                    matching_buildings
+                        .iter()
+                        .any(|b| r.building as usize == *b as usize)
+                }) {
+                    let building_ratio = province.building_ratios[recipe.building as usize];
+                    let recipe_ratio = province.recipe_ratios[recipe_index];
+                    let building_population = slice.population
+                        * building_ratio
+                        * recipe_ratio
+                        * (1.0 / Culture::VARIANT_COUNT as f64);
+
+                    let mut recipe_inputs = [0.0; Good::VARIANT_COUNT];
+                    add_inputs(
+                        &mut recipe_inputs,
+                        recipe,
+                        cheapest_good,
+                        building_population,
+                        delta_year,
+                    );
+                    // let min_met_input = (0..Good::VARIANT_COUNT).into_iter().map(|good_index|{
+                    //     let (allocated_ratio, allocated_amount) = allocated_amounts_and_ratio[good_index];
+                    //     FloatOrd((recipe_inputs[good_index] * allocated_ratio ) / allocated_amount)
+                    // }).min().unwrap().0.min(1.0);
+                    let min_met_input = (0..Good::VARIANT_COUNT)
+                        .into_iter()
+                        .filter(|&g| recipe_inputs[g] > 0.0)
+                        .map(|good_index| {
+                            let (allocated_ratio, _) = allocated_amounts_and_ratio[good_index];
+                            FloatOrd(allocated_ratio)
+                        })
+                        .min()
+                        .unwrap_or(FloatOrd(1.0))
+                        .0
+                        .min(1.0);
+                    let mut outputs = [0.0; Good::VARIANT_COUNT];
+                    add_outputs(
+                        &mut outputs,
+                        recipe,
+                        recipe_ratio * building_ratio,
+                        province.industry_data[industry as usize],
+                        building_population,
+                        delta_year,
+                    );
+
+                    for (good_index, output) in outputs.iter().enumerate() {
+                        let good = Good::try_from(good_index).unwrap();
+                        let (allocated_ratio, _) = allocated_amounts_and_ratio[good_index];
+                        slice.owned_goods[good as usize] -=
+                            recipe_inputs[good as usize] * min_met_input;
+                        slice.owned_goods[good as usize] += output * min_met_input;
+                        slice.owned_goods[good as usize] = slice.owned_goods[good as usize]
+                            .min(slice.population * GOOD_STORAGE_RATIO)
+                    }
                 }
-                for (good_index, output) in outputs.iter().enumerate() {
-                    let good = Good::try_from(good_index).unwrap();
-                    slice.owned_goods[good as usize] -= inputs[good as usize] * minimum_met_input;
-                    slice.owned_goods[good as usize] += output * minimum_met_input;
-                    slice.owned_goods[good as usize] = slice.owned_goods[good as usize]
-                        // .min(slice.population * GOOD_STORAGE_RATIO * delta_year)
-                        .min(slice.population * GOOD_STORAGE_RATIO)
-                }
+
+                // //have to correct for entire industry population
+                // for output in &mut outputs {
+                //     *output *= slice.population / industry_populations[industry as usize];
+                // }
             }
             //collect taxes and troops
             // let max_recruit_ratio = 0.01;
-            let recruit_speed = 0.01;
-            let recruit_limiter_gain_speed = 1.0;
-            let recruit_limiter_decay_speed = recruit_limiter_gain_speed * 0.1;
+            let recruit_speed: f64 = 0.01;
+            // let recruit_limiter_gain_speed = 1.0;
+            // let recruit_limiter_decay_speed = recruit_limiter_gain_speed * 0.1;
 
             for (_index, slice) in province.pops.pop_slices.iter_mut().enumerate() {
-                let tax_amount = (slice.money * province.tax_rate * delta_year).min(slice.money);
+                // let tax_amount = (slice.money * province.tax_rate * delta_year).min(slice.money);
+                let tax_amount = exponential_decay(slice.money, province.tax_rate, delta_year);
                 let local_tax_proportion = 1.0;
                 province.tax_bank += tax_amount * local_tax_proportion;
                 global_tax_bank += tax_amount * (1.0 - local_tax_proportion);
                 slice.money -= tax_amount;
 
-                // let recruit_ratio = (1.0 - province.recruit_limiter).max(0.0) * recruit_speed * delta_year;
-                // let recruit_amount = (slice.population * recruit_ratio).min(slice.population);
-                // slice.population -= recruit_amount;
-                // province.troop_bank += recruit_amount;
-                let recruit_ratio = recruit_speed * delta_year;
-                let recruit_amount = (slice.population * recruit_ratio).min(slice.population);
-                slice.population -= recruit_amount;
-                province.troop_bank += recruit_amount;
+                if province.troop_bank < 10_000.0{
+                    let recruit_amount = exponential_decay(slice.population, recruit_speed, delta_year);
+                    slice.population -= recruit_amount;
+                    province.troop_bank += recruit_amount;
+                }
 
                 if slice.money.is_nan() {
                     dbg!(tax_amount);
                 }
                 assert!(!slice.money.is_nan());
             }
-            // province.recruit_limiter -= recruit_limiter_decay_speed * delta_year;
-            // province.recruit_limiter += (recruit_limiter_gain_speed * delta_year);
-            // province.recruit_limiter = province.recruit_limiter.clamp(0.0, 1.0);
         }
         let num_provinces = self.provinces.0.len();
         for province in self.provinces.0.iter_mut() {
@@ -1840,17 +1991,22 @@ impl World {
         //distribute taxes and troops to controlling organizations
         for (province_key, province) in self.provinces.0.iter_mut().enumerate() {
             let province_key = ProvinceKey(province_key);
+            let mut new_troop_bank = province.troop_bank;
+            assert!(!province.troop_bank.is_nan());
             for organization in self.organizations.0.iter_mut() {
                 let transfer_amount =
                     province.tax_bank * organization.province_control[province_key];
                 organization.money += transfer_amount;
                 // province.tax_bank -= transfer_amount;
-
+                assert!(!organization.province_control[province_key].is_nan());
+                let num_provinces = organization.province_control.0.iter().filter(|&&c| c > 0.1).count();
                 let troop_transfer_amount =
                     province.troop_bank * organization.province_control[province_key];
-                organization.military.deployed_forces[province_key] += troop_transfer_amount;
+                // organization.military.deployed_forces[province_key].num_troops += troop_transfer_amount;
+                new_troop_bank -= organization.military.deployed_forces[province_key].build_troops(&mut organization.owned_goods, troop_transfer_amount, 1.0 / num_provinces as f64);
+                
             }
-            province.troop_bank = 0.0;
+            province.troop_bank = new_troop_bank;
             province.tax_bank = 0.0;
         }
 
@@ -1881,8 +2037,24 @@ impl World {
         for organization_key in 0..num_orgs {
             let organization_key = OrganizationKey(organization_key);
 
-            //decision phase
+            let total_troops = self.organizations[organization_key].military.deployed_forces.0.iter().map(|f|f.num_troops).sum::<f64>();
+            let organization = &mut self.organizations[organization_key];
+            // dbg!(organization.owned_goods);
+            for (_,force) in organization.military.deployed_forces.iter_mut(){
+                let troop_ratio = force.num_troops/total_troops;
+                let province_access = 1.0;
+                for g in &organization.owned_goods{assert!(!g.is_nan())}
+                force.supply_goods(&mut organization.owned_goods, troop_ratio*province_access);
+                force.consume_supplies(true, delta_year);
+                for g in &organization.owned_goods{assert!(!g.is_nan())}
+                if force.survival_needs_met < 0.5{
+                    force.num_troops -= exponential_decay(force.num_troops, 0.05, delta_year);
+                }
+            }
+            // dbg!(organization.owned_goods);
 
+
+            //decision phase
             let organization = &mut self.organizations[organization_key];
             for &branch_key in &organization.branches {
                 {
@@ -1915,11 +2087,12 @@ impl World {
                                     let slice_ideology =
                                         slice.beliefs.to_ideology(majority_language);
 
-                                    let ideology_difference =
-                                        slice_ideology.distance(&party.ideology) + if party.home_org != organization_key{
+                                    let ideology_difference = slice_ideology
+                                        .distance(&party.ideology)
+                                        + if party.home_org != organization_key {
                                             // party.ideology.distance(&party.ideology) + if party.home_org != organization_key{
                                             1.0
-                                        }else{
+                                        } else {
                                             0.0
                                         };
 
@@ -2032,13 +2205,15 @@ impl World {
                                     }
                                 }
                                 DecisionCategory::DeclareWar => {
-                                    let war_chance = match controlling_ideology.war_support {
-                                        WarSupport::Pacifistic => 0.0f64,
-                                        WarSupport::Weak => 0.01,
-                                        WarSupport::Medium => 0.1,
-                                        WarSupport::Strong => 1.0,
-                                        WarSupport::Jingoistic => 10.0,
-                                    }.powf(delta_year);
+                                    // let war_chance = match controlling_ideology.war_support {
+                                    //     WarSupport::Pacifistic => 0.0f64,
+                                    //     WarSupport::Weak => 0.01,
+                                    //     WarSupport::Medium => 0.1,
+                                    //     WarSupport::Strong => 1.0,
+                                    //     WarSupport::Jingoistic => 10.0,
+                                    // }
+                                    let war_chance = 0.0f64
+                                    .powf(delta_year);
                                     if rng.f64() < war_chance {
                                         Decision::DeclareWar(OrganizationKey(rng.usize(..num_orgs)))
                                     } else {
@@ -2046,46 +2221,47 @@ impl World {
                                     }
                                 }
                                 DecisionCategory::MoveTroops => {
-                                    let source_count = organization
-                                        .province_control
-                                        .iter()
-                                        .filter(|&(i, &c)| c > 0.9)
-                                        .count();
+                                    // let source_count = organization
+                                    //     .province_control
+                                    //     .iter()
+                                    //     .filter(|&(i, &c)| c > 0.9)
+                                    //     .count();
 
-                                    let dest_count = organization
-                                        .province_control
-                                        .iter()
-                                        .filter(|&(i, &c)| c > 0.1)
-                                        .flat_map(|(key, _)| {
-                                            self.provinces[key].neighbouring_provinces.iter()
-                                        })
-                                        .filter(|&&k| organization.province_control[k] < 0.9)
-                                        .count();
-                                    if source_count > 0
-                                        && dest_count > 0
-                                        && rng.f64() < 1.0f64.powf(delta_year)
-                                    {
-                                        let source = organization
-                                            .province_control
-                                            .iter()
-                                            .filter(|&(i, &c)| c > 0.9)
-                                            .nth(rng.usize(..source_count))
-                                            .unwrap()
-                                            .0;
-                                        let &dest = organization
-                                            .province_control
-                                            .iter()
-                                            .filter(|&(i, &c)| c > 0.1)
-                                            .flat_map(|(key, _)| {
-                                                self.provinces[key].neighbouring_provinces.iter()
-                                            })
-                                            .filter(|&&k| organization.province_control[k] < 0.9)
-                                            .nth(rng.usize(..dest_count))
-                                            .unwrap();
-                                        Decision::MoveTroops(source, dest, 0.8)
-                                    } else {
-                                        Decision::None
-                                    }
+                                    // let dest_count = organization
+                                    //     .province_control
+                                    //     .iter()
+                                    //     .filter(|&(i, &c)| c > 0.1)
+                                    //     .flat_map(|(key, _)| {
+                                    //         self.provinces[key].neighbouring_provinces.iter()
+                                    //     })
+                                    //     .filter(|&&k| organization.province_control[k] < 0.9)
+                                    //     .count();
+                                    // if source_count > 0
+                                    //     && dest_count > 0
+                                    //     && rng.f64() < 1.0f64.powf(delta_year)
+                                    // {
+                                    //     let source = organization
+                                    //         .province_control
+                                    //         .iter()
+                                    //         .filter(|&(i, &c)| c > 0.9)
+                                    //         .nth(rng.usize(..source_count))
+                                    //         .unwrap()
+                                    //         .0;
+                                    //     let &dest = organization
+                                    //         .province_control
+                                    //         .iter()
+                                    //         .filter(|&(i, &c)| c > 0.1)
+                                    //         .flat_map(|(key, _)| {
+                                    //             self.provinces[key].neighbouring_provinces.iter()
+                                    //         })
+                                    //         .filter(|&&k| organization.province_control[k] < 0.9)
+                                    //         .nth(rng.usize(..dest_count))
+                                    //         .unwrap();
+                                    //     Decision::MoveTroops(source, dest, 0.8)
+                                    // } else {
+                                    //     Decision::None
+                                    // }
+                                    Decision::None
                                 }
                             }
                         }
@@ -2127,97 +2303,16 @@ impl World {
                 *branch_decision = BranchControlDecision::None
             }
 
-            //choose action
-            // let org_keys = org_keys.iter().filter(|&&k| k != organization_key);
-            // let action_decider = rng.f64();
-            // let mut action = None;
-            // if action_decider > 0.5 {
-            //     let mut source_iter = self.organizations[organization_key]
-            //         .province_control
-            //         .0
-            //         .iter()
-            //         .enumerate()
-            //         .filter(|&(i, &c)| c > 0.9);
-            //     let source_count = source_iter.clone().count();
-            //     if source_count > 0 {
-            //         if let Some(source) = source_iter.nth(rng.usize(..(source_count))) {
-            //             let dest_iter = self.organizations[organization_key]
-            //                 .province_control
-            //                 .0
-            //                 .iter()
-            //                 .enumerate()
-            //                 .filter(|&(i, &c)| c > 0.1)
-            //                 .flat_map(|(key, _)| {
-            //                     self.provinces[ProvinceKey(key)]
-            //                         .neighbouring_provinces
-            //                         .iter()
-            //                 });
-            //             let dest_count = dest_iter.clone().count();
-            //             if dest_count > 0 {
-            //                 if let Some(&dest) = dest_iter.clone().nth(rng.usize(..dest_count)) {
-            //                     action = Some(Action::MoveTroops {
-            //                         source: ProvinceKey(source.0),
-            //                         dest,
-            //                         ratio: rng.f64(),
-            //                     });
-            //                 }
-            //             }
-            //         }
-            //     }
-            // } else {
-            //     let action_decider = rng.f64();
-            //     let law = if action_decider > 0.5 {
-            //         Legislation::DeclareWar(OrganizationKey(
-            //             rng.usize(..self.organizations.0.len()),
-            //         ))
-            //     } else {
-            //         Legislation::SetTaxRate(rng.f64() * 0.2)
-            //     };
-            //     action = Some(Action::EnactLaw(law));
-            // }
-
-            // //Handle action
-            // if let Some(action) = action {
-            //     match action {
-            //         Action::EnactLaw(law) => {
-            //             match law {
-            //                 Legislation::SetTaxRate(new_rate) => {
-            //                     for province_key in self.organizations[organization_key]
-            //                         .province_control
-            //                         .0
-            //                         .iter()
-            //                         .enumerate()
-            //                         .filter(|&(p_key, &c)| c > 0.1)
-            //                         .map(|a| ProvinceKey(a.0))
-            //                     {
-            //                         self.provinces[province_key].tax_rate = new_rate;
-            //                     }
-            //                 }
-            //                 Legislation::DeclareWar(target) => {
-            //                     self.relations
-            //                         .get_relations_mut(organization_key, target)
-            //                         .at_war = true
-            //                 } // Law::DeclareWar(target) => {}
-            //             }
-            //         }
-            //         Action::MoveTroops {
-            //             source,
-            //             dest,
-            //             ratio,
-            //         } => self.organizations[organization_key].transfer_troops(source, dest, ratio),
-            //     }
-            // }
-
-            let redistribution_amount =
-                (self.organizations[organization_key].money * 0.5 * delta_year)
-                    .min(self.organizations[organization_key].money);
-            self.organizations[organization_key].money -= redistribution_amount;
             let province_control_sum = self.organizations[organization_key]
                 .province_control
                 .0
                 .iter()
                 .sum::<f64>();
-            if province_control_sum > 0.8 {
+            if province_control_sum > 0.1 {
+                let redistribution_amount =
+                    exponential_decay(self.organizations[organization_key].money, 0.01, delta_year);
+                self.organizations[organization_key].money -= redistribution_amount;
+
                 for (province_key, province_control) in self.organizations[organization_key]
                     .province_control
                     .0
@@ -2245,8 +2340,8 @@ impl World {
                 .iter_mut()
                 .enumerate()
                 .map(|(k, o)| (OrganizationKey(k), o))
-                // .filter(|(k, o)| o.military.deployed_forces[province_key] > 1.0)
-                .max_by_key(|(_org_key, org)| FloatOrd(org.military.deployed_forces[province_key]))
+                .filter(|(k, o)| o.military.deployed_forces[province_key].num_troops > 1.0)
+                .max_by_key(|(_org_key, org)| FloatOrd(org.military.deployed_forces[province_key].num_troops))
             {
                 let control_increase = (1.0 * delta_year)
                     .min(1.0 - biggest_organization.province_control[province_key]);
@@ -2289,7 +2384,7 @@ impl World {
             let combat_orgs: Box<[OrganizationKey]> = self
                 .organizations
                 .iter()
-                .filter(|o| o.1.military.deployed_forces[province_key] > 0.5)
+                .filter(|o| o.1.military.deployed_forces[province_key].num_troops > 0.5)
                 .map(|a| a.0)
                 .collect();
 
@@ -2334,10 +2429,10 @@ impl World {
 
             let first_army_size: f64 = self.organizations[first_combatant_key]
                 .military
-                .deployed_forces[province_key];
+                .deployed_forces[province_key].num_troops;
             let second_army_size: f64 = self.organizations[second_combatant_key]
                 .military
-                .deployed_forces[province_key];
+                .deployed_forces[province_key].num_troops;
             let avg_size = (first_army_size + second_army_size) / 2.0;
 
             // let army_ratio = if first_army_size > second_army_size {
@@ -2351,8 +2446,8 @@ impl World {
 
                 // let losses = avg_size * (1.0 / army_ratio) * delta_year;
                 let losses = avg_size * 10.0 * delta_year;
-                first_army.deployed_forces[province_key] -=
-                    losses.min(first_army.deployed_forces[province_key]);
+                first_army.deployed_forces[province_key].num_troops -=
+                    losses.min(first_army.deployed_forces[province_key].num_troops);
             }
 
             {
@@ -2360,8 +2455,8 @@ impl World {
 
                 // let losses = avg_size * army_ratio * delta_year;
                 let losses = avg_size * 10.0 * delta_year;
-                second_army.deployed_forces[province_key] -=
-                    losses.min(second_army.deployed_forces[province_key]);
+                second_army.deployed_forces[province_key].num_troops -=
+                    losses.min(second_army.deployed_forces[province_key].num_troops);
             }
         }
     }

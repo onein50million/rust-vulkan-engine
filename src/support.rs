@@ -1,3 +1,5 @@
+use std::f64::consts::E;
+
 use erupt::vk;
 use nalgebra::{Matrix3, Matrix4, Point3, Rotation3, Translation3, Vector2, Vector3, Vector4};
 use serde::{Deserialize, Serialize};
@@ -11,7 +13,7 @@ pub const FRAME_SAMPLES: usize = 100;
 pub const NUM_MODELS: usize = 1000;
 pub const NUM_LIGHTS: usize = 2;
 pub const NUM_PLANET_TEXTURES: usize = 6;
-
+pub const MAX_NATIONS: usize = 1024;
 pub const CUBEMAP_WIDTH: usize = 512;
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
@@ -329,8 +331,8 @@ pub fn index_to_coordinate(index: usize) -> Vector3<f32> {
     let (x, y) = index_to_pixel(index);
     let face = index / (CUBEMAP_WIDTH * CUBEMAP_WIDTH);
 
-    let x = ((x as f64) / CUBEMAP_WIDTH as f64) * 2.0 - 1.0;
-    let y = ((y as f64) / CUBEMAP_WIDTH as f64) * 2.0 - 1.0;
+    let x = ((x as f64) / (CUBEMAP_WIDTH as f64 - 1.0)) * 2.0 - 1.0;
+    let y = ((y as f64) / (CUBEMAP_WIDTH as f64 - 1.0)) * 2.0 - 1.0;
 
     let normal;
     match face {
@@ -391,13 +393,22 @@ pub fn hash_usize_fast(seed: usize) -> usize {
     out
 }
 
-const BIG_NUMBER_FORMAT_POSTFIX: &[&str] = &["", "K", "M", "B", "T"];
+const BIG_NUMBER_FORMAT_POSTFIX: &[&str] = &["", "K", "M", "B", "T", "Q"];
 pub fn big_number_format(big_number: f64) -> String {
     let magnitude = big_number.log10();
-    let nearest_postfix = (magnitude * (1.0 / 3.0)).floor();
+    let nearest_postfix = if magnitude >= 0.0 {
+        (magnitude * (1.0 / 3.0)).floor()
+    } else {
+        0.0
+    };
     return format!(
         "{:.2}{:}",
         big_number / 10f64.powf(nearest_postfix * 3.0),
-        BIG_NUMBER_FORMAT_POSTFIX[nearest_postfix as usize]
+        BIG_NUMBER_FORMAT_POSTFIX
+            [(nearest_postfix as usize).min(BIG_NUMBER_FORMAT_POSTFIX.len() - 1)]
     );
+}
+
+pub fn exponential_decay(value: f64, rate: f64, delta: f64) -> f64 {
+    value * E.powf(rate * delta) - value
 }

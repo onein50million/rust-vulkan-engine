@@ -13,6 +13,7 @@ use image::{GenericImageView, ImageFormat};
 use nalgebra::{
     Matrix4, Point3, Quaternion, Scale3, Translation3, UnitQuaternion, Vector2, Vector3, Vector4,
 };
+use rusttype::LayoutIter;
 
 use std::collections::HashSet;
 use std::convert::TryInto;
@@ -1121,7 +1122,7 @@ impl<T> MappedBuffer<T> {
         }
         self.count += 1;
     }
-    fn len(&self) -> usize{
+    fn len(&self) -> usize {
         self.count
     }
 }
@@ -1197,28 +1198,45 @@ struct ProvinceDrawPushConstants {
 }
 
 #[repr(C)]
-pub struct ProvinceDrawVertexData{
+pub struct ProvinceDrawVertexData {
     pub flags: u32,
-    pub nation_index: u32
+    pub nation_index: u32,
+}
+
+const NUM_CHARS_IN_NAME: usize = 64;
+#[repr(C, align(16))]
+pub struct ProvinceDrawNationData {
+    pub name_matrix: Matrix4<f32>,
+    pub name_string: [u32; NUM_CHARS_IN_NAME / 4],
+    pub name_length: u32,
 }
 
 pub struct ProvinceDrawData {
     vertex_buffer: UnmappedBuffer<ProvinceVertex>,
     index_buffer: UnmappedBuffer<u32>,
+    #[allow(unused)]
+    font_image: CombinedImage,
     pub vertex_data: MappedBuffer<ProvinceDrawVertexData>,
+    pub nation_data: MappedBuffer<ProvinceDrawNationData>,
     pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     descriptor_sets: Vec<vk::DescriptorSet>,
     pub model_view_projection: Matrix4<f32>,
 }
 impl ProvinceDrawData {
-    fn new(vulkan_data: &VulkanData, vertices: &[ProvinceVertex], indices: &[u32]) -> Self {
-        let vertex_buffer = {
-            UnmappedBuffer::new(vulkan_data, vk::BufferUsageFlags::VERTEX_BUFFER, vertices)
-        };
-        let index_buffer = {
-            UnmappedBuffer::new(vulkan_data, vk::BufferUsageFlags::INDEX_BUFFER, indices)
-        };
+    fn new(
+        vulkan_data: &VulkanData,
+        vertices: &[ProvinceVertex],
+        indices: &[u32],
+        font: LayoutIter,
+        font_width: u32,
+        font_height: u32,
+        num_glyphs: u32,
+    ) -> Self {
+        let vertex_buffer =
+            { UnmappedBuffer::new(vulkan_data, vk::BufferUsageFlags::VERTEX_BUFFER, vertices) };
+        let index_buffer =
+            { UnmappedBuffer::new(vulkan_data, vk::BufferUsageFlags::INDEX_BUFFER, indices) };
 
         let vertex_data = {
             let buffer_info = vk::BufferCreateInfoBuilder::new()
@@ -1227,7 +1245,9 @@ impl ProvinceDrawData {
             let allocation_info = vk_mem_erupt::AllocationCreateInfo {
                 usage: vk_mem_erupt::MemoryUsage::CpuToGpu,
                 flags: vk_mem_erupt::AllocationCreateFlags::MAPPED,
-                required_flags: vk::MemoryPropertyFlags::empty(),
+                required_flags: vk::MemoryPropertyFlags::HOST_COHERENT
+                    | vk::MemoryPropertyFlags::DEVICE_LOCAL
+                    | vk::MemoryPropertyFlags::HOST_VISIBLE,
                 preferred_flags: vk::MemoryPropertyFlags::empty(),
                 memory_type_bits: u32::MAX,
                 pool: None,
@@ -1239,21 +1259,217 @@ impl ProvinceDrawData {
                 .as_ref()
                 .unwrap()
                 .create_buffer(&buffer_info, &allocation_info)
-                .expect("Flag Buffer failed to allocate");
-            let mut flag_buffer = MappedBuffer {
+                .expect("Province Vertex Data Buffer failed to allocate");
+            let mut out_buffer = MappedBuffer {
                 buffer,
                 count: 0,
                 allocation,
                 allocation_info,
                 phantom: PhantomData,
             };
-            for _ in 0..vertices.len(){
-                flag_buffer.add_value(ProvinceDrawVertexData { flags: 0, nation_index: 0});
+            for _ in 0..vertices.len() {
+                out_buffer.add_value(ProvinceDrawVertexData {
+                    flags: 0,
+                    nation_index: 0,
+                });
             }
-            flag_buffer
+            out_buffer
         };
 
-        let (descriptor_sets, set_layouts) = Self::create_descriptor_sets(vulkan_data, &vertex_data);
+        let nation_data = {
+            let buffer_info = vk::BufferCreateInfoBuilder::new()
+                .size((MAX_NATIONS * size_of::<ProvinceDrawNationData>()) as u64)
+                .usage(vk::BufferUsageFlags::STORAGE_BUFFER);
+            let allocation_info = vk_mem_erupt::AllocationCreateInfo {
+                usage: vk_mem_erupt::MemoryUsage::CpuToGpu,
+                flags: vk_mem_erupt::AllocationCreateFlags::MAPPED,
+                required_flags: vk::MemoryPropertyFlags::HOST_COHERENT
+                    | vk::MemoryPropertyFlags::DEVICE_LOCAL
+                    | vk::MemoryPropertyFlags::HOST_VISIBLE,
+                preferred_flags: vk::MemoryPropertyFlags::empty(),
+                memory_type_bits: u32::MAX,
+                pool: None,
+                user_data: None,
+            };
+
+            let (buffer, allocation, allocation_info) = vulkan_data
+                .allocator
+                .as_ref()
+                .unwrap()
+                .create_buffer(&buffer_info, &allocation_info)
+                .expect("Nation Buffer failed to allocate");
+            let mut out_buffer = MappedBuffer {
+                buffer,
+                count: 0,
+                allocation,
+                allocation_info,
+                phantom: PhantomData,
+            };
+            for _ in 0..MAX_NATIONS {
+                out_buffer.add_value(ProvinceDrawNationData {
+                    name_matrix: Matrix4::identity(),
+                    name_string: Default::default(),
+                    name_length: 0,
+                });
+            }
+            out_buffer
+        };
+
+        let font_image = {
+            let width = font_width * num_glyphs;
+            let height = font_height;
+            let image_format = vk::Format::R8_UNORM;
+            let image_info = vk::ImageCreateInfoBuilder::new()
+                .extent(vk::Extent3D {
+                    width,
+                    height,
+                    depth: 1,
+                })
+                .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+                .format(image_format)
+                .initial_layout(vk::ImageLayout::UNDEFINED)
+                .image_type(vk::ImageType::_2D)
+                .tiling(vk::ImageTiling::OPTIMAL)
+                .array_layers(1)
+                .mip_levels(1)
+                .samples(vk::SampleCountFlagBits::_1);
+            let image_allocation_info = vk_mem_erupt::AllocationCreateInfo {
+                usage: vk_mem_erupt::MemoryUsage::GpuOnly,
+                ..Default::default()
+            };
+
+            let (image, image_allocation, _) = vulkan_data
+                .allocator
+                .as_ref()
+                .unwrap()
+                .create_image(&image_info, &image_allocation_info)
+                .unwrap();
+
+            let buffer_info = vk::BufferCreateInfoBuilder::new()
+                .size((font_height * font_width * num_glyphs) as u64)
+                .usage(vk::BufferUsageFlags::TRANSFER_SRC);
+            let buffer_allocation_info = vk_mem_erupt::AllocationCreateInfo {
+                usage: vk_mem_erupt::MemoryUsage::CpuToGpu,
+                flags: vk_mem_erupt::AllocationCreateFlags::MAPPED,
+                ..Default::default()
+            };
+
+            let (transfer_buffer, transfer_allocation, transfer_allocation_info) = vulkan_data
+                .allocator
+                .as_ref()
+                .unwrap()
+                .create_buffer(&buffer_info, &buffer_allocation_info)
+                .unwrap();
+            vulkan_data.transition_image_layout(
+                image,
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+            );
+            unsafe {
+                transfer_allocation_info
+                    .get_mapped_data()
+                    .write_bytes(0, (width * height) as usize);
+            }
+            for (index, glyph) in font.enumerate() {
+                // glyph.draw(|x,y,v|{dbg!(v);});
+                // let bounding_box = glyph.pixel_bounding_box().unwrap();
+                glyph.draw(|x, y, v| {
+                    let x = (x + font_width * index as u32).clamp(0, width);
+                    let y = (y).clamp(0, height);
+                    unsafe {
+                        transfer_allocation_info
+                            .get_mapped_data()
+                            .offset((x + y * width) as isize)
+                            .write((v * u8::MAX as f32) as u8);
+                    }
+                });
+            }
+
+            vulkan_data.copy_buffer_to_image(transfer_buffer, image, width, height);
+            vulkan_data
+                .allocator
+                .as_ref()
+                .unwrap()
+                .destroy_buffer(transfer_buffer, &transfer_allocation);
+
+            vulkan_data.transition_image_layout(
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+            );
+
+            let view_info = vk::ImageViewCreateInfoBuilder::new()
+                .image(image)
+                .view_type(vk::ImageViewType::_2D)
+                .format(image_format)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                });
+
+            let image_view = unsafe {
+                vulkan_data
+                    .device
+                    .as_ref()
+                    .unwrap()
+                    .create_image_view(&view_info, None)
+            }
+            .unwrap();
+
+            let sampler_info = vk::SamplerCreateInfoBuilder::new()
+                .mag_filter(vk::Filter::LINEAR)
+                .min_filter(vk::Filter::LINEAR)
+                .address_mode_u(vk::SamplerAddressMode::REPEAT)
+                .address_mode_v(vk::SamplerAddressMode::REPEAT)
+                .address_mode_w(vk::SamplerAddressMode::REPEAT)
+                .anisotropy_enable(true)
+                .max_anisotropy(1.0)
+                .border_color(vk::BorderColor::INT_OPAQUE_WHITE)
+                .unnormalized_coordinates(false)
+                .compare_enable(false)
+                .compare_op(vk::CompareOp::ALWAYS)
+                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                .mip_lod_bias(0.0)
+                .min_lod(0.0)
+                .max_lod(vk::LOD_CLAMP_NONE);
+
+            let sampler = unsafe {
+                vulkan_data
+                    .device
+                    .as_ref()
+                    .unwrap()
+                    .create_sampler(&sampler_info, None)
+                    .unwrap()
+            };
+            CombinedImage {
+                image,
+                image_view,
+                sampler,
+                allocation: image_allocation,
+                width,
+                height,
+            }
+        };
+
+        let (descriptor_sets, set_layouts) =
+            Self::create_descriptor_sets(vulkan_data, &vertex_data, &nation_data, &font_image);
         let pipeline_layout = Self::create_pipeline_layout(vulkan_data, &set_layouts);
         let pipeline = Self::create_pipeline(vulkan_data, pipeline_layout);
 
@@ -1261,23 +1477,38 @@ impl ProvinceDrawData {
             vertex_buffer,
             index_buffer,
             vertex_data,
+            nation_data,
+            font_image,
             pipeline,
             descriptor_sets,
             pipeline_layout,
             model_view_projection: Matrix4::identity(),
-            
         }
     }
 
-    fn create_descriptor_sets(vulkan_data: &VulkanData,
+    fn create_descriptor_sets(
+        vulkan_data: &VulkanData,
         vertex_data: &MappedBuffer<ProvinceDrawVertexData>,
+        nation_data: &MappedBuffer<ProvinceDrawNationData>,
+        font_image: &CombinedImage,
     ) -> (Vec<vk::DescriptorSet>, Vec<vk::DescriptorSetLayout>) {
         let bindings = [
             vk::DescriptorSetLayoutBindingBuilder::new()
-            .binding(0)
-            .descriptor_count(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+                .binding(0)
+                .descriptor_count(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBindingBuilder::new()
+                .binding(1)
+                .descriptor_count(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBindingBuilder::new()
+                .binding(2)
+                .descriptor_count(1)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
         let layout_info = vk::DescriptorSetLayoutCreateInfoBuilder::new().bindings(&bindings);
 
@@ -1306,27 +1537,51 @@ impl ProvinceDrawData {
         .to_vec();
 
         // let mut descriptor_writes = vec![];
-        let buffer_infos = vec![
-            vk::DescriptorBufferInfoBuilder::new()
+        let vertex_buffer_info = vk::DescriptorBufferInfoBuilder::new()
             .buffer(vertex_data.buffer)
             .offset(0)
-            .range((vertex_data.len() * size_of::<ProvinceDrawVertexData>()) as u64)
-        ];
-        let buffer_info = &[buffer_infos[0]];
+            .range((vertex_data.len() * size_of::<ProvinceDrawVertexData>()) as u64);
+        let nation_buffer_info = vk::DescriptorBufferInfoBuilder::new()
+            .buffer(nation_data.buffer)
+            .offset(0)
+            .range((nation_data.len() * size_of::<ProvinceDrawNationData>()) as u64);
+        let font_image_info = vk::DescriptorImageInfoBuilder::new()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(font_image.image_view)
+            .sampler(font_image.sampler);
+
+        let vertex_buffer_info = &[vertex_buffer_info];
+        let nation_buffer_info = &[nation_buffer_info];
+        let font_image_info = &[font_image_info];
+
         let descriptor_writes = vec![
             vk::WriteDescriptorSetBuilder::new()
                 .dst_set(descriptor_sets[0])
                 .dst_binding(0)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(buffer_info)];
-        unsafe{
-            vulkan_data.device.as_ref().unwrap().update_descriptor_sets(&descriptor_writes, &[]);
+                .buffer_info(vertex_buffer_info),
+            vk::WriteDescriptorSetBuilder::new()
+                .dst_set(descriptor_sets[0])
+                .dst_binding(1)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(nation_buffer_info),
+            vk::WriteDescriptorSetBuilder::new()
+                .dst_set(descriptor_sets[0])
+                .dst_binding(2)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(font_image_info),
+        ];
+        unsafe {
+            vulkan_data
+                .device
+                .as_ref()
+                .unwrap()
+                .update_descriptor_sets(&descriptor_writes, &[]);
         }
-        (
-            descriptor_sets,
-            layouts.into_iter().collect(),
-        )
+        (descriptor_sets, layouts.into_iter().collect())
     }
 
     fn create_pipeline_layout(
@@ -1420,7 +1675,7 @@ impl ProvinceDrawData {
             .cull_mode(vk::CullModeFlags::NONE)
             .front_face(vk::FrontFace::CLOCKWISE)
             .depth_bias_enable(true)
-            .depth_bias_constant_factor(0.1)
+            .depth_bias_constant_factor(World::RADIUS as f32 * -0.05)
             .line_width(LINE_WIDTH)
             .extend_from(&line_raster);
 
@@ -1507,80 +1762,6 @@ impl ProvinceDrawData {
 
         pipeline
     }
-
-    // pub fn add_point(&mut self, point: Vector3<f32>) -> usize {
-    //     self.vertex_buffer.add_value(ProvinceVertex {
-    //         position: point,
-    //         color: Vector4::new(1.0, 1.0, 1.0, 0.1),
-    //     });
-    //     self.vertex_buffer.count - 1
-    // }
-
-    // pub fn update_selection<
-    //     'a,
-    //     I: Iterator<Item = &'a usize>,
-    //     J: Iterator<Item = &'a usize>,
-    //     K: Iterator<Item = &'a usize>,
-    //     L: Iterator<Item = &'a usize>,
-    // >(
-    //     &mut self,
-    //     selected_point_indices: I,
-    //     highlighted_point_indices: J,
-    //     targeted_point_indices: K,
-    //     player_country_point_indices: L,
-    // ) {
-    //     for point in &mut self.vertex_buffer {
-    //         point.color = Vector4::new(0.0, 0.0, 0.0, 0.0);
-    //     }
-    //     for &index in player_country_point_indices {
-    //         self.vertex_buffer[index].color = Vector4::new(0.1, 0.9, 0.1, 1.0);
-    //     }
-    //     for &index in highlighted_point_indices {
-    //         self.vertex_buffer[index].color = Vector4::new(1.0, 1.0, 1.0, 0.1);
-    //     }
-    //     for &index in selected_point_indices {
-    //         self.vertex_buffer[index].color = Vector4::new(1.0, 1.0, 1.0, 1.0);
-    //     }
-    //     for &index in targeted_point_indices {
-    //         self.vertex_buffer[index].color = Vector4::new(0.8, 0.1, 0.1, 1.0);
-    //     }
-    // }
-
-    // pub fn select_points(&mut self, point_indices: &[usize]) {
-    //     // self.index_buffer.count = 0;
-    //     // for &index in point_indices {
-    //     //     self.index_buffer.add_value(index as u32);
-    //     // }
-    //     // for (index, vertex) in (&mut self.vertex_buffer).into_iter().enumerate() {
-    //     //     if point_indices.contains(&index) {
-    //     //         vertex.color.w = 1.0;
-    //     //     } else {
-    //     //         vertex.color.w = 0.0;
-    //     //     }
-    //     // }
-    // }
-
-    // pub fn set_color(&mut self, point_indices: &[usize], color: Vector4<f32>) {
-    //     // for &index in point_indices {
-    //     //     self.vertex_buffer[index].color = color;
-    //     // }
-    //     for (index, vertex) in (&mut self.vertex_buffer).into_iter().enumerate() {
-    //         if point_indices.contains(&index) {
-    //             vertex.color = color;
-    //         } else {
-    //             vertex.color.w = 0.0;
-    //         }
-    //     }
-
-    // }
-
-    // pub fn connect_points(&mut self, first_index: usize, second_index: usize) {
-    //     if !self.index_map.insert((first_index, second_index)) {
-    //         return;
-    //     }
-    //     self.index_buffer.add_value(first_index as u32);
-    //     self.index_buffer.add_value(second_index as u32);
-    // }
 }
 
 //TODO: Clean this up, maybe split it into multiple structs so it's less of a mess
@@ -1806,7 +1987,7 @@ impl VulkanData {
     {
         let mut validation_layer_names = vec![];
 
-        #[cfg(feature="validation-layers")]
+        #[cfg(feature = "validation-layers")]
         validation_layer_names.push(erupt::cstr!("VK_LAYER_KHRONOS_validation"));
 
         self.entry = Some(erupt::EntryLoader::new().unwrap());
@@ -4012,12 +4193,26 @@ impl VulkanData {
         };
     }
 
-    pub fn create_province_data(&mut self, vertices: impl Iterator<Item = Vector3<f32>>, indices: impl Iterator<Item = usize>) {
-        let province_data = ProvinceDrawData::new(self, &vertices.map(|v|{
-            ProvinceVertex{
-                position: v.cast(),
-            }
-        }).collect::<Box<[_]>>(), &indices.map(|i|i as u32).collect::<Box<[_]>>());
+    pub fn create_province_data(
+        &mut self,
+        vertices: impl Iterator<Item = Vector3<f32>>,
+        indices: impl Iterator<Item = usize>,
+        font: LayoutIter,
+        font_width: usize,
+        font_height: usize,
+        num_glyphs: usize,
+    ) {
+        let province_data = ProvinceDrawData::new(
+            self,
+            &vertices
+                .map(|v| ProvinceVertex { position: v.cast() })
+                .collect::<Box<[_]>>(),
+            &indices.map(|i| i as u32).collect::<Box<[_]>>(),
+            font,
+            font_width as u32,
+            font_height as u32,
+            num_glyphs as u32,
+        );
         self.province_data = Some(province_data);
     }
 

@@ -2,10 +2,18 @@ use crate::{
     support::{index_to_coordinate, Vertex, CUBEMAP_WIDTH},
     world::{ProvinceMap, World},
 };
-use gdal::{raster::GdalType, Dataset, vector::{FieldValue, Geometry}};
+use gdal::{
+    raster::GdalType,
+    vector::{FieldValue, Geometry},
+    Dataset,
+};
 
-use gdal_sys::{OGR_G_ForceToLineString, OGR_G_GetPoints, OGR_G_GetPointCount, OGR_G_Clone, OGR_G_GetGeometryRef, OGR_G_GetGeometryCount};
+use gdal_sys::{
+    OGR_G_Clone, OGR_G_ForceToLineString, OGR_G_GetGeometryCount, OGR_G_GetGeometryRef,
+    OGR_G_GetPointCount, OGR_G_GetPoints,
+};
 use genmesh::generators::{IcoSphere, IndexedPolygon, SharedVertex};
+use lyon_tessellation::path::Path as LyonPath;
 use lyon_tessellation::FillTessellator;
 use nalgebra::{Vector2, Vector3, Vector4};
 use serde::Deserialize;
@@ -14,10 +22,10 @@ use std::{
     fmt::Debug,
     fs::File,
     io::Write,
+    mem::size_of,
     ops::{Add, AddAssign, Mul},
-    path::{Path, PathBuf}, mem::size_of,
+    path::{Path, PathBuf},
 };
-use lyon_tessellation::path::Path as LyonPath;
 // use triangulate::{Vertex as TriangulateVertex, TriangulateDefault, Triangulate};
 
 pub struct MeshOutput {
@@ -260,7 +268,7 @@ impl<T> Convert<Self> for T {
 }
 
 pub fn get_countries() -> Box<[(String, Option<String>)]> {
-    let mut samples = vec![(0u16, 0); (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) as usize];
+    // let mut samples = vec![(0u16, 0); (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) as usize];
     // load_raster_file(
     //     &PathBuf::from("../GSG/nations/nations.tif"),
     //     &mut samples,
@@ -277,15 +285,15 @@ pub fn get_countries() -> Box<[(String, Option<String>)]> {
     //     .collect();
 
     #[derive(Debug, Deserialize)]
-    struct CsvRow {
+    struct NationCsvRow {
         name: String,
         id: u16,
     }
-    let mut reader =
-        csv::Reader::from_path("world_data/nations/nations.csv").expect("Failed to open nations csv");
+    let mut reader = csv::Reader::from_path("world_data/nations/nations.csv")
+        .expect("Failed to open nations csv");
     let country_names_and_definitions: Box<[(String, Option<String>)]> = reader
         .deserialize()
-        .map(|a: Result<CsvRow, _>| {
+        .map(|a: Result<NationCsvRow, _>| {
             let row = a.expect("failed to deserialize nations csv");
             let definition_path = format!("{:}.org", row.id);
 
@@ -353,7 +361,9 @@ pub fn get_provinces() -> (
     //     File::open("world_data/provinces/provinces.geojson").expect("Failed to open provinces");
     // let province_root: ProvinceRoot =
     //     serde_json::from_reader(reader).expect("Failed to deserialize provinces");
-    let ids = samples.iter().into_iter()
+    let ids = samples
+        .iter()
+        .into_iter()
         .map(|&(a, _)| if a == 0 { None } else { Some(a - 1) })
         .collect();
 
@@ -382,10 +392,11 @@ pub fn get_water() -> Vec<f32> {
 }
 
 pub fn get_languages() -> (Vec<u32>, HashMap<u32, String>) {
-    let id_to_name = csv::Reader::from_reader(File::open("world_data/language/language.csv").unwrap())
-        .deserialize::<(u32, String)>()
-        .map(|a| a.unwrap())
-        .collect();
+    let id_to_name =
+        csv::Reader::from_reader(File::open("world_data/language/language.csv").unwrap())
+            .deserialize::<(u32, String)>()
+            .map(|a| a.unwrap())
+            .collect();
 
     let mut samples = vec![(0u32, 0); (CUBEMAP_WIDTH * CUBEMAP_WIDTH * 6) as usize];
 
@@ -758,8 +769,6 @@ fn latlong_to_vector(latitude: f64, longitude: f64) -> Vector3<f64> {
 //             path_builder.end(
 //                 false
 //             );
-            
-
 
 //             // let last_point_index = point_vec.len() - 1;
 //             // assert_ne!(point_vec.len(), 0);
@@ -799,15 +808,18 @@ impl lyon_tessellation::FillVertexConstructor<Vector3<f32>> for Ctor {
     fn new_vertex(&mut self, mut vertex: lyon_tessellation::FillVertex) -> Vector3<f32> {
         let position = vertex.position();
         let attrs = vertex.interpolated_attributes();
-        Vector3::new(
-            position.x,
-            attrs[0],
-            position.y,
-        )
+        Vector3::new(position.x, attrs[0], position.y)
     }
 }
 
-fn load_vector_file(path: &Path) -> (Box<[u16]>, Box<[String]>, Box<[Vector3<f32>]>, Box<[Box<[usize]>]>) {
+fn load_vector_file(
+    path: &Path,
+) -> (
+    Box<[u16]>,
+    Box<[String]>,
+    Box<[Vector3<f32>]>,
+    Box<[Box<[usize]>]>,
+) {
     println!("Loading file: {:?}", path);
     let dataset = gdal::Dataset::open(path).unwrap();
     let mut vector_layer = dataset.layer(0).unwrap();
@@ -823,23 +835,22 @@ fn load_vector_file(path: &Path) -> (Box<[u16]>, Box<[String]>, Box<[Vector3<f32
     let mut names = Vec::with_capacity(num_features as usize);
     let mut owners = Vec::with_capacity(num_features as usize);
     for feature in vector_layer.features() {
-        if let FieldValue::StringValue(name) = feature.field("name").unwrap().unwrap(){
+        if let FieldValue::StringValue(name) = feature.field("name").unwrap().unwrap() {
             names.push(name);
-        }else{
+        } else {
             names.push("UNNAMED".to_string());
         }
-        if let FieldValue::IntegerValue(country_id) = feature.field("controlling_organization").unwrap().unwrap(){
+        if let FieldValue::IntegerValue(country_id) =
+            feature.field("controlling_organization").unwrap().unwrap()
+        {
             owners.push(country_id as u16);
-        }else{
-            owners.push(0);
+        } else {
+            panic!("Missing owner field for feature {:}", i)
         }
         let time_elapsed = instant.elapsed().as_secs_f64();
         if time_elapsed > 1.0 {
             instant = std::time::Instant::now();
-            println!(
-                "Percent done file: {:}",
-                i as f64 / num_features as f64
-            );
+            println!("Percent done file: {:}", i as f64 / num_features as f64);
         };
         i += 1;
         let mut path_builder = LyonPath::builder_with_attributes(1);
@@ -850,73 +861,90 @@ fn load_vector_file(path: &Path) -> (Box<[u16]>, Box<[String]>, Box<[Vector3<f32
                 let geom = OGR_G_Clone(geom);
                 geom
             };
-            let ring_count = unsafe{OGR_G_GetGeometryCount(geom)};
-            for ring in 0..ring_count{
-              
+            let ring_count = unsafe { OGR_G_GetGeometryCount(geom) };
+            for ring in 0..ring_count {
                 let point_vec: Vec<_> = unsafe {
                     let geom = OGR_G_GetGeometryRef(geom, ring as i32);
                     let geom = OGR_G_Clone(geom);
-                    // let geom = OGR_G_ForceToLineString(geom);    
+                    // let geom = OGR_G_ForceToLineString(geom);
                     let point_count = OGR_G_GetPointCount(geom) as usize;
-                    if point_count < 3{
-                        println!("Degenerate province loaded: {:}",i);
+                    if point_count < 3 {
+                        eprintln!("Degenerate province loaded: {:}", i);
                         continue;
                     }
                     let mut x_buffer: Vec<f64> = Vec::with_capacity(point_count);
                     let mut y_buffer: Vec<f64> = Vec::with_capacity(point_count);
                     let mut z_buffer: Vec<f64> = Vec::with_capacity(point_count);
-                    
+
                     let stride = size_of::<f64>();
-                    OGR_G_GetPoints(geom,
-                        x_buffer.as_mut_ptr() as *mut _ , 
-                        stride as i32, 
-                        y_buffer.as_mut_ptr() as *mut _ , 
-                        stride as i32, 
-                        z_buffer.as_mut_ptr() as *mut _ , 
-                        stride as i32);
+                    OGR_G_GetPoints(
+                        geom,
+                        x_buffer.as_mut_ptr() as *mut _,
+                        stride as i32,
+                        y_buffer.as_mut_ptr() as *mut _,
+                        stride as i32,
+                        z_buffer.as_mut_ptr() as *mut _,
+                        stride as i32,
+                    );
                     x_buffer.set_len(point_count);
                     y_buffer.set_len(point_count);
                     z_buffer.set_len(point_count);
-                    (0..point_count).map(|i|(x_buffer[i], y_buffer[i])).collect()
+                    (0..point_count)
+                        .map(|i| (x_buffer[i], y_buffer[i]))
+                        .collect()
                 };
                 let first = point_vec.first().unwrap();
                 let first = latlong_to_vector(first.1, first.0);
                 path_builder.begin(
                     lyon_tessellation::math::point(first.x as f32, first.z as f32),
-                    &[first.y as f32]
+                    &[first.y as f32],
                 );
-                for i in 1..(point_vec.len()){
+                for i in 1..(point_vec.len()) {
                     let point = latlong_to_vector(point_vec[i].1, point_vec[i].0);
-                    path_builder.line_to(lyon_tessellation::math::point(point.x as f32, point.z as f32), &[point.y as f32]);
+                    path_builder.line_to(
+                        lyon_tessellation::math::point(point.x as f32, point.z as f32),
+                        &[point.y as f32],
+                    );
                 }
-                path_builder.line_to(lyon_tessellation::math::point(first.x as f32, first.z as f32),
-                    &[first.y as f32]);
-                path_builder.end(
-                    false
+                path_builder.line_to(
+                    lyon_tessellation::math::point(first.x as f32, first.z as f32),
+                    &[first.y as f32],
                 );
-
+                path_builder.end(false);
             }
-
         }
         path_builder.end(true);
         let path = path_builder.build();
-        let mut buffers: lyon_tessellation::VertexBuffers<Vector3<f32>, u16> = lyon_tessellation::VertexBuffers::new();
+        let mut buffers: lyon_tessellation::VertexBuffers<Vector3<f32>, u16> =
+            lyon_tessellation::VertexBuffers::new();
         {
-            let mut vertex_builder = lyon_tessellation::geometry_builder::BuffersBuilder::new(&mut buffers, Ctor);
+            let mut vertex_builder =
+                lyon_tessellation::geometry_builder::BuffersBuilder::new(&mut buffers, Ctor);
             let mut tessellator = FillTessellator::new();
             let result = tessellator.tessellate_path(
                 &path,
                 &lyon_tessellation::FillOptions::default(),
-                &mut vertex_builder
+                &mut vertex_builder,
             );
             assert!(result.is_ok());
         }
 
-        out_indices.push(buffers.indices.iter().map(|&i|i as usize + feature_offset).collect::<Box<[_]>>());
+        out_indices.push(
+            buffers
+                .indices
+                .iter()
+                .map(|&i| i as usize + feature_offset)
+                .collect::<Box<[_]>>(),
+        );
         out_vertices.extend(buffers.vertices.iter().copied());
 
         feature_offset += buffers.vertices.len();
     }
     dbg!(names.len());
-    (owners.into_boxed_slice(), names.into_boxed_slice(), out_vertices.into_boxed_slice(), out_indices.into_boxed_slice())
+    (
+        owners.into_boxed_slice(),
+        names.into_boxed_slice(),
+        out_vertices.into_boxed_slice(),
+        out_indices.into_boxed_slice(),
+    )
 }
