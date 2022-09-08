@@ -13,6 +13,7 @@ use image::{GenericImageView, ImageFormat};
 use nalgebra::{
     Matrix4, Point3, Quaternion, Scale3, Translation3, UnitQuaternion, Vector2, Vector3, Vector4,
 };
+use rand::Rng;
 use rusttype::LayoutIter;
 
 use std::collections::HashSet;
@@ -1766,7 +1767,7 @@ impl ProvinceDrawData {
 
 //TODO: Clean this up, maybe split it into multiple structs so it's less of a mess
 pub struct VulkanData {
-    rng: fastrand::Rng,
+    rng: rand::rngs::ThreadRng,
     instance: Option<InstanceLoader>,
     entry: Option<EntryLoader>,
     pub device: Option<DeviceLoader>,
@@ -1844,10 +1845,10 @@ pub struct VulkanData {
     images_3d: Vec<CombinedImage>,
 }
 
-fn get_random_vector(rng: &fastrand::Rng, length: usize) -> Vec<f32> {
+fn get_random_vector(rng: &mut rand::rngs::ThreadRng, length: usize) -> Vec<f32> {
     let mut vector = Vec::new();
     for _ in 0..length {
-        vector.push(rng.f32());
+        vector.push(rng.gen::<f32>());
     }
     return vector;
 }
@@ -1888,7 +1889,7 @@ impl VulkanData {
         let vertices = vec![];
 
         return VulkanData {
-            rng: fastrand::Rng::new(),
+            rng: rand::thread_rng(),
             instance: None,
             entry: None,
             device: None,
@@ -6342,8 +6343,9 @@ impl VulkanData {
         );
     }
     pub fn transfer_data_to_gpu(&mut self) {
-        let random: [f32; NUM_RANDOM] =
-            get_random_vector(&self.rng, NUM_RANDOM).try_into().unwrap();
+        let random: [f32; NUM_RANDOM] = get_random_vector(&mut self.rng, NUM_RANDOM)
+            .try_into()
+            .unwrap();
         for i in 0..NUM_RANDOM {
             self.uniform_buffer_object.random[i] =
                 Vector4::new(random[i], random[i], random[i], random[i]);

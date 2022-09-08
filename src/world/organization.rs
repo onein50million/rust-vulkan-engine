@@ -6,12 +6,13 @@ use std::{
 
 use bitflags::bitflags;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use variant_count::VariantCount;
 
 use super::{
     ideology::{Ideology, PoliticalPartyKey},
-    Good, ProvinceKey, ProvinceMap,
+    Good, ProvinceKey, ProvinceMap, equipment::guns::{ServiceFirearm, INTERMEDIATE_AUTO_RIFLE, SUBMACHINE_GUN, AUTO_RIFLE, LARGE_CALIBER_BOLT_RIFLE},
 };
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord, Clone, Copy, Debug)]
@@ -180,7 +181,7 @@ impl Organization {
                                         DecisionCategory::VARIANT_COUNT],
                                     branch_control: HashMap::new(),
                                     last_election: -2.0,
-                                    term_length: 2.0 + fastrand::f64(),
+                                    term_length: 2.0 + rand::random::<f64>(),
                                     controlling_party: PoliticalPartyKey(0),
                                     elected: false,
                                 }));
@@ -273,34 +274,40 @@ impl Organization {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct MilitaryForce {
     pub num_troops: f64,
-    pub survival_supply: f64, //in person-years
+    pub survival_supply: f64,    //in person-years
     pub survival_needs_met: f64, //ratio
-    pub ammo_supply: f64, //in person-years of fighting
+    pub ammo_supply: f64,        //in person-years of fighting
     pub ammo_needs_met: f64,
 }
-impl MilitaryForce{
-    pub fn empty() -> Self{
-        Self { num_troops: 0.0, survival_supply: 0.0, survival_needs_met: 1.0, ammo_supply: 0.0, ammo_needs_met: 1.0}
+impl MilitaryForce {
+    pub fn empty() -> Self {
+        Self {
+            num_troops: 0.0,
+            survival_supply: 0.0,
+            survival_needs_met: 1.0,
+            ammo_supply: 0.0,
+            ammo_needs_met: 1.0,
+        }
     }
-    pub fn supply_goods(&mut self, goods: &mut [f64; Good::VARIANT_COUNT], allocation_ratio: f64){
+    pub fn supply_goods(&mut self, goods: &mut [f64; Good::VARIANT_COUNT], allocation_ratio: f64) {
         let target_survival_supply = 1.0 * self.num_troops * 1.0;
         let target_ammo_supply = 1.0 * self.num_troops;
 
         let survival_delta = (target_survival_supply - self.survival_supply).max(0.0);
         let survival_needs = {
-            let mut needs = std::array::from_fn(|_|0.0);
+            let mut needs = std::array::from_fn(|_| 0.0);
             Military::add_survival_needs(survival_delta, &mut needs);
             needs
         };
         let ammo_delta = (target_ammo_supply - self.ammo_supply).max(0.0);
         let ammo_needs = {
-            let mut needs = std::array::from_fn(|_|0.0);
+            let mut needs = std::array::from_fn(|_| 0.0);
             Military::add_ammo_needs(ammo_delta, &mut needs);
             needs
         };
         let mut min_survival_need = 1.0f64;
         let mut min_ammo_need = 1.0f64;
-        for good in (0..Good::VARIANT_COUNT).map(|g|Good::try_from(g).unwrap()){
+        for good in (0..Good::VARIANT_COUNT).map(|g| Good::try_from(g).unwrap()) {
             let survival_need = survival_needs[good as usize];
             let ammo_need = ammo_needs[good as usize];
 
@@ -310,66 +317,70 @@ impl MilitaryForce{
             let supply_ratio = (available_good / total_need).min(1.0);
 
             if survival_need > 0.0 {
-                min_survival_need = min_survival_need.min((available_good * supply_ratio) / survival_need);
+                min_survival_need =
+                    min_survival_need.min((available_good * supply_ratio) / survival_need);
             }
-            if ammo_need > 0.0{
+            if ammo_need > 0.0 {
                 min_ammo_need = min_ammo_need.min((available_good * supply_ratio) / ammo_need);
             }
         }
-        for good in (0..Good::VARIANT_COUNT).map(|g|Good::try_from(g).unwrap()){
+        for good in (0..Good::VARIANT_COUNT).map(|g| Good::try_from(g).unwrap()) {
             goods[good as usize] -= survival_needs[good as usize] * min_survival_need;
             goods[good as usize] -= ammo_needs[good as usize] * min_ammo_need;
         }
         self.survival_supply += min_survival_need * survival_delta;
         self.ammo_supply += min_ammo_need * ammo_delta;
-
     }
-    pub fn build_troops(&mut self, goods: &mut [f64; Good::VARIANT_COUNT], num_troops: f64, allocation_ratio: f64) -> f64{
+    pub fn build_troops(
+        &mut self,
+        goods: &mut [f64; Good::VARIANT_COUNT],
+        num_troops: f64,
+        allocation_ratio: f64,
+    ) -> f64 {
         // if num_troops > 0.0{
         //     dbg!(num_troops);
         // }
         assert!(!num_troops.is_nan());
         let target_equipment_supply = num_troops;
         let equipment_needs = {
-            let mut needs = std::array::from_fn(|_|0.0);
+            let mut needs = std::array::from_fn(|_| 0.0);
             Military::add_equipment_needs(target_equipment_supply, &mut needs);
             needs
         };
-        
+
         let mut min_equipment_need = 1.0f64;
-        for good in (0..Good::VARIANT_COUNT).map(|g|Good::try_from(g).unwrap()){
+        for good in (0..Good::VARIANT_COUNT).map(|g| Good::try_from(g).unwrap()) {
             let equipment_need = equipment_needs[good as usize];
             let available_good = goods[good as usize] * allocation_ratio;
 
-            if equipment_need > 0.0{
+            if equipment_need > 0.0 {
                 min_equipment_need = min_equipment_need.min(available_good / equipment_need);
             }
         }
         // if num_troops > 0.0{
         //     dbg!(min_equipment_need);
         // }
-        for good in (0..Good::VARIANT_COUNT).map(|g|Good::try_from(g).unwrap()){
+        for good in (0..Good::VARIANT_COUNT).map(|g| Good::try_from(g).unwrap()) {
             goods[good as usize] -= equipment_needs[good as usize] * min_equipment_need;
         }
         let added_troops = min_equipment_need * target_equipment_supply;
         self.num_troops += added_troops;
-        if added_troops.is_nan(){
+        if added_troops.is_nan() {
             dbg!(goods);
             dbg!(min_equipment_need);
             dbg!(target_equipment_supply);
-        }       
+        }
         assert!(!added_troops.is_nan());
         added_troops
     }
     pub fn consume_supplies(&mut self, fighting: bool, delta_year: f64) {
-        let survival_supplies_needed = delta_year*self.num_troops;
+        let survival_supplies_needed = delta_year * self.num_troops;
         self.survival_needs_met = (self.survival_supply / survival_supplies_needed).min(1.0);
         self.survival_supply -= survival_supplies_needed * self.survival_needs_met;
 
         let ammo_supplies_needed = if fighting {
-            delta_year*self.num_troops
-        }
-        else{
+            delta_year * self.num_troops
+        } else {
             0.0
         };
         self.ammo_needs_met = (self.ammo_supply / ammo_supplies_needed).min(1.0);
@@ -377,52 +388,73 @@ impl MilitaryForce{
     }
 }
 
-
 #[derive(Serialize, Deserialize)]
 pub struct Military {
     pub recruit_ratio: ProvinceMap<f64>,
     pub deployed_forces: ProvinceMap<MilitaryForce>,
-    pub equipment_supply: f64 //in persons
+    pub equipment_supply: f64, //in persons
+    pub service_rifle: ServiceFirearm,
 }
 impl Military {
     pub fn new(num_provinces: usize) -> Self {
+        let mut rng =  rand::thread_rng();
+        let service_rifles = &[
+            INTERMEDIATE_AUTO_RIFLE,
+            SUBMACHINE_GUN,
+            AUTO_RIFLE,
+            LARGE_CALIBER_BOLT_RIFLE,
+        ];
         Self {
             recruit_ratio: ProvinceMap(vec![0.0; num_provinces].into_boxed_slice()),
             // military_type,
-            deployed_forces: ProvinceMap(vec![MilitaryForce::empty(); num_provinces].into_boxed_slice()),
+            deployed_forces: ProvinceMap(
+                vec![MilitaryForce::empty(); num_provinces].into_boxed_slice(),
+            ),
             equipment_supply: 0.0,
+            service_rifle: service_rifles.choose(&mut rng).unwrap().clone(),
+            
         }
     }
-    pub fn get_total_needs(&self) -> [f64; Good::VARIANT_COUNT]{
-        let num_troops_deployed = self.deployed_forces.0.iter().map(|p|p.num_troops).sum::<f64>();
+    pub fn get_total_needs(&self) -> [f64; Good::VARIANT_COUNT] {
+        let num_troops_deployed = self
+            .deployed_forces
+            .0
+            .iter()
+            .map(|p| p.num_troops)
+            .sum::<f64>();
 
-        let mut needed_goods = std::array::from_fn(|_|0.0);
+        let mut needed_goods = std::array::from_fn(|_| 0.0);
         Military::add_survival_needs(num_troops_deployed, &mut needed_goods);
         Military::add_ammo_needs(num_troops_deployed, &mut needed_goods);
         Military::add_equipment_needs(10_000.0, &mut needed_goods);
 
         needed_goods
     }
-    pub fn add_survival_needs(person_years: f64, needed_goods: &mut [f64; Good::VARIANT_COUNT]){
+    pub fn add_survival_needs(person_years: f64, needed_goods: &mut [f64; Good::VARIANT_COUNT]) {
         needed_goods[Good::ProcessedFood as usize] += person_years * 2.0;
     }
-    pub fn add_ammo_needs(person_years: f64, needed_goods: &mut [f64; Good::VARIANT_COUNT]){
+    pub fn add_ammo_needs(person_years: f64, needed_goods: &mut [f64; Good::VARIANT_COUNT]) {
         needed_goods[Good::Ammunition as usize] += person_years * 0.5;
     }
-    pub fn add_equipment_needs(persons: f64, needed_goods: &mut [f64; Good::VARIANT_COUNT]){
+    pub fn add_equipment_needs(persons: f64, needed_goods: &mut [f64; Good::VARIANT_COUNT]) {
         needed_goods[Good::SmallArms as usize] += persons * 0.1;
         needed_goods[Good::HeavyWeaponry as usize] += persons * 0.01;
         needed_goods[Good::Armor as usize] += persons * 0.1;
     }
-    pub fn get_met_needs_ratio(needs: [f64; Good::VARIANT_COUNT], owned_goods: [f64; Good::VARIANT_COUNT], allocation_ratio: f64, goods_spent: &mut [f64]) -> f64{
+    pub fn get_met_needs_ratio(
+        needs: [f64; Good::VARIANT_COUNT],
+        owned_goods: [f64; Good::VARIANT_COUNT],
+        allocation_ratio: f64,
+        goods_spent: &mut [f64],
+    ) -> f64 {
         let mut met_needs_ratio = 1.0;
 
-        for good_index in 0..Good::VARIANT_COUNT{
+        for good_index in 0..Good::VARIANT_COUNT {
             let ratio = ((owned_goods[good_index] * allocation_ratio) / needs[good_index]).min(1.0);
             met_needs_ratio *= ratio;
         }
-        for good_index in 0..Good::VARIANT_COUNT{
-            goods_spent[good_index] += met_needs_ratio*needs[good_index];
+        for good_index in 0..Good::VARIANT_COUNT {
+            goods_spent[good_index] += met_needs_ratio * needs[good_index];
         }
         met_needs_ratio
     }

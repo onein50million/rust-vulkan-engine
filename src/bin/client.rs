@@ -674,7 +674,7 @@ fn main() {
                         game.world.organizations[game.world.player_organization].money
                     )
                 ));
-                Grid::new("owned_goods").show(ui, |ui|{
+                Grid::new("owned_goods").show(ui, |ui| {
                     for good_index in 0..Good::VARIANT_COUNT {
                         let good = Good::try_from(good_index).unwrap();
                         ui.label(format!(
@@ -683,7 +683,7 @@ fn main() {
                             &game.world.organizations[game.world.player_organization].owned_goods
                                 [good_index]
                         ));
-                        if good_index % 10 == 0{
+                        if good_index % 10 == 0 {
                             ui.end_row();
                         }
                     }
@@ -833,7 +833,7 @@ fn main() {
             });
         }
         if pop_ideology_info_open {
-            Window::new("Pop Table").show(&ctx, |ui| {
+            Window::new("Pop Ideology Table").show(&ctx, |ui| {
                 ComboBox::from_label("Select Slice").show_ui(ui, |ui| {
                     match game.world.selected_province {
                         Some(selected_province) => {
@@ -976,8 +976,13 @@ fn main() {
                                     org.military.deployed_forces[selected_province_key].num_troops
                                 )
                             ));
-                            ui.label(org.military.deployed_forces[selected_province_key].survival_needs_met);
-                            ui.label(org.military.deployed_forces[selected_province_key].ammo_needs_met);
+                            ui.label(
+                                org.military.deployed_forces[selected_province_key]
+                                    .survival_needs_met,
+                            );
+                            ui.label(
+                                org.military.deployed_forces[selected_province_key].ammo_needs_met,
+                            );
 
                             ui.end_row();
                         }
@@ -1083,9 +1088,14 @@ fn main() {
                         .show(&ctx, |ui| {
                             Grid::new(0).striped(true).show(ui, |ui| {
                                 ui.label("money");
+                                ui.label("org wealth");
                                 ui.label("army size");
+                                ui.label("population");
+                                ui.label("pop wealth");
+                                ui.label("wealth per capita");
                                 ui.end_row();
                                 ui.label(format!("{:}", big_number_format(org.money)));
+                                ui.label(format!("{:}", big_number_format(game.world.get_org_wealth(org_key))));
                                 ui.label(format!(
                                     "{:}",
                                     big_number_format(
@@ -1097,6 +1107,13 @@ fn main() {
                                             .sum::<f64>()
                                     )
                                 ));
+                                let population =  game.world.get_org_population(org_key);
+                                let wealth =  game.world.get_org_pop_wealth(org_key);
+                                let wealth_per_capita =  wealth / population;
+                                ui.label(format!("{:}", big_number_format(population)));
+                                ui.label(format!("{:}", big_number_format(wealth)));
+                                ui.label(format!("{:}", big_number_format(wealth_per_capita)));
+
                             });
                             ui.label("Branches");
                             for branch in &org.branches {

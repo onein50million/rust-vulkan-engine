@@ -57,6 +57,7 @@
 
 use std::ops::{Index, IndexMut};
 
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use self::positions::*;
@@ -335,14 +336,14 @@ impl Beliefs {
         }
     }
     pub fn new_random() -> Self {
-        let rng = fastrand::Rng::new();
+        let mut rng = rand::thread_rng();
         let mut questions = [Response {
             value: 0.0,
             importance: 0.0,
         }; QUESTIONS.len()];
         for response in &mut questions {
-            response.value = rng.f64() * 2.0 - 1.0;
-            response.importance = rng.f64();
+            response.value = rng.gen::<f64>() * 2.0 - 1.0;
+            response.importance = rng.gen::<f64>();
             // response.value = rng.i16(..);
             // response.importance = rng.u16(..);
         }
