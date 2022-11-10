@@ -103,6 +103,13 @@ pub mod positions {
         Impossible,
     }
     #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum IndustrySupport {
+        Agrarian,
+        Indifferent,
+        Industrial,
+        FactoryMustGrow,
+    }
+    #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
     //Social Positions
     pub enum Immigration {
         None,
@@ -170,6 +177,7 @@ pub struct Ideology {
     pub separation_of_powers: SeparationOfPowers,
     pub research: Research,
     pub primary_language: LanguageKey,
+    pub industry: IndustrySupport,
 }
 
 impl Ideology {
@@ -188,11 +196,15 @@ impl Ideology {
             separation_of_powers: SeparationOfPowers::ManyBranches,
             research: Research::Evil,
             primary_language: LanguageKey(0),
+            industry: IndustrySupport::Indifferent,
         }
     }
     pub fn distance(&self, other: &Ideology) -> f64 {
         let mut out = 0.0;
         if self.tax_rate != other.tax_rate {
+            out += 1.0;
+        }
+        if self.industry != other.industry {
             out += 1.0;
         }
         if self.tax_method != other.tax_method {
@@ -353,6 +365,7 @@ impl Beliefs {
     }
     pub fn to_ideology(&self, majority_language: LanguageKey) -> Ideology {
         let tax_rate;
+        let industry;
         let tax_method;
         let import_difficulty;
         let export_difficulty;
@@ -676,6 +689,21 @@ impl Beliefs {
                 language_support = bounded
             }
         }
+        {
+            let response = self.responses[INDUSTRY_QUESTION];
+            let value = response.get_value();
+            let importance = response.get_importance();
+
+            industry = pick_variant(
+                value,
+                &[
+                    IndustrySupport::Agrarian,
+                    IndustrySupport::Indifferent,
+                    IndustrySupport::Industrial,
+                    IndustrySupport::FactoryMustGrow,
+                ],
+            )
+        }
         Ideology {
             tax_rate,
             tax_method,
@@ -689,6 +717,7 @@ impl Beliefs {
             welfare_support,
             separation_of_powers,
             research,
+            industry,
             primary_language: majority_language,
         }
     }

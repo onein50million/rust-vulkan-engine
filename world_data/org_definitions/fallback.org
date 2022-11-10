@@ -1,7 +1,8 @@
 def President ppl 1
 
-ctrl_decision President enacts MoveTroops
-ctrl_decision President enacts War
-ctrl_decision President enacts Taxes
+ctrl_decision President enacts Military
+ctrl_decision President enacts Industry
+ctrl_decision President enacts Diplomacy
+ctrl_decision President enacts Economy
 
 ctrl_branch $People appoints President

@@ -11,9 +11,30 @@ use serde::{Deserialize, Serialize};
 use variant_count::VariantCount;
 
 use super::{
+    equipment::guns::{
+        ServiceFirearm, AUTO_RIFLE, INTERMEDIATE_AUTO_RIFLE, LARGE_CALIBER_BOLT_RIFLE,
+        SUBMACHINE_GUN,
+    },
     ideology::{Ideology, PoliticalPartyKey},
-    Good, ProvinceKey, ProvinceMap, equipment::guns::{ServiceFirearm, INTERMEDIATE_AUTO_RIFLE, SUBMACHINE_GUN, AUTO_RIFLE, LARGE_CALIBER_BOLT_RIFLE},
+    Good, ProvinceKey, ProvinceMap,
 };
+#[derive(Clone, Debug, Serialize, Deserialize, Hash, PartialEq, Eq)]
+pub enum DiplomaticAction {
+    DeclareWar,
+    OfferPeace,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum DiplomaticOfferType {
+    Peace,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DiplomaticOffer {
+    pub from: OrganizationKey,
+    pub time_sent: f64,
+    pub offer_type: DiplomaticOfferType,
+}
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord, Clone, Copy, Debug)]
 pub struct OrganizationKey(pub usize);
@@ -29,17 +50,20 @@ pub struct Organization {
     pub province_approval: ProvinceMap<f64>,
     pub military: Military,
     pub branches: Vec<BranchKey>,
-    pub decisions: [Decision; DecisionCategory::VARIANT_COUNT],
+    // pub decisions: [Decision; DecisionCategory::VARIANT_COUNT],
+    pub welfare_rate: f64,
+    pub diplomatic_offers: Vec<DiplomaticOffer>,
+    pub building_troops: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
-pub enum Decision {
-    None,
-    Vetoed,
-    SetTaxes(ProvinceKey, f64),
-    DeclareWar(OrganizationKey),
-    MoveTroops(ProvinceKey, ProvinceKey, f64),
-}
+// #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+// pub enum Decision {
+//     None,
+//     Vetoed,
+//     SetTaxes(ProvinceKey, f64),
+//     DeclareWar(OrganizationKey),
+//     MoveTroops(ProvinceKey, ProvinceKey, f64),
+// }
 
 // Appointing a party to a branch
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
@@ -74,9 +98,10 @@ pub enum BranchControlDecision {
 #[repr(usize)]
 #[derive(Clone, Copy, VariantCount, Debug, IntoPrimitive, TryFromPrimitive)]
 pub enum DecisionCategory {
-    SetTaxes,   //keyword: Taxes
-    DeclareWar, //keyword: War
-    MoveTroops, //keyword: MoveTroops
+    Economy,   //keyword: Economy
+    Industry,  //keyword: Industry
+    Diplomacy, //keyword: Diplomacy
+    Military,  //keyword: Military
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord, Clone, Copy, Debug)]
@@ -144,6 +169,7 @@ bitflags! {
         const APPROVE = 0b10; //keyword: approves
     }
 }
+
 #[derive(Serialize, Deserialize)]
 pub struct Branch {
     pub name: String,
@@ -197,9 +223,10 @@ impl Organization {
                             };
                             let decision_category =
                                 match words.next().expect("No decision category given") {
-                                    "Taxes" => DecisionCategory::SetTaxes,
-                                    "War" => DecisionCategory::DeclareWar,
-                                    "MoveTroops" => DecisionCategory::MoveTroops,
+                                    "Economy" => DecisionCategory::Economy,
+                                    "Industry" => DecisionCategory::Industry,
+                                    "Diplomacy" => DecisionCategory::Diplomacy,
+                                    "Military" => DecisionCategory::Military,
                                     _ => panic!("Invalid decision category"),
                                 };
                             branches[*identifier_to_branch
@@ -249,7 +276,10 @@ impl Organization {
             province_approval: ProvinceMap(vec![0.0; num_provinces].into_boxed_slice()),
             military: Military::new(num_provinces),
             branches,
-            decisions: [Decision::None; DecisionCategory::VARIANT_COUNT],
+            // decisions: [Decision::None; DecisionCategory::VARIANT_COUNT],
+            welfare_rate: 0.5,
+            diplomatic_offers: vec![],
+            building_troops: false,
         }
     }
 
@@ -289,7 +319,11 @@ impl MilitaryForce {
             ammo_needs_met: 1.0,
         }
     }
-    pub fn supply_goods(&mut self, goods: &mut [f64; Good::VARIANT_COUNT], allocation_ratio: f64) {
+    pub fn supply_goods(
+        &mut self,
+        goods: &[f64; Good::VARIANT_COUNT],
+        allocation_ratio: f64,
+    ) -> [f64; Good::VARIANT_COUNT] {
         let target_survival_supply = 1.0 * self.num_troops * 1.0;
         let target_ammo_supply = 1.0 * self.num_troops;
 
@@ -324,12 +358,14 @@ impl MilitaryForce {
                 min_ammo_need = min_ammo_need.min((available_good * supply_ratio) / ammo_need);
             }
         }
+        let mut out_goods = std::array::from_fn(|_| 0.0);
         for good in (0..Good::VARIANT_COUNT).map(|g| Good::try_from(g).unwrap()) {
-            goods[good as usize] -= survival_needs[good as usize] * min_survival_need;
-            goods[good as usize] -= ammo_needs[good as usize] * min_ammo_need;
+            out_goods[good as usize] += survival_needs[good as usize] * min_survival_need;
+            out_goods[good as usize] += ammo_needs[good as usize] * min_ammo_need;
         }
         self.survival_supply += min_survival_need * survival_delta;
         self.ammo_supply += min_ammo_need * ammo_delta;
+        out_goods
     }
     pub fn build_troops(
         &mut self,
@@ -392,12 +428,14 @@ impl MilitaryForce {
 pub struct Military {
     pub recruit_ratio: ProvinceMap<f64>,
     pub deployed_forces: ProvinceMap<MilitaryForce>,
+    pub forces_in_waiting: MilitaryForce,
+    pub province_weights: ProvinceMap<f64>,
     pub equipment_supply: f64, //in persons
     pub service_rifle: ServiceFirearm,
 }
 impl Military {
     pub fn new(num_provinces: usize) -> Self {
-        let mut rng =  rand::thread_rng();
+        let mut rng = rand::thread_rng();
         let service_rifles = &[
             INTERMEDIATE_AUTO_RIFLE,
             SUBMACHINE_GUN,
@@ -410,9 +448,10 @@ impl Military {
             deployed_forces: ProvinceMap(
                 vec![MilitaryForce::empty(); num_provinces].into_boxed_slice(),
             ),
+            forces_in_waiting: MilitaryForce::empty(),
+            province_weights: ProvinceMap(vec![0.0; num_provinces].into_boxed_slice()),
             equipment_supply: 0.0,
             service_rifle: service_rifles.choose(&mut rng).unwrap().clone(),
-            
         }
     }
     pub fn get_total_needs(&self) -> [f64; Good::VARIANT_COUNT] {

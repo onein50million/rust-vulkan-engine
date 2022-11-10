@@ -1,38 +1,34 @@
-
-
-
-pub mod guns{
-    use serde::{Serialize, Deserialize};
-
+pub mod guns {
+    use serde::{Deserialize, Serialize};
 
     const RPM_TO_RPY: f64 = 60.0 * 24.0 * 365.0;
 
     #[derive(Serialize, Deserialize, Clone)]
-    pub struct ServiceFirearm{
+    pub struct ServiceFirearm {
         pub firerate: f64, //rounds per year
         pub kill_probability: f64,
-        pub accuracy: f64
+        pub accuracy: f64,
     }
 
-    pub const SUBMACHINE_GUN: ServiceFirearm = ServiceFirearm{
+    pub const SUBMACHINE_GUN: ServiceFirearm = ServiceFirearm {
         // name: "Submachine Gun",
         firerate: RPM_TO_RPY * 900.0,
         kill_probability: 0.1,
         accuracy: 0.8,
     };
-    pub const INTERMEDIATE_AUTO_RIFLE: ServiceFirearm = ServiceFirearm{
+    pub const INTERMEDIATE_AUTO_RIFLE: ServiceFirearm = ServiceFirearm {
         // name: "Intermediate Automatic Rifle",
         firerate: RPM_TO_RPY * 400.0,
         kill_probability: 0.5,
         accuracy: 0.95,
     };
-    pub const AUTO_RIFLE: ServiceFirearm = ServiceFirearm{
+    pub const AUTO_RIFLE: ServiceFirearm = ServiceFirearm {
         // name: "Automatic Rifle",
         firerate: RPM_TO_RPY * 300.0,
         kill_probability: 0.8,
         accuracy: 0.95,
     };
-    pub const LARGE_CALIBER_BOLT_RIFLE: ServiceFirearm = ServiceFirearm{
+    pub const LARGE_CALIBER_BOLT_RIFLE: ServiceFirearm = ServiceFirearm {
         // name: "Large Caliber Bolt Action",
         firerate: RPM_TO_RPY * 100.0,
         kill_probability: 1.1,
@@ -90,5 +86,4 @@ pub mod guns{
     //         1.0 - miss_chance * self.magnification
     //     }
     // }
-
 }

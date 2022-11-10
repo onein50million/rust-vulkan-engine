@@ -24,6 +24,7 @@ pub const LANG_REV_QUESTION: usize = 16;
 pub const SEP_QUESTION: usize = 17;
 pub const WELF_QUESTION: usize = 18;
 pub const RD_QUESTION: usize = 19;
+pub const INDUSTRY_QUESTION: usize = 20;
 
 pub const QUESTIONS: &[Question] = &[
 Question{question:"The tax rate should be...", lower_bound_meaning:"lower", upper_bound_meaning:"higher"},
@@ -45,4 +46,5 @@ Question{question:"All languages are valid forms of communication", lower_bound_
 Question{question:"We should work to revitalize dead and dying languages", lower_bound_meaning:"disagree", upper_bound_meaning:"agree"},
 Question{question:"my leaders should be accountable", lower_bound_meaning:"disagree", upper_bound_meaning:"agree"},
 Question{question:"Others basic needs are more imporant than my luxury needs", lower_bound_meaning:"disagree", upper_bound_meaning:"agree"},
-Question{question:"How important is funding research and development", lower_bound_meaning:"not very", upper_bound_meaning:"very"}];
+Question{question:"How important is funding research and development", lower_bound_meaning:"not very", upper_bound_meaning:"very"},
+Question{question:"How important is funding industry", lower_bound_meaning:"not very", upper_bound_meaning:"very"}];

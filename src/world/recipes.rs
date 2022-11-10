@@ -1,5 +1,6 @@
 use super::{
-    Building, Good, Industry, AGRICULTURE_BUILDINGS, MANUFACTURING_BUILDINGS, MINING_BUILDINGS, DAYS_IN_YEAR,
+    Building, Good, Industry, AGRICULTURE_BUILDINGS, DAYS_IN_YEAR, MANUFACTURING_BUILDINGS,
+    MINING_BUILDINGS,
 };
 
 pub enum RecipeGood {
@@ -73,15 +74,15 @@ pub const RECIPES: &[Recipe] = &[
         Building::ProduceFarm,
         &[],
         &[
-            RecipeGood::new(Good::Produce, DAYS_IN_YEAR * 100.0),
-            RecipeGood::new(Good::ProcessedFood, DAYS_IN_YEAR * 10.0),
+            RecipeGood::new(Good::Produce, DAYS_IN_YEAR * 200.0),
+            RecipeGood::new(Good::ProcessedFood, DAYS_IN_YEAR * 20.0),
         ],
     ),
     Recipe::new(
         "Livestock Farming",
         Building::LivestockFarm,
         &[],
-        &[RecipeGood::new(Good::AnimalProducts, DAYS_IN_YEAR * 25.0)],
+        &[RecipeGood::new(Good::AnimalProducts, DAYS_IN_YEAR * 50.0)],
     ),
     Recipe::new(
         "Iron Mining",
@@ -106,36 +107,39 @@ pub const RECIPES: &[Recipe] = &[
         Building::FossilFuelExtraction,
         &[],
         &[
-            RecipeGood::new(Good::RawHydrocarbons, DAYS_IN_YEAR * 1.0),
+            RecipeGood::new(Good::RawHydrocarbons, DAYS_IN_YEAR * 10.0),
             RecipeGood::new(Good::Carbon, DAYS_IN_YEAR * 0.1),
         ],
     ),
     Recipe::new(
         "Produce Processing",
         Building::FoodProcessor,
-        &[RecipeGood::new(Good::Produce, DAYS_IN_YEAR * 100.0)],
-        &[RecipeGood::new(Good::ProcessedFood, DAYS_IN_YEAR * 100.0)],
+        &[RecipeGood::new(Good::Produce, DAYS_IN_YEAR * 5_000.0)],
+        &[RecipeGood::new(Good::ProcessedFood, DAYS_IN_YEAR * 5_000.0)],
     ),
     Recipe::new(
         "Meat Processing",
         Building::FoodProcessor,
-        &[RecipeGood::new(Good::AnimalProducts, DAYS_IN_YEAR * 5.0)],
-        &[RecipeGood::new(Good::ProcessedFood, DAYS_IN_YEAR * 20.0)],
+        &[RecipeGood::new(Good::AnimalProducts, DAYS_IN_YEAR * 250.0)],
+        &[RecipeGood::new(Good::ProcessedFood, DAYS_IN_YEAR * 1000.0)],
     ),
     Recipe::new(
         "Steel Production",
         Building::Metalworks,
         &[
-            RecipeGood::new(Good::Iron, DAYS_IN_YEAR * 5.0),
-            RecipeGood::new(Good::Carbon, DAYS_IN_YEAR * 0.1),
+            RecipeGood::new(Good::Iron, DAYS_IN_YEAR * 50.0),
+            RecipeGood::new(Good::Carbon, DAYS_IN_YEAR * 1.0),
         ],
-        &[RecipeGood::new(Good::Steel, DAYS_IN_YEAR * 5.1)],
+        &[RecipeGood::new(Good::Steel, DAYS_IN_YEAR * 51.0)],
     ),
     Recipe::new(
         "Stable Superheavy Element Production",
         Building::ParticleCollider,
         &[RecipeGood::Anything(DAYS_IN_YEAR * 100.0)],
-        &[RecipeGood::new(Good::StableSuperheavyElement, DAYS_IN_YEAR * 1.0)],
+        &[RecipeGood::new(
+            Good::StableSuperheavyElement,
+            DAYS_IN_YEAR * 1.0,
+        )],
     ),
     Recipe::new(
         "Composites Combination",
@@ -188,6 +192,12 @@ pub const RECIPES: &[Recipe] = &[
         ],
     ),
     Recipe::new(
+        "Solar Cells production",
+        Building::SemiconductorFab,
+        &[RecipeGood::new(Good::Semiconductor, DAYS_IN_YEAR * 1.0)],
+        &[RecipeGood::new(Good::SolarCells, DAYS_IN_YEAR * 3.0)],
+    ),
+    Recipe::new(
         "Rifle production",
         Building::ArmsFactory,
         &[
@@ -212,7 +222,7 @@ pub const RECIPES: &[Recipe] = &[
         Building::ArmsFactory,
         &[
             RecipeGood::new(Good::Steel, DAYS_IN_YEAR * 10.0),
-            RecipeGood::new(Good::Explosives, DAYS_IN_YEAR * 20.0),
+            RecipeGood::new(Good::Explosives, DAYS_IN_YEAR * 1.0),
         ],
         &[RecipeGood::new(Good::Ammunition, DAYS_IN_YEAR * 30.0)],
     ),

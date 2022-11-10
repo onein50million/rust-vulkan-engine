@@ -287,7 +287,7 @@ void main() {
         // outColor = vec4(normal, 1.0);
         // return;
 
-        if(ubos.map_mode == 0){
+        if(ubos.map_mode <= 1){
 
             SampleSet deep_water_set = load_sample_set(DEEP_WATER_OFFSET,vec3(0.0),1.0);
             SampleSet shallow_water_set = load_sample_set(SHALLOW_WATER_OFFSET,vec3(0.0),1.0);

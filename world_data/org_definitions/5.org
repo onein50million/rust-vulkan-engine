@@ -5,13 +5,14 @@ def SupremeCourt ppl 9
 ctrl_branch President appoints SupremeCourt
 ctrl_branch Congress approves SupremeCourt
 
-ctrl_decision President enacts MoveTroops
-ctrl_decision Congress enacts War
-ctrl_decision Congress enacts Taxes
-ctrl_decision SupremeCourt approves War
-ctrl_decision SupremeCourt approves Taxes
-ctrl_decision President approves War
-ctrl_decision President approves Taxes
+ctrl_decision President enacts Military
+ctrl_decision Congress enacts Diplomacy
+ctrl_decision Congress enacts Economy
+ctrl_decision SupremeCourt approves Diplomacy
+ctrl_decision SupremeCourt approves Economy
+ctrl_decision President approves Diplomacy
+ctrl_decision President approves Economy
+ctrl_decision President enacts Industry
 
 ctrl_branch $People appoints President
 ctrl_branch $People appoints Congress

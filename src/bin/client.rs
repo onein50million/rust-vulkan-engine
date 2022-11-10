@@ -1,11 +1,14 @@
+use egui::Color32;
 use egui::plot::Value;
 use egui::plot::Values;
 use egui::ComboBox;
-use egui::Id;
-use egui::Slider;
-
+use egui::FontDefinitions;
+use egui::FontFamily;
 use egui::Grid;
 use egui::Label;
+use egui::SidePanel;
+use egui::TextStyle;
+use egui::Visuals;
 
 use egui::ScrollArea;
 
@@ -17,12 +20,13 @@ use egui_winit::winit::event_loop::{ControlFlow, EventLoop};
 use egui_winit::winit::window::WindowBuilder;
 
 use float_ord::FloatOrd;
-use nalgebra::ComplexField;
 use nalgebra::Orthographic3;
 use nalgebra::Point3;
 use nalgebra::{Matrix4, Rotation3, Translation3, Vector2, Vector3};
 
 use noise::NoiseFn;
+use num_enum::IntoPrimitive;
+use num_enum::TryFromPrimitive;
 use rust_vulkan_engine::game::client::Game;
 
 use rust_vulkan_engine::game::directions;
@@ -39,15 +43,14 @@ use rust_vulkan_engine::planet_gen::get_water;
 use rust_vulkan_engine::renderer::*;
 use rust_vulkan_engine::support;
 use rust_vulkan_engine::support::*;
-use rust_vulkan_engine::world::ideology::Beliefs;
+use rust_vulkan_engine::world::agent::AgentAction;
+use rust_vulkan_engine::world::organization::DiplomaticAction;
 use rust_vulkan_engine::world::organization::OrganizationKey;
 use rust_vulkan_engine::world::*;
 use rusttype::Font;
-use rusttype::GlyphId;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::collections::VecDeque;
+use variant_count::VariantCount;
 
+use std::convert::TryFrom;
 use std::f64::consts::PI;
 use std::fmt::Debug;
 use std::fs;
@@ -55,163 +58,6 @@ use std::net::UdpSocket;
 use std::ops::Add;
 
 use winit::event::{MouseButton, MouseScrollDelta};
-//Coordinate system for future reference:
-//from starting location
-//up: negative y
-//down: positive y
-//forward: negative z
-//backward: positive z
-//left: negative x
-//right: positive x
-
-const POS_X_FACE: usize = 0;
-const NEG_X_FACE: usize = 1;
-const POS_Y_FACE: usize = 3; //These two are swapped because I had them backwards when I was doing the conversion and now it's a bunch of work to fix it
-const NEG_Y_FACE: usize = 2; // ^^^^^
-const POS_Z_FACE: usize = 4;
-const NEG_Z_FACE: usize = 5;
-
-//This is really confusing to figure out but hopefully it should give neighbouring pixels on a cubemap
-fn get_neighbour_pixels(index: usize) -> Box<[usize]> {
-    let (x, y) = index_to_pixel(index);
-
-    let current_face = index / (CUBEMAP_WIDTH * CUBEMAP_WIDTH);
-
-    const MAX_COORD: usize = CUBEMAP_WIDTH - 1;
-
-    //tuple is (neighbouring face, whether it needs to be flipped)
-    let left_face;
-    let right_face;
-    let up_face;
-    let down_face;
-    match current_face {
-        POS_X_FACE => {
-            //positive x
-            left_face = POS_Z_FACE;
-            right_face = NEG_Z_FACE;
-            up_face = NEG_Y_FACE;
-            down_face = POS_Y_FACE;
-        }
-        NEG_X_FACE => {
-            //negative x
-            left_face = NEG_Z_FACE;
-            right_face = POS_Z_FACE;
-            up_face = NEG_Y_FACE;
-            down_face = POS_Y_FACE;
-        }
-        POS_Y_FACE => {
-            //positive y
-            left_face = NEG_X_FACE;
-            right_face = POS_X_FACE;
-            up_face = POS_Z_FACE;
-            down_face = NEG_Z_FACE;
-        }
-        NEG_Y_FACE => {
-            //negative y
-            left_face = NEG_X_FACE;
-            right_face = POS_X_FACE;
-            up_face = NEG_Z_FACE;
-            down_face = POS_Z_FACE;
-        }
-        POS_Z_FACE => {
-            //positive z
-            left_face = NEG_X_FACE;
-            right_face = POS_X_FACE;
-            up_face = NEG_Y_FACE;
-            down_face = POS_Y_FACE;
-        }
-        NEG_Z_FACE => {
-            //negative z
-            left_face = POS_X_FACE;
-            right_face = NEG_X_FACE;
-            up_face = NEG_Y_FACE;
-            down_face = POS_Y_FACE;
-        }
-        _ => {
-            panic!("Too many faces in cubemap");
-        }
-    }
-    let mut out = Vec::with_capacity(4);
-
-    if x == 0 {
-        match (current_face, left_face) {
-            (POS_X_FACE, POS_Z_FACE) => out.push(pixel_to_index(MAX_COORD, y, left_face)),
-            (NEG_X_FACE, NEG_Z_FACE) => out.push(pixel_to_index(MAX_COORD, y, left_face)),
-            (POS_Y_FACE, NEG_X_FACE) => {
-                out.push(pixel_to_index(MAX_COORD - y, MAX_COORD, left_face))
-            }
-            (NEG_Y_FACE, NEG_X_FACE) => out.push(pixel_to_index(y, 0, left_face)),
-            (POS_Z_FACE, NEG_X_FACE) => out.push(pixel_to_index(MAX_COORD, y, left_face)),
-            (NEG_Z_FACE, POS_X_FACE) => out.push(pixel_to_index(MAX_COORD, y, left_face)),
-            _ => panic!("invalid case"),
-        }
-    } else {
-        out.push(pixel_to_index(x - 1, y, current_face));
-    }
-
-    if x == MAX_COORD {
-        match (current_face, right_face) {
-            (POS_X_FACE, NEG_Z_FACE) => out.push(pixel_to_index(0, y, right_face)),
-            (NEG_X_FACE, POS_Z_FACE) => out.push(pixel_to_index(0, y, right_face)),
-            (POS_Y_FACE, POS_X_FACE) => out.push(pixel_to_index(y, MAX_COORD, right_face)),
-            (NEG_Y_FACE, POS_X_FACE) => out.push(pixel_to_index(MAX_COORD - y, 0, right_face)),
-            (POS_Z_FACE, POS_X_FACE) => out.push(pixel_to_index(0, y, right_face)),
-            (NEG_Z_FACE, NEG_X_FACE) => out.push(pixel_to_index(0, y, right_face)),
-            _ => panic!("invalid case"),
-        }
-    } else {
-        out.push(pixel_to_index(x + 1, y, current_face));
-    }
-
-    if y == 0 {
-        match (current_face, up_face) {
-            (POS_X_FACE, NEG_Y_FACE) => out.push(pixel_to_index(MAX_COORD, MAX_COORD - x, up_face)),
-            (NEG_X_FACE, NEG_Y_FACE) => out.push(pixel_to_index(0, x, up_face)),
-            (POS_Y_FACE, POS_Z_FACE) => out.push(pixel_to_index(x, MAX_COORD, up_face)),
-            (NEG_Y_FACE, NEG_Z_FACE) => out.push(pixel_to_index(MAX_COORD - x, 0, up_face)),
-            (POS_Z_FACE, NEG_Y_FACE) => out.push(pixel_to_index(x, MAX_COORD, up_face)),
-            (NEG_Z_FACE, NEG_Y_FACE) => out.push(pixel_to_index(MAX_COORD - x, 0, up_face)),
-            _ => panic!("Invalid case"),
-        }
-    } else {
-        out.push(pixel_to_index(x, y - 1, current_face));
-    }
-
-    if y == MAX_COORD {
-        match (current_face, down_face) {
-            (POS_X_FACE, POS_Y_FACE) => out.push(pixel_to_index(MAX_COORD, x, down_face)),
-            (NEG_X_FACE, POS_Y_FACE) => out.push(pixel_to_index(0, MAX_COORD - x, down_face)),
-            (POS_Y_FACE, NEG_Z_FACE) => {
-                out.push(pixel_to_index(MAX_COORD - x, MAX_COORD, down_face))
-            }
-            (NEG_Y_FACE, POS_Z_FACE) => out.push(pixel_to_index(x, 0, down_face)),
-            (POS_Z_FACE, POS_Y_FACE) => out.push(pixel_to_index(x, 0, down_face)),
-            (NEG_Z_FACE, POS_Y_FACE) => {
-                out.push(pixel_to_index(MAX_COORD - x, MAX_COORD, down_face))
-            }
-            _ => panic!("Invalid case"),
-        }
-    } else {
-        out.push(pixel_to_index(x, y + 1, current_face));
-    }
-
-    out.into_boxed_slice()
-}
-
-//includes diagonals
-fn get_full_neighbour_pixels(index: usize) -> Box<[usize]> {
-    let neighbours = get_neighbour_pixels(index);
-    let out_neighbours = neighbours.to_vec();
-    // let left = neighbours[0];
-    // out_neighbours.push(get_neighbour_pixels(left)[2]);
-    // out_neighbours.push(get_neighbour_pixels(left)[3]);
-
-    // let right = neighbours[1];
-    // out_neighbours.push(get_neighbour_pixels(right)[2]);
-    // out_neighbours.push(get_neighbour_pixels(right)[3]);
-
-    out_neighbours.into_boxed_slice()
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum ProvinceKeyOptions {
@@ -360,7 +206,36 @@ fn main() {
     let mut frametimes_start = 0;
     let mut last_tick = std::time::Instant::now();
 
+    let mut fonts = FontDefinitions::default();
+    for (_, (_, font_size)) in &mut fonts.family_and_size {
+        *font_size *= 1.3;
+    }
+
+    // Install my own font (maybe supporting non-latin characters):
+    fonts.font_data.insert(
+        "custom_font".to_owned(),
+        std::borrow::Cow::Borrowed(include_bytes!("../../fonts/ShareTechMono-Regular.ttf")),
+    );
+
+    // Put my font first (highest priority):
+    fonts
+        .fonts_for_family
+        .get_mut(&FontFamily::Proportional)
+        .unwrap()
+        .insert(0, "custom_font".to_owned());
     let mut ctx = egui::CtxRef::default();
+    ctx.set_fonts(fonts);
+
+    let mut visuals = ctx.style().visuals.clone();
+    visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(0x60, 0x78, 0x8b);
+    visuals.faint_bg_color = Color32::from_rgb(0x8e, 0xac, 0xbb);
+    visuals.extreme_bg_color = Color32::from_rgb(0x34, 0x51, 0x5e);
+    visuals.widgets.noninteractive.fg_stroke.color = Color32::from_rgb(0, 0, 0);
+    visuals.widgets.active.fg_stroke.color = Color32::from_rgb(0,0,0);
+    visuals.widgets.inactive.fg_stroke.color = Color32::from_rgb(0x4e, 0x01, 0x17);
+
+    // visuals.widgets.noninteractive.bg_stroke.color = Color32::from_rgb(0x4e, 0x01, 0x17);
+    ctx.set_visuals(visuals);
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
@@ -602,24 +477,38 @@ fn main() {
 
     let mut texture_version = 0;
 
-    let mut population_graph_window_open = false;
-    let mut price_graph_window_open = false;
-    let mut supply_demand_window_open = false;
-    let mut pop_table_open = false;
-    let mut pop_ideology_info_open = false;
-    let mut selected_slice = 0;
-    let mut province_info_open = false;
-    let mut global_market_open = false;
-    let mut global_supply_demand_open = false;
-    let mut organizations_list_open = false;
+    #[repr(usize)]
+    #[derive(VariantCount, PartialEq, Debug, IntoPrimitive, TryFromPrimitive)]
+    enum SortOrder {
+        Name,
+        Population,
+        ArmySize,
+    }
     let mut organization_filter = String::new();
-    let mut organization_info_open = false;
+
+    let mut player_organization_detals_open = false;
+    let mut market_window_open = false;
+    let mut organizations_window_open = false;
+    let mut organizations_sort = SortOrder::Name;
+
+    enum SelectedTab {
+        Pops,
+        Market,
+        Industry,
+        Military,
+        Details,
+    }
+    let mut province_selected_tab = SelectedTab::Pops;
+    let mut selected_good_index = 0;
+
     let mut console_open = false;
     let mut console_input = String::new();
     let mut console_output = String::new();
     let mut game_speed = 0u16;
 
-    let mut slider_value = 0.0;
+    // let mut actions_window_open = false;
+
+    // let mut slider_value = 0.0;
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
 
@@ -651,157 +540,129 @@ fn main() {
                 let hour = (game.world.current_year * 365.0 * 24.0) % 24.0;
                 let minute = (hour * 60.0) % 60.0;
                 ui.label(format!("Time: {:}:{:}", hour as usize, minute as usize));
-                ui.checkbox(&mut population_graph_window_open, "Population Plot");
-                ui.checkbox(&mut pop_table_open, "Pops Table");
-                ui.checkbox(&mut pop_ideology_info_open, "Pops Ideology");
-                ui.checkbox(&mut price_graph_window_open, "Price Plots");
-                ui.checkbox(&mut supply_demand_window_open, "Supply/Demand");
-                ui.checkbox(&mut province_info_open, "Province Info");
-                ui.checkbox(&mut global_market_open, "Global Market");
-                ui.checkbox(&mut global_supply_demand_open, "Global Supply/Demand");
-                ui.checkbox(&mut organizations_list_open, "Organizations");
-                ui.checkbox(&mut organization_info_open, "Org Info");
+            });
+            ui.horizontal(|ui| {
+                if let Some(player_org) = game.player_agent.controlling_organization {
+                    ui.checkbox(
+                        &mut player_organization_detals_open,
+                        format!("{}", game.world.organizations[player_org].name),
+                    );
+                }
+                ui.checkbox(&mut market_window_open, "Global Market");
+                ui.checkbox(&mut organizations_window_open, "Organizations");
                 ui.checkbox(&mut console_open, "Console");
             });
         });
 
         TopBottomPanel::bottom("bottom_panel").show(&ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(&game.world.organizations[game.world.player_organization].name);
-                ui.label(format!(
-                    "Money: {:}",
-                    big_number_format(
-                        game.world.organizations[game.world.player_organization].money
-                    )
-                ));
-                Grid::new("owned_goods").show(ui, |ui| {
-                    for good_index in 0..Good::VARIANT_COUNT {
-                        let good = Good::try_from(good_index).unwrap();
-                        ui.label(format!(
-                            "{:?}: {:.1}",
-                            good,
-                            &game.world.organizations[game.world.player_organization].owned_goods
-                                [good_index]
-                        ));
-                        if good_index % 10 == 0 {
-                            ui.end_row();
+            ui.label(format!(
+                "Political Power ⚖: {:}",
+                game.player_agent.political_power
+            ));
+            if let Some(player_org) = game.player_agent.controlling_organization {
+                ui.horizontal(|ui| {
+                    ui.label(&game.world.organizations[player_org].name);
+                    ui.label(format!(
+                        "Money: {:}",
+                        big_number_format(game.world.organizations[player_org].money)
+                    ));
+
+                    Grid::new("owned_goods").show(ui, |ui| {
+                        for good_index in 0..Good::VARIANT_COUNT {
+                            let good = Good::try_from(good_index).unwrap();
+                            ui.label(format!(
+                                "{:?}: {:.1}",
+                                good, &game.world.organizations[player_org].owned_goods[good_index]
+                            ));
+                            if good_index % 5 == 0 {
+                                ui.end_row();
+                            }
                         }
-                    }
+                    });
                 });
-            });
-            ui.horizontal(|ui| {
-                match (&game.world.selected_province, &game.world.targeted_province) {
-                    (Some(source), Some(dest)) => {
-                        ui.add(Slider::new(&mut slider_value, (0.0)..=(1.0)));
-                        if ui.button("Transfer troops").clicked() {
-                            game.world.organizations[game.world.player_organization]
-                                .transfer_troops(*source, *dest, slider_value);
-                        }
-                    }
-                    (_, _) => {}
-                }
-                if let Some(selected_org) = game.world.selected_organization {
-                    let relations = game
-                        .world
-                        .relations
-                        .get_relations_mut(game.world.player_organization, selected_org);
-                    let button_string = if relations.at_war {
-                        "Make peace with"
-                    } else {
-                        "Declare war on"
-                    };
-                    if ui
-                        .button(format!(
-                            "{:} {:}",
-                            button_string, &game.world.organizations[selected_org].name
-                        ))
-                        .clicked()
-                    {
-                        relations.at_war = !relations.at_war;
-                    }
-                }
-            })
+            }
         });
 
-        if population_graph_window_open {
-            Window::new("Population Plot").show(&ctx, |ui| match game.world.selected_province {
-                Some(selected_province) => {
-                    let values = game.world.histories.population[selected_province].as_slices();
-                    add_plot(
-                        ui,
-                        &[values.0, values.1].concat(),
-                        "Total Population",
-                        1000,
-                        0,
-                    );
-                }
-                None => {}
-            });
-        }
-        if price_graph_window_open {
-            Window::new("Price Plots").show(&ctx, |ui| {
-                ScrollArea::vertical().show(ui, |ui| match game.world.selected_province {
-                    Some(selected_province) => {
-                        for good_index in 0..Good::VARIANT_COUNT {
-                            let good = Good::try_from(good_index).unwrap();
-
-                            let values = game.world.histories.prices[selected_province][good_index]
-                                .as_slices();
-                            add_plot(
-                                ui,
-                                &[values.0, values.1].concat(),
-                                &format!("{:?} Price", good),
-                                1000,
-                                0,
-                            );
+        if let Some(player_org) = game.player_agent.controlling_organization {
+            if player_organization_detals_open {
+                Window::new(&game.world.organizations[player_org].name).show(&ctx, |ui| {
+                    ui.vertical(|ui| {
+                        ui.label("Diplo Offers");
+                        let mut decision = None;
+                        let mut decision_index = None;
+                        for (i, offer) in game.world.organizations[player_org]
+                            .diplomatic_offers
+                            .iter()
+                            .enumerate()
+                        {
+                            ui.horizontal(|ui| {
+                                if ui.button("Accept").clicked() {
+                                    decision = Some(true);
+                                    decision_index = Some(i);
+                                }
+                                if ui.button("Decline").clicked() {
+                                    decision = Some(false);
+                                    decision_index = Some(i);
+                                }
+                                ui.label(format!(
+                                    "From: {}, Offer: {:?}",
+                                    game.world.organizations[offer.from].name, offer.offer_type
+                                ))
+                            });
                         }
-                    }
-                    None => {}
-                });
-            });
-        }
-        if supply_demand_window_open {
-            Window::new("Supply/Demand Plots").show(&ctx, |ui| {
-                ScrollArea::vertical().show(ui, |ui| match game.world.selected_province {
-                    Some(selected_province) => {
-                        for good_index in 0..Good::VARIANT_COUNT {
-                            let good = Good::try_from(good_index).unwrap();
-
-                            let values_a = game.world.histories.supply[selected_province]
-                                [good_index]
-                                .as_slices();
-                            let values_b = game.world.histories.demand[selected_province]
-                                [good_index]
-                                .as_slices();
-                            double_line_plot(
-                                ui,
-                                &[values_a.0, values_a.1].concat(),
-                                &[values_b.0, values_b.1].concat(),
-                                &format!("{:?}", good),
-                                1000,
-                                0,
-                            );
+                        if let (Some(decision), Some(index)) = (decision, decision_index) {
+                            if let Err(err) = game.player_agent.attempt_action(
+                                &mut game.world,
+                                AgentAction::RespondToDiplomaticOffer(index, decision),
+                            ) {
+                                dbg!(err);
+                            }
                         }
-                    }
-                    None => {}
+                    });
                 });
-            });
+            }
         }
-        if pop_table_open {
-            Window::new("Pop Table").show(&ctx, |ui| {
-                Grid::new(0).striped(true).show(ui, |ui| {
-                    ui.label("Culture");
-                    ui.label("Industry");
-                    ui.label("Population");
-                    ui.label("Money");
-                    ui.label("min met need");
-                    ui.label("trickleback");
-                    for good_index in 0..Good::VARIANT_COUNT {
-                        ui.label(format!("Owned {:?}", Good::try_from(good_index).unwrap()));
-                    }
-                    ui.end_row();
-                    match game.world.selected_province {
-                        Some(selected_province) => {
+
+        if let Some(selected_province) = game.world.selected_province {
+            let controls_province =
+                if let Some(player_org) = game.player_agent.controlling_organization {
+                    game.world.organizations[player_org].province_control[selected_province] > 0.5
+                } else {
+                    false
+                };
+            Window::new("Province Details").show(&ctx, |ui| {
+                TopBottomPanel::new(egui::panel::TopBottomSide::Top, "province_tabs").show_inside(
+                    ui,
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            if ui.button("Pops").clicked() {
+                                province_selected_tab = SelectedTab::Pops
+                            } else if ui.button("Industry").clicked() {
+                                province_selected_tab = SelectedTab::Industry
+                            } else if ui.button("Market").clicked() {
+                                province_selected_tab = SelectedTab::Market
+                            } else if ui.button("Military").clicked() {
+                                province_selected_tab = SelectedTab::Military
+                            } else if ui.button("Details").clicked() {
+                                province_selected_tab = SelectedTab::Details
+                            }
+                        });
+                    },
+                );
+                match province_selected_tab {
+                    SelectedTab::Pops => {
+                        Grid::new(0).striped(true).show(ui, |ui| {
+                            ui.label("Culture");
+                            ui.label("Industry");
+                            ui.label("Population");
+                            ui.label("Money");
+                            ui.label("min met need");
+                            ui.label("Need Bottleneck");
+                            ui.label("trickleback");
+                            // for good_index in 0..Good::VARIANT_COUNT {
+                            //     ui.label(format!("Owned {:?}", Good::try_from(good_index).unwrap()));
+                            // }
+                            ui.end_row();
                             for (i, slice) in game.world.provinces[selected_province]
                                 .pops
                                 .pop_slices
@@ -817,93 +678,242 @@ fn main() {
                                 ui.label(format!("{:}", big_number_format(slice.population)));
                                 ui.label(format!("{:}", big_number_format(slice.money)));
                                 ui.label(format!("{:.2}", slice.minimum_met_needs));
+                                ui.label(format!("{:?}", slice.need_bottleneck));
                                 ui.label(format!("{:.2}", slice.trickleback));
-                                for good_index in 0..Good::VARIANT_COUNT {
-                                    ui.label(format!(
-                                        "{:}",
-                                        big_number_format(slice.owned_goods[good_index])
-                                    ));
-                                }
+                                // for good_index in 0..Good::VARIANT_COUNT {
+                                //     ui.label(format!(
+                                //         "{:}",
+                                //         big_number_format(slice.owned_goods[good_index])
+                                //     ));
+                                // }
                                 ui.end_row();
                             }
-                        }
-                        None => {}
+                        });
                     }
-                })
-            });
-        }
-        if pop_ideology_info_open {
-            Window::new("Pop Ideology Table").show(&ctx, |ui| {
-                ComboBox::from_label("Select Slice").show_ui(ui, |ui| {
-                    match game.world.selected_province {
-                        Some(selected_province) => {
-                            for (i, _) in game.world.provinces[selected_province]
-                                .pops
-                                .pop_slices
-                                .iter()
-                                .enumerate()
+                    SelectedTab::Market => {
+                        SidePanel::left("market_left_panel").show_inside(ui, |ui| {
+                            ScrollArea::vertical().show(ui, |ui| {
+                                Grid::new(0).striped(true).show(ui, |ui| {
+                                    ui.label("");
+                                    ui.label("Name");
+                                    ui.label("Price");
+                                    ui.label("Supply");
+                                    ui.label("Demand");
+                                    ui.end_row();
+                                    for good_index in 0..Good::VARIANT_COUNT {
+                                        let good = Good::try_from(good_index).unwrap();
+                                        ui.radio_value(&mut selected_good_index, good_index, "");
+                                        ui.label(format!("{:?}", good));
+                                        ui.label(format!(
+                                            "{:.2}",
+                                            game.world.provinces[selected_province].market.price
+                                                [good_index]
+                                        ));
+                                        ui.label(format!(
+                                            "{:}",
+                                            big_number_format(
+                                                game.world.provinces[selected_province]
+                                                    .market
+                                                    .supply[good_index]
+                                            )
+                                        ));
+                                        ui.label(format!(
+                                            "{:}",
+                                            big_number_format(
+                                                game.world.provinces[selected_province]
+                                                    .market
+                                                    .demand[good_index]
+                                            )
+                                        ));
+                                        ui.end_row()
+                                    }
+                                });
+                            })
+                        });
+                        ScrollArea::vertical().show(ui, |ui| {
                             {
-                                ui.selectable_value(
-                                    &mut selected_slice,
-                                    i,
-                                    format!("{:?}", Industry::try_from(i).unwrap()),
+                                let values = game.world.histories.prices[selected_province]
+                                    [selected_good_index]
+                                    .as_slices();
+                                add_plot(ui, &[values.0, values.1].concat(), "Price", 1000, 0);
+                            }
+                            {
+                                let values = game.world.histories.supply[selected_province]
+                                    [selected_good_index]
+                                    .as_slices();
+                                add_plot(ui, &[values.0, values.1].concat(), "Supply", 1000, 0);
+                            }
+                            {
+                                let values = game.world.histories.demand[selected_province]
+                                    [selected_good_index]
+                                    .as_slices();
+                                add_plot(ui, &[values.0, values.1].concat(), "Demand", 1000, 0);
+                            }
+                        });
+                    }
+                    SelectedTab::Industry => {
+                        ScrollArea::vertical().show(ui, |ui| {
+                            Grid::new("Industry_Grid").striped(true).show(ui, |ui| {
+                                ui.label("Building");
+                                ui.label("Size");
+                                if controls_province {
+                                    ui.label("Increase");
+                                    ui.label("Decrease");
+                                }
+
+                                ui.end_row();
+                                for building_index in 0..Building::VARIANT_COUNT {
+                                    let building = Building::try_from(building_index).unwrap();
+                                    let province = &game.world.provinces[selected_province];
+                                    let building_size = province.industry_data
+                                        [building.get_industry() as usize]
+                                        .size
+                                        * province.building_ratios[building_index];
+                                    if building_size < 1.0 {
+                                        continue;
+                                    }
+                                    ui.label(format!("{:?}", building));
+                                    ui.label(format!("{:.0}", building_size));
+                                    if controls_province {
+                                        if ui.button("-").clicked() {
+                                            let action = AgentAction::ModifyBuilding(
+                                                selected_province,
+                                                building,
+                                                building_size * -0.1,
+                                            );
+                                            if let Err(err) = game
+                                                .player_agent
+                                                .attempt_action(&mut game.world, action)
+                                            {
+                                                dbg!(err);
+                                            }
+                                        }
+                                        if ui.button("+").clicked() {
+                                            let action = AgentAction::ModifyBuilding(
+                                                selected_province,
+                                                building,
+                                                building_size * 0.1,
+                                            );
+                                            if let Err(err) = game
+                                                .player_agent
+                                                .attempt_action(&mut game.world, action)
+                                            {
+                                                dbg!(err);
+                                            }
+                                        }
+                                    }
+
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                    SelectedTab::Military => {
+                        Grid::new("Military Table").striped(true).show(ui, |ui| {
+                            ui.label("Org name");
+                            // ui.label("Military type");
+                            ui.label("Deployed troops");
+                            ui.label("Survival Needs");
+                            ui.label("Ammo Needs");
+                            ui.end_row();
+                            for org in game.world.organizations.values().filter(|o| {
+                                o.military.deployed_forces[selected_province].num_troops > 0.5
+                            }) {
+                                ui.label(&org.name);
+
+                                ui.label(format!(
+                                    "{:}",
+                                    big_number_format(
+                                        org.military.deployed_forces[selected_province].num_troops
+                                    )
+                                ));
+                                ui.label(
+                                    org.military.deployed_forces[selected_province]
+                                        .survival_needs_met,
                                 );
+                                ui.label(
+                                    org.military.deployed_forces[selected_province].ammo_needs_met,
+                                );
+
+                                ui.end_row();
+                            }
+                        });
+                        Grid::new("Control Table").striped(true).show(ui, |ui| {
+                            ui.label("Org name");
+                            ui.label("Control");
+                            ui.end_row();
+                            for org in game
+                                .world
+                                .organizations
+                                .values()
+                                .filter(|o| o.province_control[selected_province] > 0.01)
+                            {
+                                ui.label(&org.name);
+
+                                ui.label(format!("{:.4}", org.province_control[selected_province]));
+                                ui.end_row();
+                            }
+                            ui.label("Sum");
+                            ui.label(format!(
+                                "{:.4}",
+                                game.world
+                                    .organizations
+                                    .values()
+                                    .map(|o| o.province_control[selected_province])
+                                    .sum::<f64>()
+                            ))
+                        });
+                        if let Some(player_org) = game.player_agent.controlling_organization {
+                            let troop_weight = game.world.organizations[player_org]
+                                .military
+                                .province_weights[selected_province];
+                            if troop_weight >= 1.0 && ui.button("-").clicked() {
+                                if let Err(err) = game.player_agent.attempt_action(
+                                    &mut game.world,
+                                    AgentAction::SetTroopWeight {
+                                        province: selected_province,
+                                        weight: troop_weight - 1.0,
+                                    },
+                                ) {
+                                    dbg!(err);
+                                }
+                            }
+                            ui.label(format!("Troop Weight: {:.2}", troop_weight));
+                            if ui.button("+").clicked() {
+                                if let Err(err) = game.player_agent.attempt_action(
+                                    &mut game.world,
+                                    AgentAction::SetTroopWeight {
+                                        province: selected_province,
+                                        weight: troop_weight + 1.0,
+                                    },
+                                ) {
+                                    dbg!(err);
+                                }
                             }
                         }
-                        None => {}
                     }
-                });
-                match game.world.selected_province {
-                    Some(selected_province) => {
-                        let beliefs = &game.world.provinces[selected_province].pops.pop_slices
-                            [selected_slice]
-                            .beliefs;
-                        for (question, response) in beliefs.responses.iter().enumerate() {
-                            let question = Beliefs::get_question(question);
-                            let question_text = question.question;
-                            let answer = if response.get_value() > 0.0 {
-                                question.upper_bound_meaning
-                            } else {
-                                question.lower_bound_meaning
-                            };
-                            ui.label(format!(
-                                "{}: {:.2} towards {} with importance of {:.2}",
-                                question_text,
-                                response.get_value().abs(),
-                                answer,
-                                response.get_importance()
-                            ));
-                        }
-                    }
-                    None => {}
-                }
-            });
-        }
-        if province_info_open {
-            Window::new("Province Info").show(&ctx, |ui| {
-                Grid::new("province_info_grid")
-                    .striped(true)
-                    .show(ui, |ui| {
-                        ui.label("Name");
-                        ui.label("Id");
-                        ui.label("Position");
-                        ui.label("Population");
-                        ui.label("Money");
-                        ui.label("Travel Cost");
-                        ui.label("Tax Rate");
-                        // ui.label("Recruit Ratio");
-                        for industry_index in 0..Industry::VARIANT_COUNT {
-                            ui.label(format!(
-                                "{:?} Industry Size",
-                                Industry::try_from(industry_index).unwrap()
-                            ));
-                            ui.label("Productivity");
-                        }
+                    SelectedTab::Details => {
+                        Grid::new("province_info_grid")
+                            .striped(true)
+                            .show(ui, |ui| {
+                                ui.label("Name");
+                                ui.label("Id");
+                                ui.label("Position");
+                                ui.label("Population");
+                                ui.label("Money");
+                                // ui.label("Travel Cost");
+                                ui.label("Tax Rate");
+                                // ui.label("Recruit Ratio");
+                                for industry_index in 0..Industry::VARIANT_COUNT {
+                                    ui.label(format!(
+                                        "{:?} Industry Size",
+                                        Industry::try_from(industry_index).unwrap()
+                                    ));
+                                    ui.label("Productivity");
+                                }
 
-                        ui.end_row();
-                        match game.world.selected_province {
-                            Some(province_key) => {
-                                let province = &game.world.provinces[province_key];
+                                ui.end_row();
+                                let province = &game.world.provinces[selected_province];
                                 let province_population: f64 = province
                                     .pops
                                     .pop_slices
@@ -913,13 +923,11 @@ fn main() {
                                 let province_money: f64 =
                                     province.pops.pop_slices.iter().map(|a| (a.money)).sum();
                                 ui.label(format!("{:}", province.name));
-                                ui.label(format!("{:?}", province_key));
-                                ui.label(format!("{:?}", province.position));
+                                ui.label(format!("{:?}", selected_province));
+                                ui.label(format!("{:.0?}", province.position));
                                 ui.label(format!("{:}", big_number_format(province_population)));
                                 ui.label(format!("{:}", big_number_format(province_money)));
-                                ui.label(format!("{:.2}", province.trader_cost_multiplier));
                                 ui.label(format!("{:.2}", province.tax_rate));
-                                // ui.label(format!("{:.2}", province.recruit_limiter));
                                 for industry_index in 0..Industry::VARIANT_COUNT {
                                     ui.label(format!(
                                         "{:.1}",
@@ -931,206 +939,187 @@ fn main() {
                                     ));
                                 }
                                 ui.end_row();
-                            }
-                            None => {}
-                        }
-                    });
-                if let Some(selected_province_key) = game.world.selected_province {
-                    Grid::new("Languages Table").striped(true).show(ui, |ui| {
-                        ui.label("Language Name");
-                        // ui.label("Military type");
-                        ui.label("Presence");
-                        ui.end_row();
-                        for lang in game
-                            .world
-                            .language_manager
-                            .languages
-                            .values()
-                            .filter(|l| l.province_presence[selected_province_key] > 0.01)
-                        {
-                            ui.label(&lang.name);
-
-                            ui.label(format!(
-                                "{:.2}",
-                                lang.province_presence[selected_province_key]
-                            ));
-                            ui.end_row();
-                        }
-                    });
-
-                    Grid::new("Military Table").striped(true).show(ui, |ui| {
-                        ui.label("Org name");
-                        // ui.label("Military type");
-                        ui.label("Deployed troops");
-                        ui.label("Survival Needs");
-                        ui.label("Ammo Needs");
-                        ui.end_row();
-                        for org in game.world.organizations.values().filter(|o| {
-                            o.military.deployed_forces[selected_province_key].num_troops > 0.5
-                        }) {
-                            ui.label(&org.name);
-
-                            ui.label(format!(
-                                "{:}",
-                                big_number_format(
-                                    org.military.deployed_forces[selected_province_key].num_troops
-                                )
-                            ));
-                            ui.label(
-                                org.military.deployed_forces[selected_province_key]
-                                    .survival_needs_met,
-                            );
-                            ui.label(
-                                org.military.deployed_forces[selected_province_key].ammo_needs_met,
-                            );
-
-                            ui.end_row();
-                        }
-                    });
-                    Grid::new("Control Table").striped(true).show(ui, |ui| {
-                        ui.label("Org name");
-                        ui.label("Control");
-                        ui.end_row();
-                        for org in game
-                            .world
-                            .organizations
-                            .values()
-                            .filter(|o| o.province_control[selected_province_key] > 0.01)
-                        {
-                            ui.label(&org.name);
-
-                            ui.label(format!(
-                                "{:.4}",
-                                org.province_control[selected_province_key]
-                            ));
-                            ui.end_row();
-                        }
-                        ui.label("Sum");
-                        ui.label(format!(
-                            "{:.4}",
-                            game.world
-                                .organizations
-                                .values()
-                                .map(|o| o.province_control[selected_province_key])
-                                .sum::<f64>()
-                        ))
-                    });
+                            });
+                    }
                 }
             });
         }
-        if global_market_open {
-            Window::new("Global Price Plots").show(&ctx, |ui| {
-                ScrollArea::vertical().show(ui, |ui| {
-                    for good_index in 0..Good::VARIANT_COUNT {
-                        let good = Good::try_from(good_index).unwrap();
 
-                        let values = game.world.histories.global_prices[good_index].as_slices();
-                        add_plot(
-                            ui,
-                            &[values.0, values.1].concat(),
-                            &format!("{:?} Price", good),
-                            1000,
-                            0,
-                        );
-                    }
-                });
-            });
-        }
-
-        if global_supply_demand_open {
-            Window::new("Global Supply Demand Plots").show(&ctx, |ui| {
-                ScrollArea::vertical().show(ui, |ui| {
-                    for good_index in 0..Good::VARIANT_COUNT {
-                        let good = Good::try_from(good_index).unwrap();
-
-                        let values_a = game.world.histories.global_supply[good_index].as_slices();
-                        let values_b = game.world.histories.global_demand[good_index].as_slices();
-                        double_line_plot(
-                            ui,
-                            &[values_a.0, values_a.1].concat(),
-                            &[values_b.0, values_b.1].concat(),
-                            &format!("{:?}", good),
-                            1000,
-                            0,
-                        );
-                    }
-                });
-            });
-        }
-
-        if organizations_list_open {
+        if organizations_window_open {
             Window::new("Organizations").show(&ctx, |ui| {
-                ui.text_edit_singleline(&mut organization_filter);
-                ScrollArea::vertical().show(ui, |ui| {
-                    let mut sorted_orgs: Box<[_]> = game.world.organizations.iter().collect();
-                    sorted_orgs.sort_by_key(|(k, v)| v.name.as_str());
-                    for (id, organization) in sorted_orgs.iter().filter(|(_, o)| {
-                        organization_filter.is_empty()
-                            || o.name
-                                .to_lowercase()
-                                .contains(&organization_filter.to_lowercase())
-                    }) {
-                        ui.radio_value(
-                            &mut game.world.selected_organization,
-                            Some(OrganizationKey(id.0)),
-                            &organization.name,
+                SidePanel::left("org_left_panel").show_inside(ui, |ui| {
+                    ComboBox::from_label("Sort Order").show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut organizations_sort,
+                            SortOrder::Population,
+                            "Population",
                         );
-                    }
+                        ui.selectable_value(
+                            &mut organizations_sort,
+                            SortOrder::ArmySize,
+                            "Army Size",
+                        );
+                        ui.selectable_value(&mut organizations_sort, SortOrder::Name, "Name");
+                    });
+                    ui.text_edit_singleline(&mut organization_filter);
+                    ScrollArea::vertical().show(ui, |ui| {
+                        let mut sorted_orgs: Box<[_]> = game.world.organizations.iter().collect();
+                        match organizations_sort {
+                            SortOrder::Name => sorted_orgs.sort_by_key(|(_, v)| v.name.as_str()),
+                            SortOrder::Population => sorted_orgs
+                                .sort_by_key(|(k, _)| FloatOrd(game.world.get_org_population(*k))),
+                            SortOrder::ArmySize => sorted_orgs.sort_by_key(|(_, v)| {
+                                FloatOrd(
+                                    v.military
+                                        .deployed_forces
+                                        .0
+                                        .iter()
+                                        .map(|p| p.num_troops)
+                                        .sum::<f64>(),
+                                )
+                            }),
+                        }
+                        for (id, organization) in sorted_orgs.iter().filter(|(_, o)| {
+                            organization_filter.is_empty()
+                                || o.name
+                                    .to_lowercase()
+                                    .contains(&organization_filter.to_lowercase())
+                        }) {
+                            ui.radio_value(
+                                &mut game.world.selected_organization,
+                                Some(OrganizationKey(id.0)),
+                                &organization.name,
+                            );
+                        }
+                    });
                 });
+                if let Some(selected_org) = game.world.selected_organization {
+                    let org = &game.world.organizations[selected_org];
+                    Grid::new(0).striped(true).show(ui, |ui| {
+                        ui.label("money");
+                        ui.label("org wealth");
+                        ui.label("army size");
+                        ui.label("population");
+                        ui.label("pop wealth");
+                        ui.label("wealth per capita");
+                        ui.end_row();
+                        ui.label(format!("{:}", big_number_format(org.money)));
+                        ui.label(format!(
+                            "{:}",
+                            big_number_format(game.world.get_org_wealth(selected_org))
+                        ));
+                        ui.label(format!(
+                            "{:}",
+                            big_number_format(
+                                org.military
+                                    .deployed_forces
+                                    .0
+                                    .iter()
+                                    .map(|f| f.num_troops)
+                                    .sum::<f64>()
+                            )
+                        ));
+                        let population = game.world.get_org_population(selected_org);
+                        let wealth = game.world.get_org_pop_wealth(selected_org);
+                        let wealth_per_capita = wealth / population;
+                        ui.label(format!("{:}", big_number_format(population)));
+                        ui.label(format!("{:}", big_number_format(wealth)));
+                        ui.label(format!("{:}", big_number_format(wealth_per_capita)));
+                    });
+                    ui.label("Branches");
+                    for branch in &org.branches {
+                        let branch = &game.world.branches[*branch];
+                        let controlling_party =
+                            &game.world.political_parties[branch.controlling_party];
+                        ui.label(format!(
+                            "{:} Party: {:}\n Ideology: {:?}",
+                            branch.name, controlling_party.name, controlling_party.ideology
+                        ));
+                    }
+                    if let Some(controlling_agent) = game
+                        .ai_agents
+                        .iter_mut()
+                        .find(|a| a.controlling_organization == Some(selected_org))
+                    {
+                        if ui.button("Take Control").clicked() {
+                            std::mem::swap(&mut game.player_agent, controlling_agent)
+                        }
+                    }
+                    if let Some(controlling_org) = game.player_agent.controlling_organization {
+                        if controlling_org != selected_org {
+                            let relations = game
+                                .world
+                                .relations
+                                .get_relations_mut(controlling_org, selected_org);
+                            if !relations.at_war {
+                                if ui.button("Declare War").clicked() {
+                                    if let Err(err) = game.player_agent.attempt_action(
+                                        &mut game.world,
+                                        AgentAction::DiplomaticAction(
+                                            selected_org,
+                                            DiplomaticAction::DeclareWar,
+                                        ),
+                                    ) {
+                                        dbg!(err);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             });
         }
-        if organization_info_open {
-            match game.world.selected_organization {
-                Some(org_key) => {
-                    let org = &game.world.organizations[org_key];
-                    Window::new(format!("Organization: {:}", org.name))
-                        .id(Id::new("OrganizationInfo"))
-                        .show(&ctx, |ui| {
-                            Grid::new(0).striped(true).show(ui, |ui| {
-                                ui.label("money");
-                                ui.label("org wealth");
-                                ui.label("army size");
-                                ui.label("population");
-                                ui.label("pop wealth");
-                                ui.label("wealth per capita");
-                                ui.end_row();
-                                ui.label(format!("{:}", big_number_format(org.money)));
-                                ui.label(format!("{:}", big_number_format(game.world.get_org_wealth(org_key))));
+
+        if market_window_open {
+            Window::new("Global Markets").show(&ctx, |ui| {
+                SidePanel::left("global_market_left_panel").show_inside(ui, |ui| {
+                    ScrollArea::vertical().show(ui, |ui| {
+                        Grid::new(0).striped(true).show(ui, |ui| {
+                            ui.label("");
+                            ui.label("Name");
+                            ui.label("Price");
+                            ui.label("Supply");
+                            ui.label("Demand");
+                            ui.end_row();
+                            for good_index in 0..Good::VARIANT_COUNT {
+                                let good = Good::try_from(good_index).unwrap();
+                                ui.radio_value(&mut selected_good_index, good_index, "");
+                                ui.label(format!("{:?}", good));
+                                ui.label(format!(
+                                    "{:.2}",
+                                    game.world.global_market.price[good_index]
+                                ));
                                 ui.label(format!(
                                     "{:}",
-                                    big_number_format(
-                                        org.military
-                                            .deployed_forces
-                                            .0
-                                            .iter()
-                                            .map(|f| f.num_troops)
-                                            .sum::<f64>()
-                                    )
+                                    big_number_format(game.world.global_market.supply[good_index])
                                 ));
-                                let population =  game.world.get_org_population(org_key);
-                                let wealth =  game.world.get_org_pop_wealth(org_key);
-                                let wealth_per_capita =  wealth / population;
-                                ui.label(format!("{:}", big_number_format(population)));
-                                ui.label(format!("{:}", big_number_format(wealth)));
-                                ui.label(format!("{:}", big_number_format(wealth_per_capita)));
-
-                            });
-                            ui.label("Branches");
-                            for branch in &org.branches {
-                                let branch = &game.world.branches[*branch];
-                                let controlling_party =
-                                    &game.world.political_parties[branch.controlling_party];
                                 ui.label(format!(
-                                    "{:} Party: {:}\n Ideology: {:?}",
-                                    branch.name, controlling_party.name, controlling_party.ideology
+                                    "{:}",
+                                    big_number_format(game.world.global_market.demand[good_index])
                                 ));
+                                ui.end_row()
                             }
                         });
-                }
-                None => {
-                    Window::new("No Organization Selected").show(&ctx, |_| {});
-                }
-            }
+                    })
+                });
+                ScrollArea::vertical().show(ui, |ui| {
+                    {
+                        let values =
+                            game.world.histories.global_prices[selected_good_index].as_slices();
+                        add_plot(ui, &[values.0, values.1].concat(), "Price", 1000, 0);
+                    }
+                    {
+                        let values =
+                            game.world.histories.global_supply[selected_good_index].as_slices();
+                        add_plot(ui, &[values.0, values.1].concat(), "Supply", 1000, 0);
+                    }
+                    {
+                        let values =
+                            game.world.histories.global_demand[selected_good_index].as_slices();
+                        add_plot(ui, &[values.0, values.1].concat(), "Demand", 1000, 0);
+                    }
+                });
+            });
         }
         if console_open {
             Window::new("Console").show(&ctx, |ui| {
@@ -1184,6 +1173,8 @@ fn main() {
                             close_app(&mut vulkan_data, control_flow);
                         }
                         WindowEvent::CursorMoved { position, .. } => {
+                            // game.mouse_position.x = position.x;
+                            // game.mouse_position.y = position.y;
                             match vulkan_data.surface_capabilities {
                                 Some(surface_capabilities) => {
                                     game.mouse_position.x = -((position.x
@@ -1197,7 +1188,6 @@ fn main() {
                                 }
                                 None => {}
                             }
-                            // println!("Position: {:?}", position);
                         }
                         WindowEvent::MouseInput { button, state, .. } => {
                             match button {
@@ -1354,6 +1344,7 @@ fn main() {
                         game_speed,
                     );
                     if let Some(province_data) = &mut vulkan_data.province_data {
+                        province_data.drawing = game.inputs.map_mode == map_modes::SATELITE;
                         for (org_key, org) in game.world.organizations.iter() {
                             //Deciding how to place the nation text label, it's pretty slow (~0.03ms) so it should either be optimized or done less frequently, or even replaced entirely
                             if let Some((province, _)) = org
@@ -1480,7 +1471,9 @@ fn update_renderer(game: &Game, vulkan_data: &mut VulkanData) {
     let clip = Matrix4::<f64>::identity();
 
     let projection = vulkan_data.get_projection(game.inputs.zoom);
+
     let projection_matrix = clip * projection.to_homogeneous();
+    vulkan_data.post_process_ubo.as_mut().unwrap().get_mut().proj = projection_matrix.cast();
 
     // let view_matrix: Matrix4<f64> = (Rotation3::from_euler_angles(0.0, game.inputs.angle, 0.0)
     //     .to_homogeneous()

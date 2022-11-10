@@ -191,6 +191,20 @@ pub(crate) struct PushConstants {
     pub(crate) animation_frames: u32,
 }
 
+
+#[derive(Debug)]
+#[repr(C)]
+pub(crate) struct PostProcessPushConstants {
+    pub view_inverse: Matrix4<f32>,
+    pub time: f32,
+}
+
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub struct PostProcessUniformBufferObject {
+    pub proj: Matrix4<f32>,
+}
+
 impl Vertex {
     pub(crate) fn get_binding_description() -> vk::VertexInputBindingDescriptionBuilder<'static> {
         return vk::VertexInputBindingDescriptionBuilder::new()
