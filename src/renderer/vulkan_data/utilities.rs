@@ -645,7 +645,7 @@ impl VulkanData{
         self.end_single_time_commands(command_buffer);
     }
 
-    pub(crate) fn begin_single_time_commands(&self) -> vk::CommandBuffer {
+    pub fn begin_single_time_commands(&self) -> vk::CommandBuffer {
         let allocate_info = vk::CommandBufferAllocateInfoBuilder::new()
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_pool(self.command_pool.unwrap())
@@ -669,7 +669,7 @@ impl VulkanData{
         return command_buffer;
     }
 
-    pub(crate) fn end_single_time_commands(&self, command_buffer: vk::CommandBuffer) {
+    pub fn end_single_time_commands(&self, command_buffer: vk::CommandBuffer) {
         let command_buffers = [command_buffer];
         unsafe {
             self.device
@@ -702,8 +702,7 @@ impl VulkanData{
                 .free_command_buffers(self.command_pool.unwrap(), &command_buffers)
         };
     }
-    #[deprecated(note="Too specialized")]
-    pub(crate) fn transition_image_layout(
+    pub fn lazy_transition_image_layout(
         &self,
         image: vk::Image,
         old_layout: vk::ImageLayout,
@@ -712,39 +711,21 @@ impl VulkanData{
     ) {
         let command_buffer = self.begin_single_time_commands();
 
-        let mut barrier = vk::ImageMemoryBarrierBuilder::new()
+        let barrier = vk::ImageMemoryBarrierBuilder::new()
             .old_layout(old_layout)
             .new_layout(new_layout)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .src_access_mask(vk::AccessFlags::MEMORY_WRITE | vk::AccessFlags::MEMORY_READ)
+            .dst_access_mask(vk::AccessFlags::MEMORY_WRITE | vk::AccessFlags::MEMORY_READ)
             .image(image)
             .subresource_range(subresource_range);
-
-        let source_stage: vk::PipelineStageFlags;
-        let destination_stage: vk::PipelineStageFlags;
-
-        match (old_layout, new_layout) {
-            (vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL) => {
-                barrier = barrier.src_access_mask(vk::AccessFlags::empty());
-                barrier = barrier.dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
-                source_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
-                destination_stage = vk::PipelineStageFlags::TRANSFER;
-            }
-            (vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL) => {
-                barrier = barrier.src_access_mask(vk::AccessFlags::TRANSFER_WRITE);
-                barrier = barrier.dst_access_mask(vk::AccessFlags::SHADER_READ);
-
-                source_stage = vk::PipelineStageFlags::TRANSFER;
-                destination_stage = vk::PipelineStageFlags::FRAGMENT_SHADER;
-            }
-            _ => panic!("Transition not supported"),
-        }
 
         unsafe {
             self.device.as_ref().unwrap().cmd_pipeline_barrier(
                 command_buffer,
-                Some(source_stage),
-                Some(destination_stage),
+                Some(vk::PipelineStageFlags::ALL_COMMANDS),
+                Some(vk::PipelineStageFlags::ALL_COMMANDS),
                 None,
                 &[],
                 &[],

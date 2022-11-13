@@ -23,7 +23,7 @@ pub struct VulkanData {
     pub(crate) entry: Option<EntryLoader>,
     pub device: Option<DeviceLoader>,
     pub(crate) physical_device: Option<vk::PhysicalDevice>,
-    pub(crate) allocator: Option<vk_mem_erupt::Allocator>,
+    pub allocator: Option<vk_mem_erupt::Allocator>,
     pub(crate) main_queue: Option<vk::Queue>,
     pub(crate) main_queue_index: Option<u32>,
     pub(crate) surface: Option<vk::SurfaceKHR>,
@@ -93,6 +93,7 @@ pub struct VulkanData {
     pub(crate) fallback_texture: Option<TextureSet>,
     pub(crate) cpu_images: Vec<CpuImage>,
     pub(crate) images_3d: Vec<CombinedSampledImage>,
+    pub voxel_sdf: Option<CombinedSampledImage>,
 }
 
 
@@ -219,6 +220,7 @@ impl VulkanData{
             // planet_textures: vec![],
             images_3d: vec![],
             post_process_ubo: None,
+            voxel_sdf: None,
         };
     }
     pub fn init_vulkan<F>(&mut self, window: &Window, custom_resources: F)

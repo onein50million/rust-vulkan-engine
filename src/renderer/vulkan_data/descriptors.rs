@@ -1,6 +1,6 @@
 use std::mem::size_of;
 
-use crate::{support::{NUM_MODELS, UniformBufferObject, ShaderStorageBufferObject}};
+use crate::{support::{NUM_MODELS, UniformBufferObject, ShaderStorageBufferObject, PostProcessUniformBufferObject}};
 use erupt::vk;
 
 use super::VulkanData;
@@ -132,8 +132,23 @@ impl VulkanData{
             vk::DescriptorSetLayoutBindingBuilder::new()
             .binding(2)
             .descriptor_count(1)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .descriptor_type(vk::DescriptorType::INPUT_ATTACHMENT)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBindingBuilder::new()
+            .binding(3)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::INPUT_ATTACHMENT)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBindingBuilder::new()
+            .binding(4)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBindingBuilder::new()
+            .binding(5)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
         ];
 
         let layout_info =
@@ -532,12 +547,45 @@ impl VulkanData{
                             .dst_set(descriptor_set)
                             .dst_binding(2)
                             .dst_array_element(0)
+                            .descriptor_type(vk::DescriptorType::INPUT_ATTACHMENT)
+                            .image_info(&[
+                                vk::DescriptorImageInfoBuilder::new()
+                                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                                .image_view(self.normals_image.as_ref().unwrap().image_view)
+                            ]),
+                        vk::WriteDescriptorSetBuilder::new()
+                            .dst_set(descriptor_set)
+                            .dst_binding(3)
+                            .dst_array_element(0)
+                            .descriptor_type(vk::DescriptorType::INPUT_ATTACHMENT)
+                            .image_info(&[
+                                vk::DescriptorImageInfoBuilder::new()
+                                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                                .image_view(self.rough_metal_ao_image.as_ref().unwrap().image_view)
+                            ]),
+                        vk::WriteDescriptorSetBuilder::new()
+                            .dst_set(descriptor_set)
+                            .dst_binding(4)
+                            .dst_array_element(0)
+                            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                            .image_info(&[
+                                vk::DescriptorImageInfoBuilder::new()
+                                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                                .image_view(self.voxel_sdf.as_ref().unwrap().image_view)
+                                .sampler(self.voxel_sdf.as_ref().unwrap().sampler)
+                            ]),
+                            vk::WriteDescriptorSetBuilder::new()
+                            .dst_set(descriptor_set)
+                            .dst_binding(5)
+                            .dst_array_element(0)
                             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                             .buffer_info(&[
                                 vk::DescriptorBufferInfoBuilder::new()
-                                .buffer(self.post_process_ubo.as_ref().unwrap().buffer)
-                                .range(vk::WHOLE_SIZE)
+                                    .buffer(self.post_process_ubo.as_ref().unwrap().buffer)
+                                    .offset(0)
+                                    .range(size_of::<PostProcessUniformBufferObject>() as u64)
                             ]),
+
                     ], &[]);    
                 }
             }

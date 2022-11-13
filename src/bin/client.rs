@@ -12,19 +12,28 @@ use egui_winit::winit::event_loop::{ControlFlow, EventLoop};
 use egui_winit::winit::window::WindowBuilder;
 
 
+use erupt::vk;
 use nalgebra::Translation3;
 use nalgebra::{Matrix4, Vector2, Vector3};
 
 
+use rand::Rng;
+use rand::rngs::ThreadRng;
 use rust_vulkan_engine::game::client::Game;
 
 use rust_vulkan_engine::network::{ClientState, Packet};
 use rust_vulkan_engine::renderer::*;
+use rust_vulkan_engine::renderer::buffers::UnmappedBuffer;
+use rust_vulkan_engine::renderer::combination_types::CombinedDescriptor;
+use rust_vulkan_engine::renderer::combination_types::CombinedSampledImage;
+use rust_vulkan_engine::renderer::combination_types::DescriptorInfoData;
 use rust_vulkan_engine::renderer::vulkan_data::VulkanData;
 use rust_vulkan_engine::support;
 use rust_vulkan_engine::support::*;
 use rust_vulkan_engine::voxels::marching_cubes::World;
+use winit::event::DeviceEvent;
 
+use std::fs;
 use std::net::UdpSocket;
 
 use winit::event::{MouseButton, MouseScrollDelta};
@@ -94,16 +103,277 @@ fn main() {
     let window = WindowBuilder::new()
         .build(&event_loop)
         .expect("Failed to build window");
-    window.set_cursor_grab(false).unwrap();
+    window.set_cursor_grab(true).unwrap();
+    // window.set_cursor
     window.set_cursor_visible(true);
     let mut state = egui_winit::State::new(&window);
 
     let mut vulkan_data = VulkanData::new();
     println!("Vulkan Data created");
     vulkan_data.init_vulkan(&window, |vulkan_data| {
+        let shader_module = VulkanData::create_shader_module(vulkan_data.device.as_ref().unwrap(), erupt::utils::decode_spv(&fs::read("shaders/3dSDF.spv").unwrap()).unwrap());
+    
+        // let voxel_image_size = (118,121,60);
+        let voxel_image_size = (128, 64, 128);
+    
+        let (voxel_image, voxel_image_view) = {
+            let image_info = vk::ImageCreateInfoBuilder::new()
+            .image_type(vk::ImageType::_3D)
+            .extent(vk::Extent3D {
+                width: voxel_image_size.0,
+                height: voxel_image_size.1,
+                depth: voxel_image_size.2,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .format(vk::Format::R8_UINT)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST) 
+            .samples(vk::SampleCountFlagBits::_1)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            let allocation_info = vk_mem_erupt::AllocationCreateInfo {
+                ..Default::default()
+            };
+    
+            let (image, allocation, _) = vulkan_data
+                .allocator
+                .as_ref()
+                .unwrap()
+                .create_image(&image_info, &allocation_info)
+                .unwrap();
+            vulkan_data.lazy_transition_image_layout(image, vk::ImageLayout::UNDEFINED, vk::ImageLayout::GENERAL, vk::ImageSubresourceRange{
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+            let view_info = vk::ImageViewCreateInfoBuilder::new()
+            .image(image)
+            .view_type(vk::ImageViewType::_3D)
+            .format(vk::Format::R8_UINT)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .flags(vk::ImageViewCreateFlags::empty());
+    
+            let image_view = unsafe {
+                vulkan_data.device
+                    .as_ref()
+                    .unwrap()
+                    .create_image_view(&view_info, None)
+            }
+            .unwrap();
+    
+            let mut data: Vec<u8> = vec![0; (voxel_image_size.0 * voxel_image_size.1 * voxel_image_size.2) as usize];
+            // let mut rng = rand::thread_rng();
+            // for voxel in &mut data{
+            //     if rng.gen::<f32>() > 0.9{
+            //         *voxel = 1;
+            //     }
+            // }
+            let input_data = std::fs::read("test_room.danvox").unwrap();
+            let input_size = (118,121,60);
+            for (index, input) in  input_data.into_iter().enumerate(){
+                let mut input_coord = (
+                    index % input_size.0,
+                    (index / input_size.0) % input_size.1,
+                    index / (input_size.0 * input_size.1),
+                );
+                std::mem::swap(&mut input_coord.1, &mut input_coord.2);
+                // let output_index = ((input_coord.0 * (voxel_image_size.1 as usize) + input_coord.1) * (voxel_image_size.2 as usize)) + input_coord.2;
+                let output_index = input_coord.0 + input_coord.1 * (voxel_image_size.0 as usize) + input_coord.2 * ((voxel_image_size.0 as usize) * (voxel_image_size.1 as usize));
+
+
+                data[output_index] = input;
+            }
+            assert_eq!(data.len(), (voxel_image_size.0 * voxel_image_size.1 * voxel_image_size.2) as usize);
+            let transfer_buffer = UnmappedBuffer::new(&vulkan_data, vk::BufferUsageFlags::TRANSFER_SRC, &data);
+            let command_buffer = vulkan_data.begin_single_time_commands();
+            unsafe {
+                vulkan_data
+                    .device
+                    .as_ref()
+                    .unwrap()
+                    .cmd_copy_buffer_to_image(
+                        command_buffer,
+                        transfer_buffer.buffer,
+                        image,
+                        vk::ImageLayout::GENERAL,
+                        &[
+                            vk::BufferImageCopyBuilder::new()
+                                .buffer_offset(0)
+                                .buffer_row_length(0)
+                                .buffer_image_height(0)
+                                .image_subresource(vk::ImageSubresourceLayers {
+                                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                                    mip_level: 0,
+                                    base_array_layer: 0,
+                                    layer_count: 1,
+                                })
+                                .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+                                .image_extent(vk::Extent3D {
+                                    width: voxel_image_size.0,
+                                    height: voxel_image_size.1,
+                                    depth: voxel_image_size.2,
+                                }),
+                        ],
+                    )
+            };
+            vulkan_data.end_single_time_commands(command_buffer);
+            (image, image_view)
+        };
+        let (sdf_image, sdf_image_view, sdf_allocation) = {
+            let image_info = vk::ImageCreateInfoBuilder::new()
+            .image_type(vk::ImageType::_3D)
+            .extent(vk::Extent3D {
+                width: voxel_image_size.0,
+                height: voxel_image_size.1,
+                depth: voxel_image_size.2,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .format(vk::Format::R8_UINT)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED)
+            .samples(vk::SampleCountFlagBits::_1)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            let allocation_info = vk_mem_erupt::AllocationCreateInfo {
+                ..Default::default()
+            };
+    
+            let (image, allocation, _) = vulkan_data
+                .allocator
+                .as_ref()
+                .unwrap()
+                .create_image(&image_info, &allocation_info)
+                .unwrap();
+
+            vulkan_data.lazy_transition_image_layout(image, vk::ImageLayout::UNDEFINED, vk::ImageLayout::GENERAL, vk::ImageSubresourceRange{
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+            let view_info = vk::ImageViewCreateInfoBuilder::new()
+            .image(image)
+            .view_type(vk::ImageViewType::_3D)
+            .format(vk::Format::R8_UINT)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .flags(vk::ImageViewCreateFlags::empty());
+    
+            let image_view = unsafe {
+                vulkan_data.device
+                    .as_ref()
+                    .unwrap()
+                    .create_image_view(&view_info, None)
+            }
+            .unwrap();
+            (image, image_view, allocation)
+        };
+    
+
+        println!("Running Voxel SDF Shader");
+        for i in 0..voxel_image_size.1{
+            println!("Current layer: {i}");
+
+            let combined_descriptors = [
+                CombinedDescriptor {
+                    descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+                    descriptor_count: 1,
+                    descriptor_info: DescriptorInfoData::Image {
+                        image_view: voxel_image_view,
+                        sampler: None,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                },
+                CombinedDescriptor {
+                    descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+                    descriptor_count: 1,
+                    descriptor_info: DescriptorInfoData::Image {
+                        image_view: sdf_image_view,
+                        sampler: None,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                },
+            ];
+
+            #[repr(C)]
+            struct SdfPushConstants{
+                current_iteration: u32,
+                max_iterations: u32,
+            }
+            let group_size = (voxel_image_size.0/8, 1,voxel_image_size.2/8);
+            vulkan_data.run_arbitrary_compute_shader(shader_module, SdfPushConstants{
+                current_iteration: i,
+                max_iterations: voxel_image_size.1,
+            }, &combined_descriptors, group_size);
+        }
+        
+        vulkan_data.lazy_transition_image_layout(sdf_image, vk::ImageLayout::GENERAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL, vk::ImageSubresourceRange{
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        });
+
+        let sdf_sampler = {
+            let sampler_info = vk::SamplerCreateInfoBuilder::new()
+                .mag_filter(vk::Filter::NEAREST)
+                .min_filter(vk::Filter::NEAREST)
+                .address_mode_u(vk::SamplerAddressMode::MIRRORED_REPEAT)
+                .address_mode_v(vk::SamplerAddressMode::MIRRORED_REPEAT)
+                .address_mode_w(vk::SamplerAddressMode::MIRRORED_REPEAT)
+                .anisotropy_enable(true)
+                .max_anisotropy(1.0)
+                .border_color(vk::BorderColor::INT_OPAQUE_WHITE)
+                .unnormalized_coordinates(false)
+                .compare_enable(false)
+                .compare_op(vk::CompareOp::ALWAYS)
+                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                .mip_lod_bias(0.0)
+                .min_lod(0.0)
+                .max_lod(vk::LOD_CLAMP_NONE);
+    
+            unsafe {
+                vulkan_data
+                    .device
+                    .as_ref()
+                    .unwrap()
+                    .create_sampler(&sampler_info, None)
+                    .unwrap()
+            }
+        };
+        vulkan_data.voxel_sdf = Some(CombinedSampledImage{
+            image: sdf_image,
+            image_view: sdf_image_view,
+            sampler: sdf_sampler,
+            allocation: sdf_allocation,
+            width: voxel_image_size.0,
+            height: voxel_image_size.1,
+        });
+
     });
     println!("Vulkan Data initialized");
-    
+
+ 
+
+
+
     // vulkan_data.load_folder("models/test_ball".into());
 
     let world = World::new_random();
@@ -169,6 +439,15 @@ fn main() {
         vulkan_data.ui_data.update_buffers(&vertices, &indices);
         state.handle_output(&window, &ctx, output);
         match event {
+            Event::DeviceEvent { device_id, event }=>{
+                match event{
+                    DeviceEvent::MouseMotion { delta }=>{
+                        game.mouse_buffer.x += delta.0;
+                        game.mouse_buffer.y += delta.1;
+                    }
+                    _ =>{}
+                }
+            },
             Event::WindowEvent { event, .. } => {
                 let egui_handling = state.on_event(&ctx, &event);
                 if !egui_handling {
@@ -181,6 +460,7 @@ fn main() {
                         WindowEvent::CursorMoved { position, .. } => {
                             // game.mouse_position.x = position.x;
                             // game.mouse_position.y = position.y;
+                            // let old_mouse_position = game.mouse_position;
                             match vulkan_data.surface_capabilities {
                                 Some(surface_capabilities) => {
                                     game.mouse_position.x = -((position.x
@@ -194,6 +474,7 @@ fn main() {
                                 }
                                 None => {}
                             }
+                            // game.mouse_buffer += old_mouse_position - game.mouse_position;
                         }
                         WindowEvent::MouseInput { button, state, .. } => {
                             match button {
@@ -351,7 +632,8 @@ fn update_renderer(game: &Game, vulkan_data: &mut VulkanData) {
     let projection_matrix = clip * projection.to_homogeneous();
     vulkan_data.post_process_ubo.as_mut().unwrap().get_mut().proj = projection_matrix.cast();
 
-    let view_matrix = Translation3::new(0.0, 0.0, 10.0).inverse().to_homogeneous();
+    // let view_matrix = Translation3::new(0.0, 0.0, 10.0).inverse().to_homogeneous();
+    let view_matrix = game.player.get_view_matrix();
     vulkan_data.uniform_buffer_object.view = view_matrix.cast();
     vulkan_data.uniform_buffer_object.proj = projection_matrix.cast();
 

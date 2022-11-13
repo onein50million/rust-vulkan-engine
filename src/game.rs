@@ -126,11 +126,100 @@ pub mod client {
                 * self.rotation.to_homogeneous();
         }
     }
+    pub struct Player {
+        movement: Vector3<f64>,
+        position: Vector3<f64>,
+        velocity: Vector3<f64>,
+        rotation: UnitQuaternion<f64>,
+        move_acceleration: f64,
+        touching_ground: bool,
+        pitch: f64,
+        yaw: f64,
+    }
+    impl Default for Player {
+        fn default() -> Self {
+            Self {
+                movement: Vector3::new(0.0, 0.0, 0.0),
+                position: Vector3::new(2.0, -10.0, 1.0),
+                velocity: Vector3::new(0.0, 0.0, 0.0),
+                move_acceleration: Self::BASE_ACCEL,
+                touching_ground: true,
+                rotation: UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.0),
+                pitch: 0.0,
+                yaw: 0.0
+            }
+        }
+    }
+    
+    impl Player {
+        const HEAD_OFFSET: Vector3<f64> = Vector3::new(0.0,-1.7,0.0);
+        const FALL_ACCELERATION: f64 = 9.8;
+        const JUMP_SPEED: f64 = 5.0;
+        const BASE_ACCEL: f64 = 50.0;
+    
+        pub fn process(&mut self, delta_time: f64) {
+    
+            self.rotation =
+                UnitQuaternion::from_axis_angle(&(-Vector3::y_axis()), self.yaw)*
+                UnitQuaternion::from_axis_angle(&(Vector3::x_axis()), self.pitch);
+    
+            if self.touching_ground {
+                self.velocity.x += self.movement.x * delta_time;
+                self.velocity.z += self.movement.z * delta_time;
+            }
+    
+            self.position += self.velocity * delta_time;
+    
+            if -self.position.y > 0.0 {
+                self.velocity.y += Player::FALL_ACCELERATION * delta_time;
+            } else {
+                self.touching_ground = true;
+                self.position.y = -0.0;
+                self.velocity.x -= self.velocity.x * (10.0 * delta_time).clamp(-1.0, 1.0);
+                self.velocity.z -= self.velocity.z * (10.0 * delta_time).clamp(-1.0, 1.0);
+                self.velocity.y = 0.0;
+            }
+        }
+        pub fn process_inputs(
+            &mut self,
+            inputs: &mut Inputs,
+            _delta_time: f64,
+            mouse_buffer: &Vector2<f64>,
+        ) {
+            self.pitch = (self.pitch + mouse_buffer.y/1000.0) % std::f64::consts::TAU;
+            self.yaw = (self.yaw + mouse_buffer.x/1000.0) % std::f64::consts::TAU;
+    
+    
+            self.movement = self.rotation
+                * Vector3::new(
+                    inputs.right - inputs.left,
+                    0.0,
+                    inputs.down - inputs.up,
+                );
+            self.movement.y = 0.0;
+            if self.movement.magnitude() > 0.0 {
+                self.movement = self.movement.normalize();
+            }
+            self.movement *= self.move_acceleration;
+    
+            if inputs.left_click && self.touching_ground {
+                inputs.left_click = false;
+                self.touching_ground = false;
+                self.velocity.y = -Player::JUMP_SPEED;
+            }
+        }
+        pub fn get_view_matrix(&self) -> Matrix4<f64>{
+            (Translation3::from(self.position + Self::HEAD_OFFSET).to_homogeneous() * self.rotation.to_homogeneous()).try_inverse().unwrap()
+        }
+    }
+
     pub struct Game {
         pub inputs: Inputs,
         pub mouse_position: Vector2<f64>,
+        pub mouse_buffer: Vector2<f64>,
         pub last_mouse_position: Vector2<f64>,
-        pub start_time: Instant
+        pub start_time: Instant,
+        pub player: Player,
     }
     impl Game {
         pub fn new() -> Self {
@@ -138,14 +227,19 @@ pub mod client {
                 inputs: Inputs::new(),
                 mouse_position: Vector2::zeros(),
                 last_mouse_position: Vector2::zeros(),
-                start_time: Instant::now()
+                start_time: Instant::now(),
+                player: Player::default(),
+                mouse_buffer: Vector2::zeros(),
             }
         }
         pub fn process(
             &mut self,
             delta_time: f64,
         ) {
-
+            // dbg!(self.mouse_buffer);
+            self.player.process_inputs(&mut self.inputs, delta_time, &self.mouse_buffer);
+            self.mouse_buffer = Vector2::zeros();
+            self.player.process(delta_time);
         }
     }
 }

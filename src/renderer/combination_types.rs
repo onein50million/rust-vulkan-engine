@@ -232,7 +232,7 @@ impl CombinedSampledImage {
                 .get_mapped_data()
                 .copy_from_nonoverlapping(bytes.as_ptr(), bytes.len())
         };
-        vulkan_data.transition_image_layout(
+        vulkan_data.lazy_transition_image_layout(
             image,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,

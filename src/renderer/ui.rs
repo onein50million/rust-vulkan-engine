@@ -263,7 +263,7 @@ impl VulkanData{
                 .get_mapped_data()
                 .copy_from_nonoverlapping(texture.pixels.as_ptr(), texture.pixels.len());
         };
-        self.transition_image_layout(
+        self.lazy_transition_image_layout(
             image,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -304,7 +304,7 @@ impl VulkanData{
 
         self.end_single_time_commands(command_buffer);
 
-        self.transition_image_layout(
+        self.lazy_transition_image_layout(
             image,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
