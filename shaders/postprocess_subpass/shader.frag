@@ -27,8 +27,8 @@ vec3 unproject_point(vec3 point){
 
 const float PI = 3.14;
 const float E = 2.71828;
-const int MAX_MARCHES = 500;
-const float MAX_DISTANCE = 1000.0;
+const int MAX_MARCHES = 50;
+const float MAX_DISTANCE = 100.0;
 
 //https://stackoverflow.com/a/32246825
 vec3 depthWorldPosition(float depth, vec2 uv){
@@ -56,6 +56,27 @@ float get_voxel_sdf(vec3 position){
     return texture(voxelSDF, position/sdf_size).r * VOXEL_SCALE;
 }
 
+
+struct RayMarchResult{
+    int steps_taken;
+    vec3 point;
+};
+
+const float THRESHOLD = 1.0 * VOXEL_SCALE;
+
+RayMarchResult march_rays(vec3 origin, vec3 direction){
+    vec3 current_position = origin;
+    for(int i = 0; i < MAX_MARCHES; i++){
+        float dist = get_voxel_sdf(current_position);
+        if (dist < THRESHOLD){
+            return RayMarchResult(i, current_position);
+        }
+        dist = max(0.1*VOXEL_SCALE, dist - 0.1 * VOXEL_SCALE);
+        current_position += direction * dist;
+    }
+    return RayMarchResult(-1, vec3(0.0));
+}
+
 void main()
 {
     vec3 scene_albedo = subpassLoad(rasterAlbedo).rgb;
@@ -71,30 +92,14 @@ void main()
     origin.y *= -1.0;
     target.y *= -1.0;
 
-    const float threshold = 1.0*VOXEL_SCALE;
-    
-    vec3 current_position = origin;
-    for(int i = 0; i < MAX_MARCHES, distance(current_position, origin) < MAX_DISTANCE; i++){
-        float light_strength = float(MAX_MARCHES - i) / float(MAX_MARCHES);
-        float dist = get_voxel_sdf(current_position);
-
-        if (dist < threshold){
-            // outFragColor = vec4(vec3(1.0), 1.0);
-            outFragColor = vec4((sin(current_position))*light_strength, 1.0);
-            return;
-        }
-        dist = max(0.1*VOXEL_SCALE, dist - 0.5 * VOXEL_SCALE);
-        current_position += target * 0.01;
+    RayMarchResult result = march_rays(origin, target);
+    if(result.steps_taken > 0){
+        float light_strength = float(MAX_MARCHES - result.steps_taken) / float(MAX_MARCHES);
+        vec3 color = mix(vec3(0.4), vec3(1.0), light_strength);
+        outFragColor = vec4(color, 1.0);
+        return;
     }
 
     outFragColor = vec4(vec3(0.0), 1.0);
 
-
-    // int voxels[LENGTH][DEPTH][HEIGHT] = {0};
-    // voxels[0][0][0] = 1;
-
-    // vec3 sdf_size = textureSize(voxelSDF,0);
-
-
-    // outFragColor = vec4(scene_albedo, 1.0);
 }

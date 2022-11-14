@@ -3,7 +3,7 @@ use std::{mem::size_of, ffi::CString};
 use erupt::{vk, DeviceLoader, vk1_0::{DescriptorImageInfoBuilder, DescriptorBufferInfoBuilder}};
 use rand::Rng;
 
-use crate::{renderer::{buffers::UnmappedBuffer, combination_types::{CombinedSampledImage, CombinedDescriptor, DescriptorInfoData}}, support::CUBEMAP_WIDTH};
+use crate::{renderer::{combination_types::{CombinedSampledImage, CombinedDescriptor, DescriptorInfoData}}};
 
 use super::VulkanData;
 
@@ -16,85 +16,6 @@ pub fn get_random_vector(rng: &mut rand::rngs::ThreadRng, length: usize) -> Vec<
 }
 
 impl VulkanData{
-    pub fn get_cubemap_from_slice(&self, slice: &[f32]) -> CombinedSampledImage {
-        let out_cubemap = self.create_blank_cubemap(
-            CUBEMAP_WIDTH as u32,
-            CUBEMAP_WIDTH as u32,
-            1,
-            vk::Format::R32_SFLOAT,
-            vk::ImageLayout::GENERAL,
-            vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
-        );
-
-        let mut transfer_buffer =
-            UnmappedBuffer::new(self, vk::BufferUsageFlags::TRANSFER_SRC, slice);
-
-        let command_buffer = self.begin_single_time_commands();
-
-        let region = vk::BufferImageCopyBuilder::new()
-            .buffer_offset(0)
-            .buffer_row_length(0)
-            .buffer_image_height(0)
-            .image_subresource(vk::ImageSubresourceLayers {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                mip_level: 0,
-                base_array_layer: 0,
-                layer_count: 6,
-            })
-            .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-            .image_extent(vk::Extent3D {
-                width: CUBEMAP_WIDTH as u32,
-                height: CUBEMAP_WIDTH as u32,
-                depth: 1,
-            });
-
-        unsafe {
-            self.device.as_ref().unwrap().cmd_copy_buffer_to_image(
-                command_buffer,
-                transfer_buffer.buffer,
-                out_cubemap.image,
-                vk::ImageLayout::GENERAL,
-                &[region],
-            )
-        };
-
-        self.end_single_time_commands(command_buffer);
-
-        transfer_buffer.destroy(self);
-
-        let target_barrier = vk::ImageMemoryBarrierBuilder::new()
-            .old_layout(vk::ImageLayout::GENERAL)
-            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(out_cubemap.image)
-            .subresource_range(
-                *vk::ImageSubresourceRangeBuilder::new()
-                    .level_count(1)
-                    .layer_count(6)
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(0)
-                    .base_array_layer(0),
-            );
-
-        let command_buffer = self.begin_single_time_commands();
-        unsafe {
-            self.device.as_ref().unwrap().cmd_pipeline_barrier(
-                command_buffer,
-                Some(vk::PipelineStageFlags::ALL_COMMANDS),
-                Some(vk::PipelineStageFlags::ALL_COMMANDS),
-                None,
-                &[],
-                &[],
-                &[target_barrier],
-            )
-        };
-
-        self.end_single_time_commands(command_buffer);
-
-        out_cubemap
-    }
-
     pub(crate) fn get_surface_support(&mut self) {
         unsafe {
             self.instance

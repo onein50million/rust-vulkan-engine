@@ -19,6 +19,7 @@ use nalgebra::{Matrix4, Vector2, Vector3};
 
 use rand::Rng;
 use rand::rngs::ThreadRng;
+use rand::seq::SliceRandom;
 use rust_vulkan_engine::game::client::Game;
 
 use rust_vulkan_engine::network::{ClientState, Packet};
@@ -110,13 +111,13 @@ fn main() {
 
     let mut vulkan_data = VulkanData::new();
     println!("Vulkan Data created");
-    vulkan_data.init_vulkan(&window, |vulkan_data| {
-        let shader_module = VulkanData::create_shader_module(vulkan_data.device.as_ref().unwrap(), erupt::utils::decode_spv(&fs::read("shaders/3dSDF.spv").unwrap()).unwrap());
     
+    vulkan_data.init_vulkan(&window, |vulkan_data| {
+        let mut rng = rand::thread_rng();
         // let voxel_image_size = (118,121,60);
         let voxel_image_size = (128, 64, 128);
     
-        let (voxel_image, voxel_image_view) = {
+        let (voxel_image_a, voxel_image_a_view) = {
             let image_info = vk::ImageCreateInfoBuilder::new()
             .image_type(vk::ImageType::_3D)
             .extent(vk::Extent3D {
@@ -126,10 +127,10 @@ fn main() {
             })
             .mip_levels(1)
             .array_layers(1)
-            .format(vk::Format::R8_UINT)
+            .format(vk::Format::R32G32B32A32_SINT)
             .tiling(vk::ImageTiling::OPTIMAL)
             .initial_layout(vk::ImageLayout::UNDEFINED)
-            .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST) 
+            .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC) 
             .samples(vk::SampleCountFlagBits::_1)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
             let allocation_info = vk_mem_erupt::AllocationCreateInfo {
@@ -152,7 +153,7 @@ fn main() {
             let view_info = vk::ImageViewCreateInfoBuilder::new()
             .image(image)
             .view_type(vk::ImageViewType::_3D)
-            .format(vk::Format::R8_UINT)
+            .format(vk::Format::R32G32B32A32_SINT)
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,
@@ -171,12 +172,6 @@ fn main() {
             .unwrap();
     
             let mut data: Vec<u8> = vec![0; (voxel_image_size.0 * voxel_image_size.1 * voxel_image_size.2) as usize];
-            // let mut rng = rand::thread_rng();
-            // for voxel in &mut data{
-            //     if rng.gen::<f32>() > 0.9{
-            //         *voxel = 1;
-            //     }
-            // }
             let input_data = std::fs::read("test_room.danvox").unwrap();
             let input_size = (118,121,60);
             for (index, input) in  input_data.into_iter().enumerate(){
@@ -189,10 +184,41 @@ fn main() {
                 // let output_index = ((input_coord.0 * (voxel_image_size.1 as usize) + input_coord.1) * (voxel_image_size.2 as usize)) + input_coord.2;
                 let output_index = input_coord.0 + input_coord.1 * (voxel_image_size.0 as usize) + input_coord.2 * ((voxel_image_size.0 as usize) * (voxel_image_size.1 as usize));
 
-
                 data[output_index] = input;
             }
+
+            // let mut data: Vec<u8> = vec![0; (voxel_image_size.0 * voxel_image_size.1 * voxel_image_size.2) as usize];
+            // for (i, voxel) in data.iter_mut().enumerate(){
+            //     if i < 128*64 && i % 30 == 0{
+            //         *voxel = 1;
+            //     }
+            // }
             assert_eq!(data.len(), (voxel_image_size.0 * voxel_image_size.1 * voxel_image_size.2) as usize);
+
+            let mut data: Vec<_> = data.into_iter().enumerate().map(|(index, value)|{
+                if value > 0 {
+                    [(index % (voxel_image_size.0 as usize)) as i32,
+                    ((index / (voxel_image_size.0 as usize)) % (voxel_image_size.1 as usize)) as i32,
+                    (index / ((voxel_image_size.0 as usize) * (voxel_image_size.1 as usize))) as i32,
+                    0i32
+                    ]
+                }else{
+                    [-1,-1,-1, 0]
+                }
+            }).collect();
+
+
+            let seeds: Vec<_> = data.iter().copied().filter(|v| v[0] > -1).collect();
+            for voxel in &mut data{
+                if voxel[0] == -1{
+                    *voxel = *seeds.choose(&mut rng).unwrap();
+                }
+            }
+
+
+            let data: Vec<_> = data.into_iter().flat_map(|color|color.into_iter().map(|a|a.to_ne_bytes())).collect();
+
+
             let transfer_buffer = UnmappedBuffer::new(&vulkan_data, vk::BufferUsageFlags::TRANSFER_SRC, &data);
             let command_buffer = vulkan_data.begin_single_time_commands();
             unsafe {
@@ -228,6 +254,85 @@ fn main() {
             vulkan_data.end_single_time_commands(command_buffer);
             (image, image_view)
         };
+        let (voxel_image_b, voxel_image_b_view) = {
+            let image_info = vk::ImageCreateInfoBuilder::new()
+            .image_type(vk::ImageType::_3D)
+            .extent(vk::Extent3D {
+                width: voxel_image_size.0,
+                height: voxel_image_size.1,
+                depth: voxel_image_size.2,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .format(vk::Format::R32G32B32A32_SINT)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC) 
+            .samples(vk::SampleCountFlagBits::_1)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            let allocation_info = vk_mem_erupt::AllocationCreateInfo {
+                ..Default::default()
+            };
+    
+            let (image, allocation, _) = vulkan_data
+                .allocator
+                .as_ref()
+                .unwrap()
+                .create_image(&image_info, &allocation_info)
+                .unwrap();
+            vulkan_data.lazy_transition_image_layout(image, vk::ImageLayout::UNDEFINED, vk::ImageLayout::GENERAL, vk::ImageSubresourceRange{
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+            let view_info = vk::ImageViewCreateInfoBuilder::new()
+            .image(image)
+            .view_type(vk::ImageViewType::_3D)
+            .format(vk::Format::R32G32B32A32_SINT)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .flags(vk::ImageViewCreateFlags::empty());
+    
+            let image_view = unsafe {
+                vulkan_data.device
+                    .as_ref()
+                    .unwrap()
+                    .create_image_view(&view_info, None)
+            }
+            .unwrap();
+            (image, image_view)
+        };
+        let command_buffer = vulkan_data.begin_single_time_commands();
+        unsafe{
+            vulkan_data.device.as_ref().unwrap().cmd_copy_image(command_buffer, voxel_image_a, vk::ImageLayout::GENERAL, voxel_image_b, vk::ImageLayout::GENERAL, &[
+                vk::ImageCopyBuilder::new().extent(
+                    vk::Extent3D{
+                        width: voxel_image_size.0,
+                        height: voxel_image_size.1,
+                        depth: voxel_image_size.2,
+                    }
+                ).dst_subresource(vk::ImageSubresourceLayers{
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: 0,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                }).src_subresource(vk::ImageSubresourceLayers{
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: 0,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+            ]);
+        }
+        vulkan_data.end_single_time_commands(command_buffer);
+
         let (sdf_image, sdf_image_view, sdf_allocation) = {
             let image_info = vk::ImageCreateInfoBuilder::new()
             .image_type(vk::ImageType::_3D)
@@ -285,17 +390,22 @@ fn main() {
             (image, image_view, allocation)
         };
     
+        let shader_module = VulkanData::create_shader_module(vulkan_data.device.as_ref().unwrap(), erupt::utils::decode_spv(&fs::read("shaders/3dSDF.spv").unwrap()).unwrap());
 
+        let mut buffer_switch = true;
         println!("Running Voxel SDF Shader");
-        for i in 0..voxel_image_size.1{
-            println!("Current layer: {i}");
+        let mut extra_rounds = 100;
+        let mut divisor = 2;
+        let max_length = voxel_image_size.0.max(voxel_image_size.1.max(voxel_image_size.2));
+        while extra_rounds >= 0{
+            println!("Current divisor: {divisor}");
 
-            let combined_descriptors = [
-                CombinedDescriptor {
+            let combined_descriptors = if buffer_switch {
+                [CombinedDescriptor {
                     descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
                     descriptor_count: 1,
                     descriptor_info: DescriptorInfoData::Image {
-                        image_view: voxel_image_view,
+                        image_view: voxel_image_a_view,
                         sampler: None,
                         layout: vk::ImageLayout::GENERAL,
                     },
@@ -304,23 +414,106 @@ fn main() {
                     descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
                     descriptor_count: 1,
                     descriptor_info: DescriptorInfoData::Image {
-                        image_view: sdf_image_view,
+                        image_view: voxel_image_b_view,
+                        sampler: None,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                },]
+            }else{
+                [CombinedDescriptor {
+                    descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+                    descriptor_count: 1,
+                    descriptor_info: DescriptorInfoData::Image {
+                        image_view: voxel_image_b_view,
                         sampler: None,
                         layout: vk::ImageLayout::GENERAL,
                     },
                 },
-            ];
+                CombinedDescriptor {
+                    descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+                    descriptor_count: 1,
+                    descriptor_info: DescriptorInfoData::Image {
+                        image_view: voxel_image_a_view,
+                        sampler: None,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                },]
+            };
 
             #[repr(C)]
             struct SdfPushConstants{
-                current_iteration: u32,
-                max_iterations: u32,
+                current_divisor: i32,
+                direction: i32,
+                // random_seed: u32,
             }
-            let group_size = (voxel_image_size.0/8, 1,voxel_image_size.2/8);
-            vulkan_data.run_arbitrary_compute_shader(shader_module, SdfPushConstants{
-                current_iteration: i,
-                max_iterations: voxel_image_size.1,
-            }, &combined_descriptors, group_size);
+            let group_size = (voxel_image_size.0/4, voxel_image_size.1/4, voxel_image_size.2/4);
+            for direction in 0..(3*3*3){
+                vulkan_data.run_arbitrary_compute_shader(shader_module, SdfPushConstants{
+                    current_divisor: divisor as i32,
+                    direction,
+                    // random_seed: rng.gen(),
+                }, &combined_descriptors, group_size);
+            }
+            if max_length/(divisor * 2) >= 1{
+                divisor *= 2;
+            }else{
+                extra_rounds -= 1;
+            }
+            let command_buffer = vulkan_data.begin_single_time_commands();
+
+            let (source_image, dest_image) = if buffer_switch{
+                (voxel_image_b, voxel_image_a)
+            }else{
+                (voxel_image_a, voxel_image_b)
+            };
+            unsafe{
+                vulkan_data.device.as_ref().unwrap().cmd_copy_image(command_buffer, source_image, vk::ImageLayout::GENERAL, dest_image, vk::ImageLayout::GENERAL, &[
+                    vk::ImageCopyBuilder::new().extent(
+                        vk::Extent3D{
+                            width: voxel_image_size.0,
+                            height: voxel_image_size.1,
+                            depth: voxel_image_size.2,
+                        }
+                    ).dst_subresource(vk::ImageSubresourceLayers{
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        mip_level: 0,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    }).src_subresource(vk::ImageSubresourceLayers{
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        mip_level: 0,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    })
+                ]);
+            }
+            vulkan_data.end_single_time_commands(command_buffer);
+            buffer_switch = !buffer_switch;
+        }
+
+        {
+            let shader_module = VulkanData::create_shader_module(vulkan_data.device.as_ref().unwrap(), erupt::utils::decode_spv(&fs::read("shaders/bakeVoronoi.spv").unwrap()).unwrap());
+            let combined_descriptors = [CombinedDescriptor {
+                descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+                descriptor_count: 1,
+                descriptor_info: DescriptorInfoData::Image {
+                    image_view: if buffer_switch{ voxel_image_a_view}else { voxel_image_b_view},
+                    sampler: None,
+                    layout: vk::ImageLayout::GENERAL,
+                },
+            },
+            CombinedDescriptor {
+                descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+                descriptor_count: 1,
+                descriptor_info: DescriptorInfoData::Image {
+                    image_view: sdf_image_view,
+                    sampler: None,
+                    layout: vk::ImageLayout::GENERAL,
+                },
+            },];
+            let group_size = (voxel_image_size.0/4, voxel_image_size.1/4, voxel_image_size.2/4);
+            vulkan_data.run_arbitrary_compute_shader(shader_module, 0, &combined_descriptors, group_size);
+
         }
         
         vulkan_data.lazy_transition_image_layout(sdf_image, vk::ImageLayout::GENERAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL, vk::ImageSubresourceRange{
@@ -335,9 +528,9 @@ fn main() {
             let sampler_info = vk::SamplerCreateInfoBuilder::new()
                 .mag_filter(vk::Filter::NEAREST)
                 .min_filter(vk::Filter::NEAREST)
-                .address_mode_u(vk::SamplerAddressMode::MIRRORED_REPEAT)
-                .address_mode_v(vk::SamplerAddressMode::MIRRORED_REPEAT)
-                .address_mode_w(vk::SamplerAddressMode::MIRRORED_REPEAT)
+                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_BORDER)
+                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_BORDER)
+                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_BORDER)
                 .anisotropy_enable(true)
                 .max_anisotropy(1.0)
                 .border_color(vk::BorderColor::INT_OPAQUE_WHITE)
@@ -605,7 +798,7 @@ fn main() {
                     }
                     average_frametime /= FRAME_SAMPLES as f64;
 
-                    window.set_title(format!("Frametimes: {:}", average_frametime).as_str());
+                    window.set_title(format!("Fps: {:.0} Frametimes: {:}", 1.0/average_frametime, average_frametime).as_str());
 
                     game.process(
                         delta_time,

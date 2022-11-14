@@ -5,14 +5,11 @@ use nalgebra::{Matrix4, Translation3, Vector2, Vector3, Vector4};
 use serde::{Deserialize, Serialize};
 
 pub const NETWORK_TICK_RATE: f64 = 10.0;
-pub const FRAMERATE_TARGET: f64 = 60.0;
+pub const FRAMERATE_TARGET: f64 = 280.0;
 pub const NUM_RANDOM: usize = 100;
 pub const FRAME_SAMPLES: usize = 10;
 pub const NUM_MODELS: usize = 1000;
 pub const NUM_LIGHTS: usize = 2;
-pub const NUM_PLANET_TEXTURES: usize = 6;
-pub const MAX_NATIONS: usize = 1024;
-pub const CUBEMAP_WIDTH: usize = 512;
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub struct Inputs {

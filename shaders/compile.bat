@@ -6,6 +6,7 @@ glslc postprocess_subpass/shader.vert -o postprocess_subpass/vert.spv
 glslc postprocess_subpass/shader.frag -o postprocess_subpass/frag.spv
 
 glslc 3dSDF.comp -o 3dSDF.spv
+glslc bakeVoronoi.comp -o bakeVoronoi.spv
 
 glslc ui.vert -o ui_vert.spv
 glslc ui.frag -o ui_frag.spv

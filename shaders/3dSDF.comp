@@ -1,32 +1,103 @@
 #version 450
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
-layout(set = 0, binding = 0, r8ui) uniform uimage3D inImage;
-layout(set = 0, binding = 1, r8ui) writeonly uniform uimage3D outImage;
+// layout(set = 0, binding = 0, r8ui) readonly uniform uimage3D inImage;
+layout(set = 0, binding = 0, rgba32i) readonly uniform iimage3D sourceImage;
+layout(set = 0, binding = 1, rgba32i) writeonly uniform iimage3D targetImage;
+//layout(set = 0, binding = 1, r8ui) writeonly uniform uimage3D outImage;
+
+// layout(push_constant) uniform PushConstants{
+//     uint current_iteration;
+//     uint max_iterations;
+// } pushConstant;
 
 layout(push_constant) uniform PushConstants{
-    uint current_iteration;
-    uint max_iterations;
+    int divisor;
+    int direction;
+    // int rand_seed;
 } pushConstant;
+
+//https://www.shadertoy.com/view/WttXWX
+uint hash(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352dU;
+    x ^= x >> 15;
+    x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return x;
+}
+
+void fill(ivec3 position, ivec3 seed){
+    ivec3 image_size = imageSize(sourceImage);
+    ivec3 step_length = max(image_size / pushConstant.divisor, 1);
+    // for(int x = -1; x <= 1; x++){
+    //     for(int y = -1; y <= 1; y++){
+    //         for(int z = -1; z <= 1; z++){
+    //             ivec3 target_position = position + ivec3(x,y,z) * step_length;
+    //             ivec3 target_value = imageLoad(sourceImage, target_position).rgb;
+    //             if(target_value.x < 0 || distance(seed, target_position) < distance(target_position, target_value)){
+    //                 imageStore(targetImage, target_position, ivec4(seed,0));
+    //             }
+    //         }
+    //     }
+    // }
+    int x = (pushConstant.direction % 3) - 1;
+    int y = ((pushConstant.direction / 3) % 3) - 1;
+    int z = (pushConstant.direction / (3 * 3)) - 1;
+    // uint hash = hash(pushConstant.rand_seed) + hash(gl_GlobalInvocationID.x) + hash(gl_GlobalInvocationID.y) + hash(gl_GlobalInvocationID.z);
+
+    // float x = float(hash(pushConstant.rand_seed + gl_GlobalInvocationID.x)) / 4294967295.0;
+    // float y = float(hash(pushConstant.rand_seed + gl_GlobalInvocationID.y)) / 4294967295.0;
+    // float z = float(hash(pushConstant.rand_seed + gl_GlobalInvocationID.z)) / 4294967295.0;
+
+    // vec3 offset = normalize(vec3(x,y,z)) * float(step_length);
+
+    ivec3 target_position = position + ivec3(x,y,z) * step_length;
+    // ivec3 target_position = ivec3(vec3(position) + offset);
+    if(target_position.x >= 0 && target_position.y >= 0 && target_position.z >= 0 && target_position.x < image_size.x && target_position.y < image_size.y && target_position.z < image_size.z){
+        ivec3 target_value = imageLoad(sourceImage, target_position).rgb;
+        if (target_value != seed){
+            if(target_value.x < 0 || distance(target_position, seed) < distance(target_position, target_value)){
+                imageStore(targetImage, target_position, ivec4(seed,0));
+            }else{
+                // imageStore(targetImage, target_position, ivec4(target_value,0));
+            }
+        }
+
+
+    }
+}
 
 void main(){
 
-    float min_distance = 1.0/0.0;
+    // // Brute force SDF generation
+    // float min_distance = 1.0/0.0;
 
-    vec3 output_image_size = imageSize(outImage);
-    int layer_size = int(output_image_size.y) / int(pushConstant.max_iterations);
-    ivec3 current_pixel = ivec3(gl_GlobalInvocationID.xyz) + ivec3(0,layer_size * int(pushConstant.current_iteration),0);
+    // vec3 output_image_size = imageSize(outImage);
+    // int layer_size = int(output_image_size.y) / int(pushConstant.max_iterations);
+    // ivec3 current_pixel = ivec3(gl_GlobalInvocationID.xyz) + ivec3(0,layer_size * int(pushConstant.current_iteration),0);
 
-    for(int x = 0; x < output_image_size.x; x++){
-        for(int y = 0; y < output_image_size.y; y++){
-            for(int z = 0; z < output_image_size.z; z++){
-                float voxel_value = imageLoad(inImage, ivec3(x,y,z)).r;
-                if (voxel_value > 0.5){
-                    min_distance = min(min_distance, distance(current_pixel, vec3(x,y,z)));
-                }
-            }
-        }
+    // for(int x = 0; x < output_image_size.x; x++){
+    //     for(int y = 0; y < output_image_size.y; y++){
+    //         for(int z = 0; z < output_image_size.z; z++){
+    //             float voxel_value = imageLoad(inImage, ivec3(x,y,z)).r;
+    //             if (voxel_value > 0.5){
+    //                 min_distance = min(min_distance, distance(current_pixel, vec3(x,y,z)));
+    //             }
+    //         }
+    //     }
+    // }
+    // imageStore(outImage, ivec3(current_pixel),ivec4(min_distance));
+
+
+    //Jump Flooding
+    // vec3 image_size = imageSize(sourceImage);
+
+    
+
+    ivec3 seed = imageLoad(sourceImage, ivec3(gl_GlobalInvocationID)).xyz;
+    if (seed.x > -1){
+        fill(ivec3(gl_GlobalInvocationID),seed);
     }
-    imageStore(outImage, ivec3(current_pixel),ivec4(min_distance));
-
 }
